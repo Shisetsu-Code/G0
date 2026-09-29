@@ -12,6 +12,7 @@ pub mod information_flow;
 pub mod io;
 pub mod math;
 pub mod memory;
+pub mod mir;
 pub mod network;
 pub mod optimize;
 pub mod ownership;
