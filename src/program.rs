@@ -47,6 +47,9 @@ use crate::security::{
 use crate::storage::{
     validate_store_schema, StorageSchemaIssue, StoreSchema,
 };
+use crate::task_runtime::{
+    validate_task_plan, TaskPlan, TaskPlanIssue,
+};
 use crate::text::{
     validate_text_boundary, validate_text_contract, TextBoundaryIssue,
     TextBoundaryRequirement, TextContract, TextContractIssue,
@@ -86,6 +89,7 @@ pub struct ProgramContract {
     pub schedules: Vec<ScheduleGraph>,
     pub queries: Vec<QuerySpec>,
     pub protected_indexes: Vec<ProtectedIndexSpec>,
+    pub task_plans: Vec<TaskPlan>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,6 +172,10 @@ pub enum ProgramIssue {
     ProtectedIndex {
         index: usize,
         issues: Vec<ProtectedIndexIssue>,
+    },
+    TaskPlan {
+        plan: usize,
+        issues: Vec<TaskPlanIssue>,
     },
     Security(Vec<SecurityContractIssue>),
 }
@@ -361,6 +369,15 @@ pub fn validate_program(
             issues.push(ProgramIssue::ProtectedIndex {
                 index,
                 issues: index_issues,
+            });
+        }
+    }
+
+    for (index, task_plan) in program.task_plans.iter().enumerate() {
+        if let Err(task_issues) = validate_task_plan(task_plan) {
+            issues.push(ProgramIssue::TaskPlan {
+                plan: index,
+                issues: task_issues,
             });
         }
     }
