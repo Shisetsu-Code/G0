@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use crate::gir::{
-    CapabilityClass, Effect, Graph, IntegerType, Literal, Node, NodeId, Operation, Port,
-    SemanticType, SourceEndpoint, TargetEndpoint,
+    type_assignable, CapabilityClass, Effect, Graph, IntegerType, Literal, Node,
+    NodeId, Operation, Port, SemanticType, SourceEndpoint, TargetEndpoint,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -123,7 +123,7 @@ pub fn validate(graph: &Graph) -> Result<(), ValidationReport> {
         }
 
         if let (Some(source_ty), Some(target_ty)) = (source_ty, target_ty)
-            && source_ty != target_ty
+            && !type_assignable(source_ty, target_ty)
         {
             report.push(
                 ValidationCode::TypeMismatch,
