@@ -71,6 +71,19 @@ pub fn compute_live_intervals(
 ) -> Result<BTreeMap<ValueId, LiveInterval>, AllocationIssue> {
     let mut intervals = BTreeMap::<ValueId, LiveInterval>::new();
 
+    for input in &program.inputs {
+        if !program.values.contains_key(input) {
+            return Err(AllocationIssue::UnknownValue(*input));
+        }
+        intervals.insert(
+            *input,
+            LiveInterval {
+                start: 0,
+                end: 0,
+            },
+        );
+    }
+
     for (index, instruction) in program.instructions.iter().enumerate() {
         for output in &instruction.outputs {
             if !program.values.contains_key(output) {
@@ -94,6 +107,20 @@ pub fn compute_live_intervals(
                     end: index,
                 });
         }
+    }
+
+    let terminal = program.instructions.len().saturating_sub(1);
+    for output in &program.outputs {
+        if !program.values.contains_key(output) {
+            return Err(AllocationIssue::UnknownValue(*output));
+        }
+        intervals
+            .entry(*output)
+            .and_modify(|interval| interval.end = interval.end.max(terminal))
+            .or_insert(LiveInterval {
+                start: 0,
+                end: terminal,
+            });
     }
 
     Ok(intervals)
@@ -301,6 +328,25 @@ mod tests {
                 location: None,
             },
         )
+    }
+
+    #[test]
+    fn direct_input_to_output_gets_abi_location() {
+        let program = MirProgram {
+            inputs: vec![0],
+            values: BTreeMap::from([value(0)]),
+            instructions: vec![],
+            outputs: vec![0],
+        };
+
+        let allocation =
+            linear_scan_allocate(&program, MachineProfile::x86_64_v3())
+                .unwrap();
+
+        assert_eq!(
+            allocation.locations[&0],
+            PhysicalLocation::Register(Gpr::Rdi)
+        );
     }
 
     #[test]
