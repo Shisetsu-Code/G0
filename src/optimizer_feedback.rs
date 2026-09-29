@@ -144,6 +144,7 @@ mod tests {
     use crate::machine_ir::MachineProgram;
     use crate::mir::MirProgram;
     use crate::profiling::{NodeLocation, NodeMetrics, NodeProfile};
+    use crate::source_map::SourceMap;
 
     #[test]
     fn compiler_and_runtime_metrics_feed_same_candidate() {
@@ -160,6 +161,7 @@ mod tests {
             machine_ir: MachineProgram::default(),
             assembly: String::new(),
             invariants: InvariantLedger::default(),
+            source_map: SourceMap::default(),
         };
 
         assert_eq!(
