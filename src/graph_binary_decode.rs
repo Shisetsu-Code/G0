@@ -230,6 +230,8 @@ fn read_operation(reader: &mut Reader<'_>) -> Result<Operation, BinaryDecodeIssu
         1 => Operation::Add,
         2 => Operation::Sub,
         3 => Operation::Mul,
+        26 => Operation::Div,
+        27 => Operation::Rem,
         17 => Operation::Eq,
         18 => Operation::Lt,
         19 => Operation::Le,
