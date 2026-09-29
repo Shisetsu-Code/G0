@@ -64,7 +64,11 @@ pub fn classify_semantic_type(ty: &SemanticType) -> DataClass {
         }
         SemanticType::Bool
         | SemanticType::Integer(_)
+        | SemanticType::BigInteger
+        | SemanticType::Rational
+        | SemanticType::Decimal(_)
         | SemanticType::Float(_)
+        | SemanticType::BigFloat(_)
         | SemanticType::Text
         | SemanticType::Bytes => DataClass::Public,
     }
