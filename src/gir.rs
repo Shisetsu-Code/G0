@@ -20,6 +20,12 @@ pub enum SemanticType {
     Reference(String),
     Secret(Box<SemanticType>),
     Credential(Box<SemanticType>),
+    Unique(Box<SemanticType>),
+    Borrow(Box<SemanticType>),
+    Shared(Box<SemanticType>),
+    State(Box<SemanticType>),
+    Atomic(Box<SemanticType>),
+    Versioned(Box<SemanticType>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -42,12 +48,16 @@ impl IntegerType {
         }
         Ok(Self { min: 0, max: max as i128 })
     }
+
+    pub fn contains(&self, other: &Self) -> bool {
+        self.min <= other.min && self.max >= other.max
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FloatType {
     /// Required maximum relative error in parts per billion.
-    /// Representation selection is a backend concern.
+    /// Physical representation selection is a backend concern.
     pub max_relative_error_ppb: Option<u64>,
 }
 
@@ -60,6 +70,21 @@ pub enum Effect {
     Entropy,
     Device,
     Process,
+    LocalExecution,
+    RemoteExecution,
+    Accelerator,
+    Audit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CapabilityClass {
+    Storage,
+    Network,
+    Clock,
+    Entropy,
+    Device,
+    Process,
+    LocalExecution,
     RemoteExecution,
     Accelerator,
     Audit,
@@ -67,9 +92,26 @@ pub enum Effect {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Capability {
+    pub class: CapabilityClass,
     pub action: String,
     pub resource: String,
     pub scope: String,
+}
+
+impl Capability {
+    pub fn new(
+        class: CapabilityClass,
+        action: impl Into<String>,
+        resource: impl Into<String>,
+        scope: impl Into<String>,
+    ) -> Self {
+        Self {
+            class,
+            action: action.into(),
+            resource: resource.into(),
+            scope: scope.into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,8 +134,16 @@ pub struct Port {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Literal {
+    Bool(bool),
+    Integer(i128),
+    Text(String),
+    Bytes(Vec<u8>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Operation {
-    Const,
+    Const(Literal),
     Add,
     Sub,
     Mul,
@@ -103,7 +153,8 @@ pub enum Operation {
     Subgraph(String),
     Import(String),
     Instantiate(String),
-    Execute(String),
+    LocalExecute(String),
+    RemoteExecute { target: String, artifact: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,12 +167,22 @@ pub struct Node {
     pub required_capabilities: BTreeSet<Capability>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SourceEndpoint {
+    GraphInput(PortId),
+    NodeOutput { node: NodeId, port: PortId },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TargetEndpoint {
+    NodeInput { node: NodeId, port: PortId },
+    GraphOutput(PortId),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Edge {
-    pub from_node: NodeId,
-    pub from_port: PortId,
-    pub to_node: NodeId,
-    pub to_port: PortId,
+    pub from: SourceEndpoint,
+    pub to: TargetEndpoint,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -160,6 +221,14 @@ mod tests {
     #[test]
     fn integer_ranges_reject_invalid_bounds() {
         assert!(IntegerType::new(10, 9).is_err());
+    }
+
+    #[test]
+    fn integer_range_containment_is_semantic() {
+        let wide = IntegerType::new(0, 1000).unwrap();
+        let narrow = IntegerType::new(10, 20).unwrap();
+        assert!(wide.contains(&narrow));
+        assert!(!narrow.contains(&wide));
     }
 
     #[test]
