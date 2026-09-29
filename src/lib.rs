@@ -15,6 +15,7 @@ pub mod parser;
 pub mod program;
 pub mod security;
 pub mod storage;
+pub mod text;
 pub mod tuning;
 pub mod validate;
 
