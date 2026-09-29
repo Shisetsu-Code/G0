@@ -36,6 +36,7 @@ pub mod optimizer_feedback;
 pub mod ownership;
 pub mod package;
 pub mod parser;
+pub mod policy_plan;
 pub mod program;
 pub mod profiling;
 pub mod query;
