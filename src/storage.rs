@@ -4,8 +4,8 @@ use crate::authority::{
     Action, AuthorizationDecision, DenyReason, PolicySet, Principal, ResourceContext, authorize,
 };
 use crate::freshness::{
-    consume_mutation_proof, issue_mutation_proof, FreshnessIssue, MutationAuthorizationProof,
-    SecurityEpoch,
+    FreshnessIssue, MutationAuthorizationProof, SecurityEpoch, consume_mutation_proof,
+    issue_mutation_proof,
 };
 use crate::gir::SemanticType;
 
@@ -339,7 +339,10 @@ pub fn authorize_store_mutation(
     operation: &StoreOperation,
     epoch: SecurityEpoch,
 ) -> Result<MutationAuthorizationProof, Vec<StoreAccessIssue>> {
-    if !matches!(operation, StoreOperation::Update { .. } | StoreOperation::Delete) {
+    if !matches!(
+        operation,
+        StoreOperation::Update { .. } | StoreOperation::Delete
+    ) {
         return Err(vec![StoreAccessIssue::MutationProofNotApplicable]);
     }
 
@@ -363,7 +366,10 @@ pub fn commit_store_mutation(
     operation: &StoreOperation,
     current_epoch: SecurityEpoch,
 ) -> Result<(), StoreAccessIssue> {
-    if !matches!(operation, StoreOperation::Update { .. } | StoreOperation::Delete) {
+    if !matches!(
+        operation,
+        StoreOperation::Update { .. } | StoreOperation::Delete
+    ) {
         return Err(StoreAccessIssue::MutationProofNotApplicable);
     }
 
@@ -630,24 +636,13 @@ mod tests {
         };
         let authorized_at = SecurityEpoch::new(4, 2, 9);
 
-        let proof = authorize_store_mutation(
-            &schema,
-            &principal,
-            &message,
-            &operation,
-            authorized_at,
-        )
-        .unwrap();
+        let proof =
+            authorize_store_mutation(&schema, &principal, &message, &operation, authorized_at)
+                .unwrap();
 
         let current = SecurityEpoch::new(4, 3, 9);
         assert_eq!(
-            commit_store_mutation(
-                proof,
-                &principal,
-                &message,
-                &operation,
-                current,
-            ),
+            commit_store_mutation(proof, &principal, &message, &operation, current,),
             Err(StoreAccessIssue::Freshness(
                 FreshnessIssue::SecurityStateChanged {
                     authorized_at,
@@ -673,25 +668,10 @@ mod tests {
         };
         let epoch = SecurityEpoch::new(4, 2, 9);
 
-        let proof = authorize_store_mutation(
-            &schema,
-            &principal,
-            &message,
-            &operation,
-            epoch,
-        )
-        .unwrap();
+        let proof =
+            authorize_store_mutation(&schema, &principal, &message, &operation, epoch).unwrap();
 
-        assert!(
-            commit_store_mutation(
-                proof,
-                &principal,
-                &message,
-                &operation,
-                epoch,
-            )
-            .is_ok()
-        );
+        assert!(commit_store_mutation(proof, &principal, &message, &operation, epoch,).is_ok());
     }
 
     #[test]

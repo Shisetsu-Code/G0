@@ -1,8 +1,8 @@
-use crate::authority::{
-    authorize, Action, AuthorizationDecision, DenyReason, Principal, PrincipalId, ResourceContext,
-    ResourceId, ResourceKind, ScopeId,
-};
 use crate::authority::PolicySet;
+use crate::authority::{
+    Action, AuthorizationDecision, DenyReason, Principal, PrincipalId, ResourceContext, ResourceId,
+    ResourceKind, ScopeId, authorize,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SecurityEpoch {
@@ -54,13 +54,7 @@ pub fn issue_mutation_proof(
     resource_is_global: bool,
     epoch: SecurityEpoch,
 ) -> Result<MutationAuthorizationProof, FreshnessIssue> {
-    match authorize(
-        principal,
-        resource,
-        policies,
-        action,
-        resource_is_global,
-    ) {
+    match authorize(principal, resource, policies, action, resource_is_global) {
         AuthorizationDecision::Allow => Ok(MutationAuthorizationProof {
             principal: principal.id.clone(),
             resource_kind: resource.kind.clone(),
@@ -69,9 +63,7 @@ pub fn issue_mutation_proof(
             action: action.clone(),
             epoch,
         }),
-        AuthorizationDecision::Deny(reason) => {
-            Err(FreshnessIssue::AuthorizationDenied(reason))
-        }
+        AuthorizationDecision::Deny(reason) => Err(FreshnessIssue::AuthorizationDenied(reason)),
     }
 }
 
@@ -136,14 +128,7 @@ mod tests {
         .unwrap();
 
         assert!(
-            consume_mutation_proof(
-                proof,
-                &principal,
-                &resource,
-                &Action::update(),
-                epoch,
-            )
-            .is_ok()
+            consume_mutation_proof(proof, &principal, &resource, &Action::update(), epoch,).is_ok()
         );
     }
 
@@ -166,13 +151,7 @@ mod tests {
 
         let current = SecurityEpoch::new(7, 4, 11);
         assert_eq!(
-            consume_mutation_proof(
-                proof,
-                &principal,
-                &resource,
-                &Action::update(),
-                current,
-            ),
+            consume_mutation_proof(proof, &principal, &resource, &Action::update(), current,),
             Err(FreshnessIssue::SecurityStateChanged {
                 authorized_at,
                 current,
@@ -200,13 +179,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            consume_mutation_proof(
-                proof,
-                &principal,
-                &second,
-                &Action::update(),
-                epoch,
-            ),
+            consume_mutation_proof(proof, &principal, &second, &Action::update(), epoch,),
             Err(FreshnessIssue::ResourceChanged)
         );
     }
@@ -235,13 +208,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            consume_mutation_proof(
-                proof,
-                &principal,
-                &resource,
-                &Action::update(),
-                epoch,
-            ),
+            consume_mutation_proof(proof, &principal, &resource, &Action::update(), epoch,),
             Err(FreshnessIssue::ActionChanged)
         );
     }

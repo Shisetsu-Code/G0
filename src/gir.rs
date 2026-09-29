@@ -177,7 +177,10 @@ pub enum Operation {
         resource: String,
     },
     LocalExecute(String),
-    RemoteExecute { target: String, artifact: String },
+    RemoteExecute {
+        target: String,
+        artifact: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
