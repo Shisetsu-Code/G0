@@ -383,11 +383,35 @@ fn authority_tag(authority: AuthorityMode) -> u8 {
 }
 
 fn effect_tag(effect: Effect) -> u8 {
-    effect as u8
+    match effect {
+        Effect::MemoryWrite => 0,
+        Effect::Storage => 1,
+        Effect::Network => 2,
+        Effect::Clock => 3,
+        Effect::Entropy => 4,
+        Effect::Device => 5,
+        Effect::Process => 6,
+        Effect::LocalExecution => 7,
+        Effect::RemoteExecution => 8,
+        Effect::Accelerator => 9,
+        Effect::Audit => 10,
+    }
 }
 
 fn capability_tag(class: CapabilityClass) -> u8 {
-    class as u8
+    match class {
+        CapabilityClass::Resource => 0,
+        CapabilityClass::Storage => 1,
+        CapabilityClass::Network => 2,
+        CapabilityClass::Clock => 3,
+        CapabilityClass::Entropy => 4,
+        CapabilityClass::Device => 5,
+        CapabilityClass::Process => 6,
+        CapabilityClass::LocalExecution => 7,
+        CapabilityClass::RemoteExecution => 8,
+        CapabilityClass::Accelerator => 9,
+        CapabilityClass::Audit => 10,
+    }
 }
 
 fn put_u8(out: &mut Vec<u8>, value: u8) {
@@ -447,6 +471,14 @@ mod tests {
         b.nodes = vec![node(1, 1), node(2, 2)];
 
         assert_eq!(encode_graph(&a).unwrap(), encode_graph(&b).unwrap());
+    }
+
+    #[test]
+    fn effect_and_capability_tags_are_frozen_explicitly() {
+        assert_eq!(effect_tag(Effect::MemoryWrite), 0);
+        assert_eq!(effect_tag(Effect::Audit), 10);
+        assert_eq!(capability_tag(CapabilityClass::Resource), 0);
+        assert_eq!(capability_tag(CapabilityClass::Audit), 10);
     }
 
     #[test]
