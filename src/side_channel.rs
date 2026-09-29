@@ -98,7 +98,10 @@ mod tests {
         let mut graph = Graph::new("public");
         graph.nodes.push(Node {
             id: 1,
-            operation: Operation::Select,
+            operation: Operation::Select {
+                when_true: "yes".into(),
+                when_false: "no".into(),
+            },
             inputs: vec![Port {
                 id: 0,
                 name: "condition".into(),
