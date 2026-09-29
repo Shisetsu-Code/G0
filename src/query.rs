@@ -1,4 +1,5 @@
 use crate::authority::Action;
+use crate::secure_index::{ProtectedIndexMode, ProtectedIndexSpec};
 use crate::storage::{IndexIntent, ResourceSchema, StoreSchema};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,6 +28,9 @@ pub enum AccessPath {
     RelationIndex {
         relation: String,
     },
+    ProtectedEqualityIndex {
+        field: String,
+    },
     FullScan,
 }
 
@@ -44,6 +48,14 @@ pub enum QueryIssue {
 pub fn validate_query(
     store: &StoreSchema,
     query: &QuerySpec,
+) -> Result<(), Vec<QueryIssue>> {
+    validate_query_with_protected_indexes(store, query, &[])
+}
+
+pub fn validate_query_with_protected_indexes(
+    store: &StoreSchema,
+    query: &QuerySpec,
+    protected_indexes: &[ProtectedIndexSpec],
 ) -> Result<(), Vec<QueryIssue>> {
     let Some(resource) = store.resource(&query.resource) else {
         return Err(vec![QueryIssue::UnknownResource(query.resource.clone())]);
@@ -84,7 +96,8 @@ pub fn validate_query(
         issues.push(QueryIssue::ZeroLimit);
     }
 
-    let path = choose_access_path(resource, query);
+    let path =
+        choose_access_path_with_protected(resource, query, protected_indexes);
     if path == AccessPath::FullScan {
         if !query.allow_enumeration {
             issues.push(QueryIssue::FullScanNotExplicit);
@@ -109,6 +122,14 @@ pub fn choose_access_path(
     resource: &ResourceSchema,
     query: &QuerySpec,
 ) -> AccessPath {
+    choose_access_path_with_protected(resource, query, &[])
+}
+
+pub fn choose_access_path_with_protected(
+    resource: &ResourceSchema,
+    query: &QuerySpec,
+    protected_indexes: &[ProtectedIndexSpec],
+) -> AccessPath {
     for predicate in &query.predicates {
         if let Predicate::Relation { relation } = predicate
             && resource
@@ -118,6 +139,21 @@ pub fn choose_access_path(
         {
             return AccessPath::RelationIndex {
                 relation: relation.clone(),
+            };
+        }
+    }
+
+    for predicate in &query.predicates {
+        if let Predicate::Equal { field } = predicate
+            && protected_indexes.iter().any(|index| {
+                index.resource == resource.name
+                    && index.field == *field
+                    && index.mode
+                        == ProtectedIndexMode::EqualityBlindIndex
+            })
+        {
+            return AccessPath::ProtectedEqualityIndex {
+                field: field.clone(),
             };
         }
     }
