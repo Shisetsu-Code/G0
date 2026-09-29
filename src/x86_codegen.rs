@@ -300,8 +300,8 @@ fn load_operand_to_register(
             out.push_str(&format!("    mov {}, {}\n", register, rendered));
             Ok(())
         }
-        MachineOperand::Location(location) => {
-            load_to_register(out, register, location)
+        MachineOperand::Location { location, ty } => {
+            load_to_register(out, register, location, ty)
         }
     }
 }
@@ -326,6 +326,7 @@ fn load_to_register(
     out: &mut String,
     register: &str,
     location: PhysicalLocation,
+    ty: MachineValueType,
 ) -> Result<(), X86CodegenIssue> {
     match location {
         PhysicalLocation::Register(source) => {
@@ -369,6 +370,7 @@ fn store_from_register(
     out: &mut String,
     location: PhysicalLocation,
     register: &str,
+    ty: MachineValueType,
 ) -> Result<(), X86CodegenIssue> {
     match location {
         PhysicalLocation::Register(dst) => {
