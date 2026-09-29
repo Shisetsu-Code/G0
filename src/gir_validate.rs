@@ -30,6 +30,11 @@ pub enum ValidationCode {
     StorageMissingCapability,
     PureNodeHasEffects,
     PureNodeHasCapabilities,
+    UnorderedConflictingEffects {
+        first: NodeId,
+        second: NodeId,
+        effect: Effect,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -191,6 +196,29 @@ pub fn validate(graph: &Graph) -> Result<(), ValidationReport> {
                 node
             ),
         );
+    }
+
+    let reachability = transitive_reachability(&node_ids, &adjacency);
+    for (index, first) in graph.nodes.iter().enumerate() {
+        for second in graph.nodes.iter().skip(index + 1) {
+            for effect in first.effects.intersection(&second.effects) {
+                let ordered = reaches(&reachability, first.id, second.id)
+                    || reaches(&reachability, second.id, first.id);
+                if !ordered {
+                    report.push(
+                        ValidationCode::UnorderedConflictingEffects {
+                            first: first.id,
+                            second: second.id,
+                            effect: *effect,
+                        },
+                        format!(
+                            "nodes {} and {} both perform {:?} without a dependency ordering them",
+                            first.id, second.id, effect
+                        ),
+                    );
+                }
+            }
+        }
     }
 
     if report.is_empty() {
@@ -544,6 +572,42 @@ fn require_execution(
     }
 }
 
+fn transitive_reachability(
+    node_ids: &BTreeSet<NodeId>,
+    adjacency: &BTreeMap<NodeId, Vec<NodeId>>,
+) -> BTreeMap<NodeId, BTreeSet<NodeId>> {
+    let mut result = BTreeMap::new();
+
+    for node in node_ids {
+        let mut seen = BTreeSet::new();
+        let mut stack = vec![*node];
+
+        while let Some(current) = stack.pop() {
+            if let Some(children) = adjacency.get(&current) {
+                for child in children {
+                    if seen.insert(*child) {
+                        stack.push(*child);
+                    }
+                }
+            }
+        }
+
+        result.insert(*node, seen);
+    }
+
+    result
+}
+
+fn reaches(
+    reachability: &BTreeMap<NodeId, BTreeSet<NodeId>>,
+    from: NodeId,
+    to: NodeId,
+) -> bool {
+    reachability
+        .get(&from)
+        .is_some_and(|nodes| nodes.contains(&to))
+}
+
 fn detect_cycle(
     node_ids: &BTreeSet<NodeId>,
     adjacency: &BTreeMap<NodeId, Vec<NodeId>>,
@@ -829,6 +893,51 @@ mod tests {
         }];
 
         assert!(validate(&graph).is_ok());
+    }
+
+    #[test]
+    fn same_effect_cannot_be_unordered() {
+        let mut effects = BTreeSet::new();
+        effects.insert(Effect::Storage);
+
+        let mut capabilities = BTreeSet::new();
+        capabilities.insert(Capability::new(
+            CapabilityClass::Storage,
+            "write",
+            "Store",
+            "current",
+        ));
+
+        let mut graph = Graph::new("effects");
+        graph.nodes = vec![
+            Node {
+                id: 1,
+                operation: Operation::Subgraph("store.a".into()),
+                inputs: vec![],
+                outputs: vec![],
+                effects: effects.clone(),
+                required_capabilities: capabilities.clone(),
+            },
+            Node {
+                id: 2,
+                operation: Operation::Subgraph("store.b".into()),
+                inputs: vec![],
+                outputs: vec![],
+                effects,
+                required_capabilities: capabilities,
+            },
+        ];
+
+        let report = validate(&graph).unwrap_err();
+        assert!(report.issues.iter().any(|issue| {
+            matches!(
+                issue.code,
+                ValidationCode::UnorderedConflictingEffects {
+                    effect: Effect::Storage,
+                    ..
+                }
+            )
+        }));
     }
 
     #[test]
