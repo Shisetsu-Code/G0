@@ -5,6 +5,7 @@ pub mod authority;
 pub mod backend;
 pub mod benchmark;
 pub mod build_lock;
+pub mod call_graph;
 pub mod concurrency;
 pub mod compiler;
 pub mod crypto;
