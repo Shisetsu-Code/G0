@@ -33,6 +33,10 @@ pub fn emit_x86_64(
     let mut trap_labels = Vec::new();
 
     for instruction in &program.operations {
+        out.push_str(&format!(
+            "    # g0.node {}\n",
+            instruction.source_node
+        ));
         match &instruction.op {
             MachineOp::Move { dst, src } => {
                 if let Err(issue) = emit_move(&mut out, *dst, *src) {
