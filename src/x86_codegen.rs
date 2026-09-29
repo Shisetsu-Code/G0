@@ -338,27 +338,64 @@ fn load_to_register(
             Ok(())
         }
         PhysicalLocation::Stack { offset, bytes } => {
+            let type_bytes = machine_type_bytes(ty)?;
+            if bytes != type_bytes {
+                return Err(X86CodegenIssue::StackTypeWidthMismatch {
+                    slot_bytes: bytes,
+                    type_bytes,
+                });
+            }
+
             let address = stack_address(offset, bytes);
-            match bytes {
-                1 => out.push_str(&format!(
-                    "    movzx {}, BYTE PTR {}\n",
-                    register, address
-                )),
-                2 => out.push_str(&format!(
-                    "    movzx {}, WORD PTR {}\n",
-                    register, address
-                )),
-                4 => out.push_str(&format!(
-                    "    mov {}, DWORD PTR {}\n",
-                    register32(register),
-                    address
-                )),
-                8 => out.push_str(&format!(
-                    "    mov {}, QWORD PTR {}\n",
-                    register, address
-                )),
-                other => {
-                    return Err(X86CodegenIssue::UnsupportedStackWidth(other));
+            match ty {
+                MachineValueType::Bool
+                | MachineValueType::Integer(IntegerWidth::U8) => {
+                    out.push_str(&format!(
+                        "    movzx {}, BYTE PTR {}\n",
+                        register, address
+                    ));
+                }
+                MachineValueType::Integer(IntegerWidth::I8) => {
+                    out.push_str(&format!(
+                        "    movsx {}, BYTE PTR {}\n",
+                        register, address
+                    ));
+                }
+                MachineValueType::Integer(IntegerWidth::U16) => {
+                    out.push_str(&format!(
+                        "    movzx {}, WORD PTR {}\n",
+                        register, address
+                    ));
+                }
+                MachineValueType::Integer(IntegerWidth::I16) => {
+                    out.push_str(&format!(
+                        "    movsx {}, WORD PTR {}\n",
+                        register, address
+                    ));
+                }
+                MachineValueType::Integer(IntegerWidth::U32) => {
+                    out.push_str(&format!(
+                        "    mov {}, DWORD PTR {}\n",
+                        register32(register), address
+                    ));
+                }
+                MachineValueType::Integer(IntegerWidth::I32) => {
+                    out.push_str(&format!(
+                        "    movsxd {}, DWORD PTR {}\n",
+                        register, address
+                    ));
+                }
+                MachineValueType::Integer(IntegerWidth::U64)
+                | MachineValueType::Integer(IntegerWidth::I64)
+                | MachineValueType::Pointer => {
+                    out.push_str(&format!(
+                        "    mov {}, QWORD PTR {}\n",
+                        register, address
+                    ));
+                }
+                MachineValueType::Integer(IntegerWidth::U128)
+                | MachineValueType::Integer(IntegerWidth::I128) => {
+                    return Err(X86CodegenIssue::Unsupported128BitInteger);
                 }
             }
             Ok(())
@@ -382,6 +419,14 @@ fn store_from_register(
             Ok(())
         }
         PhysicalLocation::Stack { offset, bytes } => {
+            let type_bytes = machine_type_bytes(ty)?;
+            if bytes != type_bytes {
+                return Err(X86CodegenIssue::StackTypeWidthMismatch {
+                    slot_bytes: bytes,
+                    type_bytes,
+                });
+            }
+
             let address = stack_address(offset, bytes);
             match bytes {
                 1 => out.push_str(&format!(
@@ -403,6 +448,9 @@ fn store_from_register(
                     "    mov QWORD PTR {}, {}\n",
                     address, register
                 )),
+                16 => {
+                    return Err(X86CodegenIssue::Unsupported128BitInteger);
+                }
                 other => {
                     return Err(X86CodegenIssue::UnsupportedStackWidth(other));
                 }
@@ -410,6 +458,24 @@ fn store_from_register(
             Ok(())
         }
     }
+}
+
+fn machine_type_bytes(
+    ty: MachineValueType,
+) -> Result<u16, X86CodegenIssue> {
+    Ok(match ty {
+        MachineValueType::Bool => 1,
+        MachineValueType::Pointer => 8,
+        MachineValueType::Integer(width) => match width {
+            IntegerWidth::U8 | IntegerWidth::I8 => 1,
+            IntegerWidth::U16 | IntegerWidth::I16 => 2,
+            IntegerWidth::U32 | IntegerWidth::I32 => 4,
+            IntegerWidth::U64 | IntegerWidth::I64 => 8,
+            IntegerWidth::U128 | IntegerWidth::I128 => {
+                return Err(X86CodegenIssue::Unsupported128BitInteger);
+            }
+        },
+    })
 }
 
 fn stack_address(offset: u32, bytes: u16) -> String {
