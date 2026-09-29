@@ -6,6 +6,7 @@ use crate::gir::NodeId;
 pub enum InvariantKind {
     IntegerRange,
     TypeSafety,
+    GraphAcyclic,
     Ownership,
     RaceFreedom,
     CapabilityPresent,
@@ -73,6 +74,49 @@ pub fn validate_preservation(
     }
 
     if issues.is_empty() { Ok(()) } else { Err(issues) }
+}
+
+pub fn ledger_for_validated_graph(
+    graph: &crate::gir::Graph,
+) -> InvariantLedger {
+    use crate::gir::Operation;
+
+    let mut ledger = InvariantLedger::default();
+    ledger.record(
+        InvariantKey {
+            graph: graph.name.clone(),
+            node: None,
+            kind: InvariantKind::GraphAcyclic,
+        },
+        InvariantStatus::Proven,
+    );
+
+    for node in &graph.nodes {
+        ledger.record(
+            InvariantKey {
+                graph: graph.name.clone(),
+                node: Some(node.id),
+                kind: InvariantKind::TypeSafety,
+            },
+            InvariantStatus::Proven,
+        );
+
+        if matches!(
+            node.operation,
+            Operation::Add | Operation::Sub | Operation::Mul
+        ) {
+            ledger.record(
+                InvariantKey {
+                    graph: graph.name.clone(),
+                    node: Some(node.id),
+                    kind: InvariantKind::IntegerRange,
+                },
+                InvariantStatus::Proven,
+            );
+        }
+    }
+
+    ledger
 }
 
 #[cfg(test)]
