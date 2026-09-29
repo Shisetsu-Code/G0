@@ -237,9 +237,33 @@ fn put_operation(
         Operation::Add => put_u8(out, 1),
         Operation::Sub => put_u8(out, 2),
         Operation::Mul => put_u8(out, 3),
-        Operation::Select => put_u8(out, 4),
-        Operation::Match => put_u8(out, 5),
-        Operation::Loop => put_u8(out, 6),
+        Operation::Select {
+            when_true,
+            when_false,
+        } => {
+            put_u8(out, 4);
+            put_string(out, when_true)?;
+            put_string(out, when_false)?;
+        }
+        Operation::Match { arms, default } => {
+            put_u8(out, 5);
+            put_len(out, arms.len())?;
+            for arm in arms {
+                put_string(out, &arm.tag)?;
+                put_string(out, &arm.graph)?;
+            }
+            put_string(out, default)?;
+        }
+        Operation::Loop {
+            condition,
+            body,
+            max_iterations,
+        } => {
+            put_u8(out, 6);
+            put_string(out, condition)?;
+            put_string(out, body)?;
+            put_u64(out, *max_iterations);
+        },
         Operation::Subgraph(name) => {
             put_u8(out, 7);
             put_string(out, name)?;
