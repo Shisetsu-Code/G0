@@ -9,6 +9,7 @@ pub enum X86CodegenIssue {
     UnsupportedStackWidth(u16),
     ImmediateOutOfRange(i128),
     InvalidCallTarget(String),
+    UnsupportedReturnArity(usize),
 }
 
 pub fn emit_x86_64(
@@ -28,7 +29,6 @@ pub fn emit_x86_64(
         out.push_str(&format!("    sub rsp, {}\n", program.stack_bytes));
     }
 
-    let mut last_result = None;
     let mut trap_index = 0_u32;
     let mut trap_labels = Vec::new();
 
@@ -38,7 +38,6 @@ pub fn emit_x86_64(
                 if let Err(issue) = emit_move(&mut out, *dst, *src) {
                     issues.push(issue);
                 } else {
-                    last_result = Some(*dst);
                 }
             }
             MachineOp::AddChecked {
@@ -61,7 +60,6 @@ pub fn emit_x86_64(
                     issues.push(issue);
                 } else {
                     trap_labels.push(trap);
-                    last_result = Some(*dst);
                 }
             }
             MachineOp::SubChecked {
@@ -84,7 +82,6 @@ pub fn emit_x86_64(
                     issues.push(issue);
                 } else {
                     trap_labels.push(trap);
-                    last_result = Some(*dst);
                 }
             }
             MachineOp::MulChecked {
@@ -107,7 +104,6 @@ pub fn emit_x86_64(
                     issues.push(issue);
                 } else {
                     trap_labels.push(trap);
-                    last_result = Some(*dst);
                 }
             }
             MachineOp::Call { target } => {
@@ -122,10 +118,18 @@ pub fn emit_x86_64(
         }
     }
 
-    if let Some(location) = last_result
-        && let Err(issue) = load_to_register(&mut out, "rax", location)
-    {
-        issues.push(issue);
+    match program.outputs.as_slice() {
+        [] => {}
+        [location] => {
+            if let Err(issue) = load_to_register(&mut out, "rax", *location) {
+                issues.push(issue);
+            }
+        }
+        outputs => {
+            issues.push(X86CodegenIssue::UnsupportedReturnArity(
+                outputs.len(),
+            ));
+        }
     }
 
     out.push_str("    leave\n");
@@ -465,6 +469,7 @@ mod tests {
                 },
             ],
             stack_bytes: 0,
+            outputs: vec![PhysicalLocation::Register(Gpr::R8)],
         };
 
         let asm = emit_x86_64(&program).unwrap();
@@ -483,6 +488,7 @@ mod tests {
                 },
             }],
             stack_bytes: 0,
+            outputs: vec![],
         };
 
         assert!(matches!(
@@ -505,6 +511,7 @@ mod tests {
                 },
             }],
             stack_bytes: 16,
+            outputs: vec![],
         };
 
         assert_eq!(
