@@ -114,7 +114,11 @@ fn validate_instruction(
                 issues.push(MirIssue::TypeMismatch { instruction: index });
             }
         }
-        MirOp::Add { mode } | MirOp::Sub { mode } | MirOp::Mul { mode } => {
+        MirOp::Add { mode }
+        | MirOp::Sub { mode }
+        | MirOp::Mul { mode }
+        | MirOp::Div { mode, .. }
+        | MirOp::Rem { mode, .. } => {
             require_shape(index, instruction, 2, 1, issues);
             if *mode != ArithmeticMode::Checked {
                 issues.push(MirIssue::ArithmeticMustBeChecked {
