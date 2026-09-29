@@ -416,7 +416,17 @@ pub fn authorize_store_operation(
                     Some(field) if field.protection == FieldProtection::Credential => {
                         issues.push(StoreAccessIssue::CredentialReadForbidden(name.clone()));
                     }
-                    Some(_) => {}
+                    Some(_) => {
+                        if let Some(issue) = authorize_field_action(
+                            schema,
+                            principal,
+                            resource,
+                            name,
+                            &Action::read(),
+                        ) {
+                            issues.push(issue);
+                        }
+                    }
                 }
             }
         }
@@ -424,6 +434,14 @@ pub fn authorize_store_operation(
             for name in fields {
                 if schema.field(name).is_none() {
                     issues.push(StoreAccessIssue::UnknownField(name.clone()));
+                } else if let Some(issue) = authorize_field_action(
+                    schema,
+                    principal,
+                    resource,
+                    name,
+                    &Action::create(),
+                ) {
+                    issues.push(issue);
                 }
             }
         }
@@ -439,7 +457,17 @@ pub fn authorize_store_operation(
                     Some(field) if !field.mutable => {
                         issues.push(StoreAccessIssue::ImmutableField(name.clone()));
                     }
-                    Some(_) => {}
+                    Some(_) => {
+                        if let Some(issue) = authorize_field_action(
+                            schema,
+                            principal,
+                            resource,
+                            name,
+                            &Action::update(),
+                        ) {
+                            issues.push(issue);
+                        }
+                    }
                 }
             }
         }
