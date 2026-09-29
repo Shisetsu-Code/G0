@@ -341,18 +341,18 @@ mod tests {
     fn invalid_fast_candidate_is_removed_before_selection() {
         let profile = profile();
 
-        let mut insecure = Candidate::default();
-        insecure.parameters = BTreeMap::from([
-            (ParameterName::new("security.floor"), 3),
-            (ParameterName::new("workers"), 32),
-            (ParameterName::new("batch"), 4096),
-        ]);
-        insecure
-            .metrics
-            .insert(MetricName::new("p99_ns"), 1);
-        insecure
-            .metrics
-            .insert(MetricName::new("throughput"), 1_000_000);
+        let insecure = Candidate {
+            parameters: BTreeMap::from([
+                (ParameterName::new("security.floor"), 3),
+                (ParameterName::new("workers"), 32),
+                (ParameterName::new("batch"), 4096),
+            ]),
+            metrics: BTreeMap::from([
+                (MetricName::new("p99_ns"), 1),
+                (MetricName::new("throughput"), 1_000_000),
+            ]),
+            passed_invariants: Vec::new(),
+        };
 
         let mut secure = insecure.clone();
         secure.passed_invariants.push("security.high".into());
