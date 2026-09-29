@@ -247,7 +247,7 @@ mod tests {
             Graph::new("dead_library_graph"),
         ];
 
-        let platform = crate::program::test_platform();
+        let platform = PlatformContract::bootstrap_x86_64_v3();
         let compiled = compile_program(
             &program,
             &platform,
