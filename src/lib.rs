@@ -26,6 +26,7 @@ pub mod graph_format;
 pub mod hardware;
 pub mod information_flow;
 pub mod ingress;
+pub mod inline;
 pub mod invariants;
 pub mod instrumentation;
 pub mod io;
