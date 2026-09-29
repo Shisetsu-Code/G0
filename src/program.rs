@@ -7,6 +7,9 @@ use crate::crypto::{
 };
 use crate::gir::Graph;
 use crate::gir_validate::{self, ValidationIssue};
+use crate::io::{
+    validate_io_pipeline, IoPipeline, IoPipelineIssue, IoValueKind,
+};
 use crate::math::{
     validate_math_requirement, MathContractIssue, MathOperation, MathProfile,
     MathRequirement,
@@ -53,6 +56,7 @@ pub struct ProgramContract {
     pub ownership: Vec<GraphOwnership>,
     pub password_tuning: Option<PasswordTuning>,
     pub text_boundaries: Vec<TextBoundaryRequirement>,
+    pub io_pipelines: Vec<(IoPipeline, IoValueKind)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,6 +100,10 @@ pub enum ProgramIssue {
     TextBoundary {
         boundary: usize,
         issue: TextBoundaryIssue,
+    },
+    Io {
+        pipeline: usize,
+        issues: Vec<IoPipelineIssue>,
     },
     Security(Vec<SecurityContractIssue>),
 }
@@ -194,6 +202,17 @@ pub fn validate_program(
         }
     }
 
+    for (index, (pipeline, expected)) in
+        program.io_pipelines.iter().enumerate()
+    {
+        if let Err(io_issues) = validate_io_pipeline(pipeline, *expected) {
+            issues.push(ProgramIssue::Io {
+                pipeline: index,
+                issues: io_issues,
+            });
+        }
+    }
+
     if let Some(password_tuning) = program.password_tuning
         && let Err(security_issues) =
             validate_password_contract(&platform.security, password_tuning)
@@ -218,6 +237,7 @@ mod tests {
     };
     use crate::crypto::{CryptoGuarantee, CryptoPrimitive};
     use crate::gir::ParameterPolicy;
+    use crate::io::{IoSourceKind, IoTransform};
     use crate::math::{MathMode, RoundingMode};
     use crate::network::ConnectionFeature;
     use crate::text::{CoreTextCodec, TextCodec, TextContract};
@@ -407,6 +427,27 @@ mod tests {
         };
 
         assert!(validate_program(&program, &platform).is_ok());
+    }
+
+    #[test]
+    fn text_io_without_decode_is_rejected_by_program_gate() {
+        let program = ProgramContract {
+            io_pipelines: vec![(
+                IoPipeline {
+                    source: IoSourceKind::File,
+                    transforms: vec![IoTransform::ReadBytes],
+                },
+                IoValueKind::Text,
+            )],
+            ..ProgramContract::default()
+        };
+
+        let issues = validate_program(&program, &platform()).unwrap_err();
+        assert!(
+            issues
+                .iter()
+                .any(|issue| matches!(issue, ProgramIssue::Io { .. }))
+        );
     }
 
     #[test]
