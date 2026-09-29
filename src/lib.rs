@@ -26,6 +26,7 @@ pub mod graph;
 pub mod graph_binary;
 pub mod graph_binary_decode;
 pub mod graph_format;
+pub mod graph_module;
 pub mod hardware;
 pub mod information_flow;
 pub mod ingress;
