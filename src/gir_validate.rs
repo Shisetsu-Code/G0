@@ -293,7 +293,11 @@ fn validate_operation(node: &Node, report: &mut ValidationReport) {
             }
             require_pure(node, report);
         }
-        Operation::Add | Operation::Sub | Operation::Mul => {
+        Operation::Add
+        | Operation::Sub
+        | Operation::Mul
+        | Operation::Div
+        | Operation::Rem => {
             require_shape(node, 2, 1, report);
             require_pure(node, report);
             validate_integer_arithmetic(node, report);
@@ -488,6 +492,8 @@ fn validate_integer_arithmetic(node: &Node, report: &mut ValidationReport) {
         Operation::Add => range_add(a, b),
         Operation::Sub => range_sub(a, b),
         Operation::Mul => range_mul(a, b),
+        Operation::Div => range_div(a, b),
+        Operation::Rem => range_rem(a, b),
         _ => unreachable!(),
     };
 
@@ -544,6 +550,63 @@ fn range_mul(a: &IntegerType, b: &IntegerType) -> Option<IntegerType> {
     Some(IntegerType {
         min: *values.iter().min()?,
         max: *values.iter().max()?,
+    })
+}
+
+fn range_div(a: &IntegerType, b: &IntegerType) -> Option<IntegerType> {
+    let mut divisors = Vec::new();
+    for candidate in [b.min, b.max, -1, 1] {
+        if candidate >= b.min
+            && candidate <= b.max
+            && candidate != 0
+            && !divisors.contains(&candidate)
+        {
+            divisors.push(candidate);
+        }
+    }
+
+    if divisors.is_empty() {
+        return None;
+    }
+
+    let mut values = Vec::new();
+    for numerator in [a.min, a.max] {
+        for divisor in &divisors {
+            if let Some(value) = numerator.checked_div(*divisor) {
+                values.push(value);
+            }
+        }
+    }
+
+    Some(IntegerType {
+        min: *values.iter().min()?,
+        max: *values.iter().max()?,
+    })
+}
+
+fn range_rem(a: &IntegerType, b: &IntegerType) -> Option<IntegerType> {
+    if b.min == 0 && b.max == 0 {
+        return None;
+    }
+    if a.min == i128::MIN
+        && a.max == i128::MIN
+        && b.min == -1
+        && b.max == -1
+    {
+        return None;
+    }
+
+    let max_abs = b.min.unsigned_abs().max(b.max.unsigned_abs());
+    if max_abs == 0 {
+        return None;
+    }
+
+    let bound_u = max_abs.saturating_sub(1).min(i128::MAX as u128);
+    let bound = bound_u as i128;
+
+    Some(IntegerType {
+        min: if a.min < 0 { -bound } else { 0 },
+        max: if a.max > 0 { bound } else { 0 },
     })
 }
 
