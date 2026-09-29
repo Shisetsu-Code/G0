@@ -102,6 +102,10 @@ pub fn lower_mir(
                     op: MachineOp::Move {
                         dst,
                         src: MachineOperand::Immediate(*value),
+                        ty: MachineValueType::Integer(
+                            integer_width(mir, instruction.outputs[0])
+                                .expect("integer const output"),
+                        ),
                     },
                 });
             }
@@ -121,6 +125,7 @@ pub fn lower_mir(
                     op: MachineOp::Move {
                         dst,
                         src: MachineOperand::Immediate(i128::from(*value)),
+                        ty: MachineValueType::Bool,
                     },
                 });
             }
@@ -153,6 +158,18 @@ pub fn lower_mir(
                     continue;
                 };
 
+                let Some(left_width) = integer_width(mir, instruction.inputs[0]) else {
+                    issues.push(MachineLoweringIssue::UnsupportedArithmeticType(
+                        instruction.inputs[0],
+                    ));
+                    continue;
+                };
+                let Some(right_width) = integer_width(mir, instruction.inputs[1]) else {
+                    issues.push(MachineLoweringIssue::UnsupportedArithmeticType(
+                        instruction.inputs[1],
+                    ));
+                    continue;
+                };
                 let Some(width) = integer_width(mir, instruction.outputs[0]) else {
                     issues.push(MachineLoweringIssue::UnsupportedArithmeticType(
                         instruction.outputs[0],
@@ -160,25 +177,37 @@ pub fn lower_mir(
                     continue;
                 };
 
-                let left = MachineOperand::Location(left);
-                let right = MachineOperand::Location(right);
+                let left = MachineOperand::Location {
+                    location: left,
+                    ty: MachineValueType::Integer(left_width),
+                };
+                let right = MachineOperand::Location {
+                    location: right,
+                    ty: MachineValueType::Integer(right_width),
+                };
                 let op = match instruction.op {
                     MirOp::Add { .. } => MachineOp::AddChecked {
                         dst,
                         left,
                         right,
+                        left_width,
+                        right_width,
                         width,
                     },
                     MirOp::Sub { .. } => MachineOp::SubChecked {
                         dst,
                         left,
                         right,
+                        left_width,
+                        right_width,
                         width,
                     },
                     MirOp::Mul { .. } => MachineOp::MulChecked {
                         dst,
                         left,
                         right,
+                        left_width,
+                        right_width,
                         width,
                     },
                     _ => unreachable!(),
@@ -205,11 +234,21 @@ pub fn lower_mir(
                     ));
                     continue;
                 };
+                let Some(ty) = machine_value_type(mir, instruction.inputs[0]) else {
+                    issues.push(MachineLoweringIssue::UnsupportedArithmeticType(
+                        instruction.inputs[0],
+                    ));
+                    continue;
+                };
                 operations.push(MachineInstruction {
                     source_node: instruction.source_node,
                     op: MachineOp::Move {
                         dst,
-                        src: MachineOperand::Location(src),
+                        src: MachineOperand::Location {
+                            location: src,
+                            ty,
+                        },
+                        ty,
                     },
                 });
             }
@@ -253,6 +292,18 @@ fn location(
     value: ValueId,
 ) -> Option<PhysicalLocation> {
     allocation.locations.get(&value).copied()
+}
+
+fn machine_value_type(
+    mir: &MirProgram,
+    value: ValueId,
+) -> Option<MachineValueType> {
+    match mir.values.get(&value)?.ty {
+        MirType::Bool => Some(MachineValueType::Bool),
+        MirType::Integer(width) => Some(MachineValueType::Integer(width)),
+        MirType::Pointer | MirType::TextHandle => Some(MachineValueType::Pointer),
+        MirType::Float32 | MirType::Float64 | MirType::Bytes => None,
+    }
 }
 
 fn integer_width(mir: &MirProgram, value: ValueId) -> Option<IntegerWidth> {
