@@ -184,15 +184,21 @@ fn read_type(
         ),
         7 => SemanticType::Text,
         8 => SemanticType::Bytes,
-        9 => SemanticType::Array(
-            Box::new(read_type(reader, next)?),
-            reader.usize_u64()?,
-        ),
+        9 => {
+            let len = reader.usize_u64()?;
+            SemanticType::Array(
+                Box::new(read_type(reader, next)?),
+                len,
+            )
+        },
         10 => SemanticType::Slice(Box::new(read_type(reader, next)?)),
-        11 => SemanticType::Vector(
-            Box::new(read_type(reader, next)?),
-            reader.usize_u64()?,
-        ),
+        11 => {
+            let len = reader.usize_u64()?;
+            SemanticType::Vector(
+                Box::new(read_type(reader, next)?),
+                len,
+            )
+        },
         12 => SemanticType::Record(reader.string()?),
         13 => SemanticType::Variant(reader.string()?),
         14 => SemanticType::Option(Box::new(read_type(reader, next)?)),
@@ -492,6 +498,35 @@ mod tests {
             from: SourceEndpoint::NodeOutput { node: 1, port: 0 },
             to: TargetEndpoint::GraphOutput(0),
         });
+
+        let bytes = encode_graph(&graph).unwrap();
+        let decoded = decode_graph(&bytes).unwrap();
+        assert!(structurally_equal(&graph, &decoded));
+    }
+
+    #[test]
+    fn array_and_vector_lengths_round_trip_in_encoder_order() {
+        let mut graph = Graph::new("types");
+        graph.inputs = vec![
+            Port {
+                id: 0,
+                name: "array".into(),
+                ty: SemanticType::Array(
+                    Box::new(SemanticType::Bool),
+                    7,
+                ),
+            },
+            Port {
+                id: 1,
+                name: "vector".into(),
+                ty: SemanticType::Vector(
+                    Box::new(SemanticType::Integer(
+                        IntegerType::new(0, 255).unwrap(),
+                    )),
+                    8,
+                ),
+            },
+        ];
 
         let bytes = encode_graph(&graph).unwrap();
         let decoded = decode_graph(&bytes).unwrap();
