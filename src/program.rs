@@ -8,8 +8,8 @@ use crate::crypto::{
 use crate::gir::Graph;
 use crate::gir_validate::{self, ValidationIssue};
 use crate::hardware::{
-    validate_hardware_profile, CacheProfile, HardwareFeature, HardwareIssue,
-    HardwareProfile, HardwareRequirement,
+    validate_hardware_profile, HardwareIssue, HardwareProfile,
+    HardwareRequirement,
 };
 use crate::io::{
     validate_io_pipeline, IoPipeline, IoPipelineIssue, IoValueKind,
@@ -267,6 +267,7 @@ mod tests {
     };
     use crate::crypto::{CryptoGuarantee, CryptoPrimitive};
     use crate::gir::ParameterPolicy;
+    use crate::hardware::{CacheProfile, HardwareFeature};
     use crate::io::{IoSourceKind, IoTransform};
     use crate::math::{MathMode, RoundingMode};
     use crate::network::ConnectionFeature;
