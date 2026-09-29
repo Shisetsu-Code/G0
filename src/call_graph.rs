@@ -60,9 +60,12 @@ pub fn build_call_graph(
                     });
                 }
 
+                let node_inputs: Vec<SemanticType> =
+                    node.inputs.iter().map(|port| port.ty.clone()).collect();
+                let node_outputs: Vec<SemanticType> =
+                    node.outputs.iter().map(|port| port.ty.clone()).collect();
+
                 if let Some(target) = by_name.get(callee.as_str()).copied() {
-                    let node_inputs: Vec<SemanticType> =
-                        node.inputs.iter().map(|port| port.ty.clone()).collect();
                     let target_inputs: Vec<SemanticType> =
                         target.inputs.iter().map(|port| port.ty.clone()).collect();
                     if node_inputs != target_inputs {
@@ -72,8 +75,6 @@ pub fn build_call_graph(
                         });
                     }
 
-                    let node_outputs: Vec<SemanticType> =
-                        node.outputs.iter().map(|port| port.ty.clone()).collect();
                     let target_outputs: Vec<SemanticType> =
                         target.outputs.iter().map(|port| port.ty.clone()).collect();
                     if node_outputs != target_outputs {
@@ -82,15 +83,14 @@ pub fn build_call_graph(
                             callee: callee.clone(),
                         });
                     }
-
-                    if let Err(abi_issues) =
-                        lower_signature(&target_inputs, &target_outputs)
-                    {
-                        issues.push(CallGraphIssue::AbiUnsupported {
-                            callee: callee.clone(),
-                            issues: abi_issues,
-                        });
-                    }
+                } else if external_subgraphs.contains(callee)
+                    && let Err(abi_issues) =
+                        lower_signature(&node_inputs, &node_outputs)
+                {
+                    issues.push(CallGraphIssue::AbiUnsupported {
+                        callee: callee.clone(),
+                        issues: abi_issues,
+                    });
                 }
 
                 callees.insert(callee.clone());
