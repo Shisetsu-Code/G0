@@ -6,6 +6,7 @@ pub mod concurrency;
 pub mod compiler;
 pub mod crypto;
 pub mod data_format;
+pub mod diagnostics;
 pub mod effects;
 pub mod entropy;
 pub mod evolution;
