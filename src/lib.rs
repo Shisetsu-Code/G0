@@ -20,6 +20,7 @@ pub mod mir;
 pub mod network;
 pub mod optimize;
 pub mod ownership;
+pub mod package;
 pub mod parser;
 pub mod program;
 pub mod profiling;
