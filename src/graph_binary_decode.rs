@@ -534,6 +534,50 @@ mod tests {
     }
 
     #[test]
+    fn structured_control_operations_round_trip() {
+        let operations = vec![
+            Operation::Select {
+                when_true: "yes".into(),
+                when_false: "no".into(),
+            },
+            Operation::Match {
+                arms: vec![
+                    MatchArm {
+                        tag: "A".into(),
+                        graph: "a".into(),
+                    },
+                    MatchArm {
+                        tag: "B".into(),
+                        graph: "b".into(),
+                    },
+                ],
+                default: "other".into(),
+            },
+            Operation::Loop {
+                condition: "cond".into(),
+                body: "body".into(),
+                max_iterations: 100,
+            },
+        ];
+
+        for (index, operation) in operations.into_iter().enumerate() {
+            let mut graph = Graph::new(format!("control-{index}"));
+            graph.nodes.push(Node {
+                id: 1,
+                operation,
+                inputs: vec![],
+                outputs: vec![],
+                effects: BTreeSet::new(),
+                required_capabilities: BTreeSet::new(),
+            });
+
+            let bytes = encode_graph(&graph).unwrap();
+            let decoded = decode_graph(&bytes).unwrap();
+            assert!(structurally_equal(&graph, &decoded));
+        }
+    }
+
+    #[test]
     fn trailing_bytes_are_rejected() {
         let bytes = crate::graph_binary::encode_graph(&Graph::new("g"))
             .unwrap();
