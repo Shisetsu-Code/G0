@@ -367,9 +367,11 @@ mod tests {
             },
         ];
 
-        let mut program = ProgramContract::default();
-        program.entry_graph = Some("loop_main".into());
-        program.graphs = vec![main, false_condition(), identity_body()];
+        let program = ProgramContract {
+            entry_graph: Some("loop_main".into()),
+            graphs: vec![main, false_condition(), identity_body()],
+            ..ProgramContract::default()
+        };
 
         let platform = PlatformContract::bootstrap_x86_64_v3();
         let compiled = compile_program(
