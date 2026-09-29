@@ -406,6 +406,10 @@ mod tests {
         SemanticType::Integer(IntegerType::new(0, 100).unwrap())
     }
 
+    fn int_plus_one() -> SemanticType {
+        SemanticType::Integer(IntegerType::new(1, 101).unwrap())
+    }
+
     #[test]
     fn local_subgraph_is_inlined_and_traceable() {
         let worker = Graph {
@@ -418,7 +422,7 @@ mod tests {
             outputs: vec![Port {
                 id: 0,
                 name: "y".into(),
-                ty: int(),
+                ty: int_plus_one(),
             }],
             nodes: vec![
                 Node {
@@ -488,7 +492,7 @@ mod tests {
             outputs: vec![Port {
                 id: 0,
                 name: "y".into(),
-                ty: int(),
+                ty: int_plus_one(),
             }],
             nodes: vec![Node {
                 id: 10,
@@ -501,7 +505,7 @@ mod tests {
                 outputs: vec![Port {
                     id: 0,
                     name: "y".into(),
-                    ty: int(),
+                    ty: int_plus_one(),
                 }],
                 effects: BTreeSet::new(),
                 required_capabilities: BTreeSet::new(),
