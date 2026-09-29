@@ -225,10 +225,13 @@ fn emit_checked_binary(
         }
         "imul" => {
             if width == IntegerWidth::U64 {
-                return Err(X86CodegenIssue::Unsupported128BitInteger);
+                out.push_str("    mul r11\n");
+                out.push_str("    test rdx, rdx\n");
+                out.push_str(&format!("    jne {}\n", trap));
+            } else {
+                out.push_str("    imul rax, r11\n");
+                emit_overflow_guard(out, width, trap, true);
             }
-            out.push_str("    imul rax, r11\n");
-            emit_overflow_guard(out, width, trap, true);
         }
         _ => unreachable!(),
     }
