@@ -66,7 +66,7 @@ mod tests {
     use super::*;
     use crate::machine::{Gpr, PhysicalLocation};
     use crate::machine_ir::{
-        MachineInstruction, MachineOp, MachineOperand,
+        MachineInstruction, MachineOp, MachineOperand, MachineValueType,
     };
 
     #[test]
@@ -78,6 +78,9 @@ mod tests {
                     op: MachineOp::Move {
                         dst: PhysicalLocation::Register(Gpr::Rcx),
                         src: MachineOperand::Immediate(1),
+                        ty: MachineValueType::Integer(
+                            crate::memory::IntegerWidth::U8,
+                        ),
                     },
                 },
                 MachineInstruction {
@@ -85,6 +88,9 @@ mod tests {
                     op: MachineOp::Move {
                         dst: PhysicalLocation::Register(Gpr::Rdx),
                         src: MachineOperand::Immediate(2),
+                        ty: MachineValueType::Integer(
+                            crate::memory::IntegerWidth::U8,
+                        ),
                     },
                 },
                 MachineInstruction {
@@ -92,6 +98,9 @@ mod tests {
                     op: MachineOp::Move {
                         dst: PhysicalLocation::Register(Gpr::R8),
                         src: MachineOperand::Immediate(3),
+                        ty: MachineValueType::Integer(
+                            crate::memory::IntegerWidth::U8,
+                        ),
                     },
                 },
             ],
