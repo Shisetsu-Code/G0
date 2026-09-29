@@ -1,5 +1,6 @@
 use crate::gir::Graph;
 use crate::gir_validate::ValidationIssue;
+use crate::invariants::{ledger_for_validated_graph, InvariantLedger};
 use crate::machine::{
     linear_scan_allocate, register_pressure, AllocationIssue,
     AllocationResult, MachineProfile, RegisterPressure,
@@ -19,6 +20,7 @@ pub struct CompiledGraph {
     pub pressure: RegisterPressure,
     pub machine_ir: MachineProgram,
     pub assembly: String,
+    pub invariants: InvariantLedger,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,6 +41,7 @@ pub fn compile_graph(
         return Err(PipelineIssue::Gir(report.issues));
     }
 
+    let invariants = ledger_for_validated_graph(graph);
     let mir = lower_graph(graph).map_err(PipelineIssue::Lowering)?;
     validate_mir(&mir).map_err(PipelineIssue::Mir)?;
     let allocation =
@@ -56,6 +59,7 @@ pub fn compile_graph(
         pressure,
         machine_ir,
         assembly,
+        invariants,
     })
 }
 
@@ -170,5 +174,6 @@ mod tests {
         assert!(!compiled.allocation.locations.is_empty());
         assert!(!compiled.machine_ir.operations.is_empty());
         assert!(compiled.assembly.contains("g0_machine_main"));
+        assert!(compiled.invariants.compilation_allowed());
     }
 }
