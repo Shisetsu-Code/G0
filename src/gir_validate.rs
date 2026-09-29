@@ -115,16 +115,16 @@ pub fn validate(graph: &Graph) -> Result<(), ValidationReport> {
             );
         }
 
-        if let (Some(source_ty), Some(target_ty)) = (source_ty, target_ty) {
-            if source_ty != target_ty {
-                report.push(
-                    ValidationCode::TypeMismatch,
-                    format!(
-                        "edge {:?} -> {:?} connects incompatible types {:?} and {:?}; G0 has no implicit casts",
-                        edge.from, edge.to, source_ty, target_ty
-                    ),
-                );
-            }
+        if let (Some(source_ty), Some(target_ty)) = (source_ty, target_ty)
+            && source_ty != target_ty
+        {
+            report.push(
+                ValidationCode::TypeMismatch,
+                format!(
+                    "edge {:?} -> {:?} connects incompatible types {:?} and {:?}; G0 has no implicit casts",
+                    edge.from, edge.to, source_ty, target_ty
+                ),
+            );
         }
 
         *driver_count.entry(edge.to.clone()).or_insert(0) += 1;
@@ -378,7 +378,7 @@ fn validate_integer_arithmetic(node: &Node, report: &mut ValidationReport) {
         return;
     };
 
-    let needed = match node.operation {
+    let needed = match &node.operation {
         Operation::Add => range_add(a, b),
         Operation::Sub => range_sub(a, b),
         Operation::Mul => range_mul(a, b),
