@@ -35,7 +35,9 @@ use crate::network::{
 use crate::ownership::{
     validate_ownership, OwnershipIssue, OwnershipPlan,
 };
-use crate::query::{validate_query, QueryIssue, QuerySpec};
+use crate::query::{
+    validate_query_with_protected_indexes, QueryIssue, QuerySpec,
+};
 use crate::runtime::{validate_region_plan, RegionIssue, RegionPlan};
 use crate::scheduler::{
     validate_schedule, ScheduleGraph, ScheduleIssue, SchedulerProfile,
@@ -374,7 +376,11 @@ pub fn validate_program(
     }
 
     for (index, query) in program.queries.iter().enumerate() {
-        if let Err(query_issues) = validate_query(&program.store, query) {
+        if let Err(query_issues) = validate_query_with_protected_indexes(
+            &program.store,
+            query,
+            &program.protected_indexes,
+        ) {
             issues.push(ProgramIssue::Query {
                 query: index,
                 issues: query_issues,
