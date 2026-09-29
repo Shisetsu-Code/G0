@@ -56,9 +56,7 @@ pub enum ConcurrencyIssue {
     },
 }
 
-pub fn validate_concurrent_region(
-    region: &ConcurrentRegion,
-) -> Result<(), Vec<ConcurrencyIssue>> {
+pub fn validate_concurrent_region(region: &ConcurrentRegion) -> Result<(), Vec<ConcurrencyIssue>> {
     let mut issues = Vec::new();
     let mut task_ids = BTreeSet::new();
     let mut by_state: BTreeMap<&str, Vec<(TaskId, &StateAccess)>> = BTreeMap::new();
@@ -95,10 +93,7 @@ pub fn validate_concurrent_region(
             .any(|(_, access)| access.kind == AccessKind::Write);
         let tasks: BTreeSet<TaskId> = accesses.iter().map(|(task, _)| *task).collect();
 
-        if has_write
-            && tasks.len() > 1
-            && disciplines.contains(&StateDiscipline::Unique)
-        {
+        if has_write && tasks.len() > 1 && disciplines.contains(&StateDiscipline::Unique) {
             issues.push(ConcurrencyIssue::ConcurrentUniqueMutation {
                 state: state.to_owned(),
                 tasks,
@@ -131,19 +126,11 @@ mod tests {
             tasks: vec![
                 TaskAccess {
                     task: 1,
-                    accesses: vec![access(
-                        "a",
-                        StateDiscipline::Unique,
-                        AccessKind::Write,
-                    )],
+                    accesses: vec![access("a", StateDiscipline::Unique, AccessKind::Write)],
                 },
                 TaskAccess {
                     task: 2,
-                    accesses: vec![access(
-                        "b",
-                        StateDiscipline::Unique,
-                        AccessKind::Write,
-                    )],
+                    accesses: vec![access("b", StateDiscipline::Unique, AccessKind::Write)],
                 },
             ],
         };
@@ -165,11 +152,7 @@ mod tests {
                 },
                 TaskAccess {
                     task: 2,
-                    accesses: vec![access(
-                        "balance",
-                        StateDiscipline::Unique,
-                        AccessKind::Read,
-                    )],
+                    accesses: vec![access("balance", StateDiscipline::Unique, AccessKind::Read)],
                 },
             ],
         };
@@ -224,11 +207,7 @@ mod tests {
                 },
                 TaskAccess {
                     task: 2,
-                    accesses: vec![access(
-                        "counter",
-                        StateDiscipline::Unique,
-                        AccessKind::Read,
-                    )],
+                    accesses: vec![access("counter", StateDiscipline::Unique, AccessKind::Read)],
                 },
             ],
         };

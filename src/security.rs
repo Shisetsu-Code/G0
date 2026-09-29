@@ -176,9 +176,7 @@ pub enum InternalAuthenticationReason {
     RateLimited,
 }
 
-pub fn public_auth_error(
-    _reason: InternalAuthenticationReason,
-) -> PublicAuthenticationError {
+pub fn public_auth_error(_reason: InternalAuthenticationReason) -> PublicAuthenticationError {
     PublicAuthenticationError::AuthenticationFailed
 }
 
@@ -243,8 +241,7 @@ mod tests {
             parallelism: 8,
         };
 
-        let issues =
-            validate_password_candidate(&profile, tuning, candidate).unwrap_err();
+        let issues = validate_password_candidate(&profile, tuning, candidate).unwrap_err();
         assert!(issues.iter().any(|issue| {
             matches!(
                 issue,

@@ -159,11 +159,7 @@ pub struct ResourceContext {
 }
 
 impl ResourceContext {
-    pub fn new(
-        kind: impl Into<String>,
-        id: impl Into<String>,
-        scope: impl Into<String>,
-    ) -> Self {
+    pub fn new(kind: impl Into<String>, id: impl Into<String>, scope: impl Into<String>) -> Self {
         Self {
             kind: ResourceKind::new(kind),
             id: ResourceId::new(id),
@@ -173,11 +169,7 @@ impl ResourceContext {
         }
     }
 
-    pub fn add_principal_relation(
-        &mut self,
-        relation: impl Into<String>,
-        principal: PrincipalId,
-    ) {
+    pub fn add_principal_relation(&mut self, relation: impl Into<String>, principal: PrincipalId) {
         self.principal_relations
             .entry(relation.into())
             .or_default()
@@ -232,9 +224,10 @@ fn evaluate_policy(expr: &PolicyExpr, principal: &Principal, resource: &Resource
             .grants
             .iter()
             .any(|grant| grant_satisfies(grant, required, principal, resource)),
-        PolicyExpr::PrincipalOwnsResource => {
-            resource.owner.as_ref().is_some_and(|owner| owner == &principal.id)
-        }
+        PolicyExpr::PrincipalOwnsResource => resource
+            .owner
+            .as_ref()
+            .is_some_and(|owner| owner == &principal.id),
         PolicyExpr::PrincipalInRelation { relation } => resource
             .principal_relations
             .get(relation)
@@ -394,7 +387,9 @@ mod tests {
     #[test]
     fn scoped_capability_cannot_cross_tenant() {
         let mut principal = Principal::new("alice", "tenant-a");
-        principal.grants.insert(read_message(ScopeExpr::CurrentScope));
+        principal
+            .grants
+            .insert(read_message(ScopeExpr::CurrentScope));
 
         let policies = PolicySet {
             rules: vec![PolicyRule {
@@ -404,13 +399,7 @@ mod tests {
         };
 
         let other_tenant = ResourceContext::new("Message", "m2", "tenant-b");
-        let decision = authorize(
-            &principal,
-            &other_tenant,
-            &policies,
-            &Action::read(),
-            false,
-        );
+        let decision = authorize(&principal, &other_tenant, &policies, &Action::read(), false);
 
         assert_eq!(
             decision,
@@ -440,7 +429,9 @@ mod tests {
     #[test]
     fn capability_for_another_resource_kind_never_matches() {
         let mut principal = Principal::new("alice", "tenant-a");
-        principal.grants.insert(read_message(ScopeExpr::CurrentScope));
+        principal
+            .grants
+            .insert(read_message(ScopeExpr::CurrentScope));
 
         let policies = PolicySet {
             rules: vec![PolicyRule {
@@ -456,7 +447,9 @@ mod tests {
     #[test]
     fn no_policy_denies_even_with_a_matching_capability() {
         let mut principal = Principal::new("alice", "tenant-a");
-        principal.grants.insert(read_message(ScopeExpr::CurrentScope));
+        principal
+            .grants
+            .insert(read_message(ScopeExpr::CurrentScope));
 
         let message = ResourceContext::new("Message", "m1", "tenant-a");
         let decision = authorize(

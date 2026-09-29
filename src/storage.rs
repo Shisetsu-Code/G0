@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use crate::authority::{
-    authorize, Action, AuthorizationDecision, DenyReason, Principal, PolicySet, ResourceContext,
+    Action, AuthorizationDecision, DenyReason, PolicySet, Principal, ResourceContext, authorize,
 };
 use crate::gir::SemanticType;
 
@@ -123,10 +123,7 @@ pub enum StorageSchemaIssue {
     DuplicateMemberName(String),
     DuplicatePolicyAction(String),
     UnknownIndexField(String),
-    UnknownRelationTarget {
-        relation: String,
-        target: String,
-    },
+    UnknownRelationTarget { relation: String, target: String },
     CredentialFieldMustUseCredentialType(String),
     SecretFieldMustUseSecretType(String),
 }
@@ -191,7 +188,6 @@ pub fn validate_resource_schema(resource: &ResourceSchema) -> Result<(), Vec<Sto
     }
 }
 
-
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct StoreSchema {
     pub resources: Vec<ResourceSchema>,
@@ -209,9 +205,7 @@ pub fn validate_store_schema(store: &StoreSchema) -> Result<(), Vec<StorageSchem
 
     for resource in &store.resources {
         if !resource_names.insert(resource.name.as_str()) {
-            issues.push(StorageSchemaIssue::DuplicateResource(
-                resource.name.clone(),
-            ));
+            issues.push(StorageSchemaIssue::DuplicateResource(resource.name.clone()));
         }
         if let Err(resource_issues) = validate_resource_schema(resource) {
             issues.extend(resource_issues);
@@ -335,9 +329,7 @@ pub fn authorize_store_operation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::authority::{
-        PolicyExpr, PolicyRule, PrincipalId, ResourceContext, ScopeExpr,
-    };
+    use crate::authority::{PolicyExpr, PolicyRule, PrincipalId, ResourceContext, ScopeExpr};
     use crate::gir::{CapabilityClass, SemanticType};
 
     fn message_schema() -> ResourceSchema {
@@ -364,10 +356,7 @@ mod tests {
     #[test]
     fn resources_default_to_scoped_isolation_and_deny() {
         let resource = ResourceSchema::new("Message");
-        assert_eq!(
-            resource.tenant_isolation,
-            TenantIsolation::CurrentScope
-        );
+        assert_eq!(resource.tenant_isolation, TenantIsolation::CurrentScope);
         assert!(!resource.action_is_explicitly_authorized(&Action::read()));
     }
 
@@ -403,7 +392,6 @@ mod tests {
 
         assert!(validate_resource_schema(&resource).is_ok());
     }
-
 
     #[test]
     fn relation_targets_are_verified_by_the_store_schema() {
@@ -563,13 +551,9 @@ mod tests {
         let mut message = ResourceContext::new("Message", "m1", "tenant-a");
         message.owner = Some(principal.id.clone());
 
-        let issues = authorize_store_operation(
-            &schema,
-            &principal,
-            &message,
-            &StoreOperation::Enumerate,
-        )
-        .unwrap_err();
+        let issues =
+            authorize_store_operation(&schema, &principal, &message, &StoreOperation::Enumerate)
+                .unwrap_err();
 
         assert!(issues.iter().any(|issue| {
             matches!(

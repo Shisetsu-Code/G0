@@ -34,13 +34,8 @@ impl RetryPolicy {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RetryIssue {
     ZeroAttempts,
-    UnsafeReplay {
-        effect: String,
-        max_attempts: u32,
-    },
-    MissingIdempotencyIdentity {
-        effect: String,
-    },
+    UnsafeReplay { effect: String, max_attempts: u32 },
+    MissingIdempotencyIdentity { effect: String },
 }
 
 pub fn validate_retry(
@@ -91,12 +86,7 @@ mod tests {
             replay: ReplaySafety::NeverReplay,
         };
 
-        let issues = validate_retry(
-            &payment,
-            RetryPolicy { max_attempts: 3 },
-            false,
-        )
-        .unwrap_err();
+        let issues = validate_retry(&payment, RetryPolicy { max_attempts: 3 }, false).unwrap_err();
 
         assert!(issues.iter().any(|issue| {
             matches!(
@@ -119,22 +109,8 @@ mod tests {
             },
         };
 
-        assert!(
-            validate_retry(
-                &message,
-                RetryPolicy { max_attempts: 4 },
-                false,
-            )
-            .is_err()
-        );
-        assert!(
-            validate_retry(
-                &message,
-                RetryPolicy { max_attempts: 4 },
-                true,
-            )
-            .is_ok()
-        );
+        assert!(validate_retry(&message, RetryPolicy { max_attempts: 4 }, false,).is_err());
+        assert!(validate_retry(&message, RetryPolicy { max_attempts: 4 }, true,).is_ok());
     }
 
     #[test]
@@ -145,13 +121,6 @@ mod tests {
             replay: ReplaySafety::Idempotent,
         };
 
-        assert!(
-            validate_retry(
-                &read,
-                RetryPolicy { max_attempts: 5 },
-                false,
-            )
-            .is_ok()
-        );
+        assert!(validate_retry(&read, RetryPolicy { max_attempts: 5 }, false,).is_ok());
     }
 }

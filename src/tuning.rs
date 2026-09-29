@@ -104,9 +104,7 @@ pub fn validate_candidate(
                     actual,
                 });
             }
-            ParameterPolicy::Bounded { min, max }
-                if actual < min || actual > max =>
-            {
+            ParameterPolicy::Bounded { min, max } if actual < min || actual > max => {
                 issues.push(CandidateIssue::ParameterOutOfBounds {
                     parameter: parameter.name.clone(),
                     min,
@@ -114,34 +112,25 @@ pub fn validate_candidate(
                     actual,
                 });
             }
-            ParameterPolicy::Fixed(_)
-            | ParameterPolicy::Bounded { .. }
-            | ParameterPolicy::Free => {}
+            ParameterPolicy::Fixed(_) | ParameterPolicy::Bounded { .. } | ParameterPolicy::Free => {
+            }
         }
     }
 
     for constraint in &profile.constraints {
         match constraint {
             HardConstraint::MetricAtMost { metric, value } => {
-                validate_metric_bound(
-                    candidate,
-                    metric,
-                    *value,
-                    true,
-                    &mut issues,
-                );
+                validate_metric_bound(candidate, metric, *value, true, &mut issues);
             }
             HardConstraint::MetricAtLeast { metric, value } => {
-                validate_metric_bound(
-                    candidate,
-                    metric,
-                    *value,
-                    false,
-                    &mut issues,
-                );
+                validate_metric_bound(candidate, metric, *value, false, &mut issues);
             }
             HardConstraint::Invariant(name) => {
-                if !candidate.passed_invariants.iter().any(|value| value == name) {
+                if !candidate
+                    .passed_invariants
+                    .iter()
+                    .any(|value| value == name)
+                {
                     issues.push(CandidateIssue::MissingInvariant(name.clone()));
                 }
             }
