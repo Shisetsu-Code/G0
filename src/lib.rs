@@ -1,3 +1,4 @@
+pub mod abi;
 pub mod accelerator;
 pub mod artifact;
 pub mod auth;
