@@ -98,7 +98,7 @@ pub fn analyze_samples(
 
 fn percentile(sorted: &[u128], percentile: usize) -> u128 {
     let last = sorted.len() - 1;
-    let index = (last * percentile + 99) / 100;
+    let index = (last * percentile).div_ceil(100);
     sorted[index.min(last)]
 }
 
