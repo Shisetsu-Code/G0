@@ -28,6 +28,7 @@ pub mod security;
 pub mod storage;
 pub mod symbol;
 pub mod text;
+pub mod time;
 pub mod tuning;
 pub mod validate;
 
