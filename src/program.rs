@@ -47,6 +47,11 @@ use crate::security::{
 use crate::storage::{
     validate_store_schema, StorageSchemaIssue, StoreSchema,
 };
+use crate::storage_crypto::{
+    validate_binding_coverage, validate_field_binding,
+    validate_storage_crypto_profile, ProtectedFieldBinding,
+    StorageCryptoIssue, StorageCryptoProfile,
+};
 use crate::task_runtime::{
     validate_task_plan, TaskPlan, TaskPlanIssue,
 };
@@ -90,6 +95,7 @@ pub struct ProgramContract {
     pub queries: Vec<QuerySpec>,
     pub protected_indexes: Vec<ProtectedIndexSpec>,
     pub task_plans: Vec<TaskPlan>,
+    pub storage_crypto_bindings: Vec<ProtectedFieldBinding>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +107,7 @@ pub struct PlatformContract {
     pub text: TextContract,
     pub hardware: HardwareProfile,
     pub scheduler: SchedulerProfile,
+    pub storage_crypto: StorageCryptoProfile,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -177,6 +184,7 @@ pub enum ProgramIssue {
         plan: usize,
         issues: Vec<TaskPlanIssue>,
     },
+    StorageCrypto(Vec<StorageCryptoIssue>),
     Security(Vec<SecurityContractIssue>),
 }
 
@@ -382,6 +390,32 @@ pub fn validate_program(
         }
     }
 
+    let mut storage_crypto_issues = Vec::new();
+    if let Err(profile_issues) = validate_storage_crypto_profile(
+        &platform.storage_crypto,
+        platform.crypto.security_bits,
+    ) {
+        storage_crypto_issues.extend(profile_issues);
+    }
+    if let Err(coverage_issues) = validate_binding_coverage(
+        &program.store,
+        &program.storage_crypto_bindings,
+    ) {
+        storage_crypto_issues.extend(coverage_issues);
+    }
+    for binding in &program.storage_crypto_bindings {
+        if let Err(binding_issues) = validate_field_binding(
+            &program.store,
+            &platform.storage_crypto,
+            binding,
+        ) {
+            storage_crypto_issues.extend(binding_issues);
+        }
+    }
+    if !storage_crypto_issues.is_empty() {
+        issues.push(ProgramIssue::StorageCrypto(storage_crypto_issues));
+    }
+
     if let Some(password_tuning) = program.password_tuning
         && let Err(security_issues) =
             validate_password_contract(&platform.security, password_tuning)
@@ -463,6 +497,14 @@ mod tests {
                 ],
             },
             text: TextContract::strict("platform-selected"),
+            storage_crypto: StorageCryptoProfile {
+                id: "store.secure".into(),
+                minimum_security_bits: 192,
+                current_key_version: 1,
+                bind_tenant_as_aad: true,
+                bind_resource_as_aad: true,
+                bind_field_as_aad: true,
+            },
             scheduler: SchedulerProfile {
                 parallel_capacity: 12,
                 work_stealing: true,
