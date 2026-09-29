@@ -21,14 +21,30 @@ pub enum X86CodegenIssue {
 pub fn emit_x86_64(
     program: &MachineProgram,
 ) -> Result<String, Vec<X86CodegenIssue>> {
+    emit_x86_64_named(program, "g0_machine_main", true)
+}
+
+pub fn emit_x86_64_named(
+    program: &MachineProgram,
+    symbol: &str,
+    exported: bool,
+) -> Result<String, Vec<X86CodegenIssue>> {
+    if !valid_symbol(symbol) {
+        return Err(vec![X86CodegenIssue::InvalidCallTarget(
+            symbol.to_owned(),
+        )]);
+    }
+
     let mut issues = Vec::new();
     let mut out = String::new();
 
     out.push_str(".intel_syntax noprefix\n");
     out.push_str(".text\n");
-    out.push_str(".global g0_machine_main\n");
-    out.push_str(".type g0_machine_main, @function\n");
-    out.push_str("g0_machine_main:\n");
+    if exported {
+        out.push_str(&format!(".global {}\n", symbol));
+    }
+    out.push_str(&format!(".type {}, @function\n", symbol));
+    out.push_str(&format!("{}:\n", symbol));
     out.push_str("    push rbp\n");
     out.push_str("    mov rbp, rsp\n");
     if program.stack_bytes != 0 {
@@ -57,7 +73,8 @@ pub fn emit_x86_64(
                 right_width,
                 width,
             } => {
-                let trap = format!(".Ltrap_{}", trap_index);
+                let trap =
+                    format!(".L{}_trap_{}", symbol, trap_index);
                 trap_index += 1;
                 if let Err(issue) = emit_checked_binary(
                     &mut out,
@@ -85,7 +102,8 @@ pub fn emit_x86_64(
                 right_width,
                 width,
             } => {
-                let trap = format!(".Ltrap_{}", trap_index);
+                let trap =
+                    format!(".L{}_trap_{}", symbol, trap_index);
                 trap_index += 1;
                 if let Err(issue) = emit_checked_binary(
                     &mut out,
@@ -113,7 +131,8 @@ pub fn emit_x86_64(
                 right_width,
                 width,
             } => {
-                let trap = format!(".Ltrap_{}", trap_index);
+                let trap =
+                    format!(".L{}_trap_{}", symbol, trap_index);
                 trap_index += 1;
                 if let Err(issue) = emit_checked_binary(
                     &mut out,
@@ -178,7 +197,10 @@ pub fn emit_x86_64(
         out.push_str("    ud2\n");
     }
 
-    out.push_str(".size g0_machine_main, .-g0_machine_main\n");
+    out.push_str(&format!(
+        ".size {}, .-{}\n",
+        symbol, symbol
+    ));
     out.push_str(".section .note.GNU-stack,\"\" ,@progbits\n");
 
     if issues.is_empty() {
@@ -186,6 +208,20 @@ pub fn emit_x86_64(
     } else {
         Err(issues)
     }
+}
+
+pub fn emit_entry_wrapper(
+    entry_symbol: &str,
+) -> Result<String, X86CodegenIssue> {
+    if !valid_symbol(entry_symbol) {
+        return Err(X86CodegenIssue::InvalidCallTarget(
+            entry_symbol.to_owned(),
+        ));
+    }
+
+    Ok(format!(
+        ".intel_syntax noprefix\n.text\n.global g0_machine_main\n.type g0_machine_main, @function\ng0_machine_main:\n    push rbp\n    mov rbp, rsp\n    call {entry_symbol}\n    leave\n    ret\n.size g0_machine_main, .-g0_machine_main\n"
+    ))
 }
 
 fn emit_call(
@@ -656,6 +692,39 @@ mod tests {
     use super::*;
     use crate::machine::Gpr;
     use crate::machine_ir::{MachineInstruction, MachineOutput};
+
+    #[test]
+    fn named_functions_get_unique_trap_labels() {
+        let program = MachineProgram {
+            operations: vec![MachineInstruction {
+                source_node: 1,
+                op: MachineOp::AddChecked {
+                    dst: PhysicalLocation::Register(Gpr::R8),
+                    left: MachineOperand::Location {
+                        location: PhysicalLocation::Register(Gpr::Rcx),
+                        ty: MachineValueType::Integer(IntegerWidth::U8),
+                    },
+                    right: MachineOperand::Location {
+                        location: PhysicalLocation::Register(Gpr::Rsi),
+                        ty: MachineValueType::Integer(IntegerWidth::U8),
+                    },
+                    left_width: IntegerWidth::U8,
+                    right_width: IntegerWidth::U8,
+                    width: IntegerWidth::U8,
+                },
+            }],
+            stack_bytes: 0,
+            outputs: vec![MachineOutput {
+                location: PhysicalLocation::Register(Gpr::R8),
+                ty: MachineValueType::Integer(IntegerWidth::U8),
+            }],
+        };
+
+        let asm =
+            emit_x86_64_named(&program, "g0_g_61", false).unwrap();
+        assert!(asm.contains(".Lg0_g_61_trap_0"));
+        assert!(asm.contains(".type g0_g_61, @function"));
+    }
 
     #[test]
     fn emits_basic_checked_machine_program() {
