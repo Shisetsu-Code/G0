@@ -106,9 +106,7 @@ pub fn validate_resource_schema(resource: &ResourceSchema) -> Result<(), Vec<Sto
         }
 
         match field.protection {
-            FieldProtection::Credential
-                if !matches!(&field.ty, SemanticType::Credential(_)) =>
-            {
+            FieldProtection::Credential if !matches!(&field.ty, SemanticType::Credential(_)) => {
                 issues.push(StorageSchemaIssue::CredentialFieldMustUseCredentialType(
                     field.name.clone(),
                 ));
