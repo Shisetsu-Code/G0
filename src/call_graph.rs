@@ -158,6 +158,41 @@ pub fn reachable_from(
     seen
 }
 
+pub fn reachable_program_graphs(
+    call_graph: &CallGraph,
+    graphs: &[Graph],
+    entry: &str,
+) -> BTreeSet<String> {
+    let by_name: BTreeMap<&str, &Graph> =
+        graphs.iter().map(|graph| (graph.name.as_str(), graph)).collect();
+    let mut seen = BTreeSet::new();
+    let mut stack = vec![entry.to_owned()];
+
+    while let Some(current) = stack.pop() {
+        if !seen.insert(current.clone()) {
+            continue;
+        }
+
+        if let Some(callees) = call_graph.calls.get(&current) {
+            for callee in callees {
+                if by_name.contains_key(callee.as_str()) {
+                    stack.push(callee.clone());
+                }
+            }
+        }
+
+        if let Some(graph) = by_name.get(current.as_str()).copied() {
+            for control in crate::control::control_references(graph) {
+                if by_name.contains_key(control.as_str()) {
+                    stack.push(control);
+                }
+            }
+        }
+    }
+
+    seen
+}
+
 fn find_local_cycle(
     graph: &CallGraph,
     local: &BTreeSet<String>,
