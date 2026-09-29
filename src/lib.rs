@@ -8,6 +8,7 @@ pub mod graph;
 pub mod optimize;
 pub mod parser;
 pub mod storage;
+pub mod tuning;
 pub mod validate;
 
 use graph::Graph;
