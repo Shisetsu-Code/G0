@@ -30,7 +30,7 @@ pub mod x86_64 {
     }
 
     pub fn emit(graph: &Graph) -> String {
-        let frame = ((graph.nodes.len() * 8 + 15) / 16) * 16;
+        let frame = (graph.nodes.len() * 8).div_ceil(16) * 16;
         let mut out = String::new();
 
         out.push_str(
