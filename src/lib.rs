@@ -14,6 +14,7 @@ pub mod network;
 pub mod optimize;
 pub mod parser;
 pub mod program;
+pub mod profiling;
 pub mod security;
 pub mod storage;
 pub mod text;
