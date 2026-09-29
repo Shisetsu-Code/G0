@@ -257,37 +257,53 @@ fn grant_satisfies(
     actual.class == required.class
         && actual.action == required.action
         && actual.resource == required.resource
-        && scope_expr_matches(&actual.scope, principal, resource)
-        && scope_requirement_compatible(&required.scope, principal, resource)
+        && required.resource == resource.kind
+        && scope_grant_covers(&actual.scope, &required.scope, principal, resource)
 }
 
-fn scope_requirement_compatible(
+fn scope_grant_covers(
+    actual: &ScopeExpr,
     required: &ScopeExpr,
     principal: &Principal,
     resource: &ResourceContext,
 ) -> bool {
-    match required {
-        ScopeExpr::Global => true,
-        ScopeExpr::CurrentPrincipal => resource.owner.as_ref() == Some(&principal.id),
-        ScopeExpr::CurrentScope => principal.scope == resource.scope,
-        ScopeExpr::ResourceSelf => true,
-        ScopeExpr::Named(scope) => resource.scope.0 == *scope,
-        ScopeExpr::RelationPath(path) => relation_path_matches(path, principal, resource),
+    if matches!(actual, ScopeExpr::Global) {
+        return true;
     }
-}
 
-fn scope_expr_matches(
-    actual: &ScopeExpr,
-    principal: &Principal,
-    resource: &ResourceContext,
-) -> bool {
-    match actual {
-        ScopeExpr::Global => true,
-        ScopeExpr::CurrentPrincipal => resource.owner.as_ref() == Some(&principal.id),
-        ScopeExpr::CurrentScope => principal.scope == resource.scope,
-        ScopeExpr::ResourceSelf => true,
-        ScopeExpr::Named(scope) => resource.scope.0 == *scope,
-        ScopeExpr::RelationPath(path) => relation_path_matches(path, principal, resource),
+    match required {
+        ScopeExpr::Global => false,
+        ScopeExpr::CurrentScope => match actual {
+            ScopeExpr::CurrentScope => principal.scope == resource.scope,
+            ScopeExpr::Named(scope) => {
+                principal.scope == resource.scope && resource.scope.0 == *scope
+            }
+            _ => false,
+        },
+        ScopeExpr::CurrentPrincipal => match actual {
+            ScopeExpr::CurrentPrincipal => resource.owner.as_ref() == Some(&principal.id),
+            _ => false,
+        },
+        ScopeExpr::ResourceSelf => match actual {
+            ScopeExpr::ResourceSelf => resource.owner.as_ref() == Some(&principal.id),
+            _ => false,
+        },
+        ScopeExpr::Named(required_scope) => match actual {
+            ScopeExpr::Named(actual_scope) => {
+                actual_scope == required_scope && resource.scope.0 == *required_scope
+            }
+            ScopeExpr::CurrentScope => {
+                principal.scope == resource.scope && resource.scope.0 == *required_scope
+            }
+            _ => false,
+        },
+        ScopeExpr::RelationPath(required_path) => match actual {
+            ScopeExpr::RelationPath(actual_path) => {
+                actual_path == required_path
+                    && relation_path_matches(required_path, principal, resource)
+            }
+            _ => false,
+        },
     }
 }
 
@@ -400,6 +416,41 @@ mod tests {
             decision,
             AuthorizationDecision::Deny(DenyReason::ScopeMismatch)
         );
+    }
+
+    #[test]
+    fn tenant_capability_cannot_satisfy_global_requirement() {
+        let actual = read_message(ScopeExpr::CurrentScope);
+        let required = read_message(ScopeExpr::Global);
+
+        let mut principal = Principal::new("alice", "tenant-a");
+        principal.grants.insert(actual);
+
+        let policies = PolicySet {
+            rules: vec![PolicyRule {
+                action: Action::read(),
+                allow_if: PolicyExpr::Requires(required),
+            }],
+        };
+
+        let message = ResourceContext::new("Message", "m1", "tenant-a");
+        assert!(!authorize(&principal, &message, &policies, &Action::read(), true).allowed());
+    }
+
+    #[test]
+    fn capability_for_another_resource_kind_never_matches() {
+        let mut principal = Principal::new("alice", "tenant-a");
+        principal.grants.insert(read_message(ScopeExpr::CurrentScope));
+
+        let policies = PolicySet {
+            rules: vec![PolicyRule {
+                action: Action::read(),
+                allow_if: PolicyExpr::Requires(read_message(ScopeExpr::CurrentScope)),
+            }],
+        };
+
+        let user = ResourceContext::new("User", "alice", "tenant-a");
+        assert!(!authorize(&principal, &user, &policies, &Action::read(), false).allowed());
     }
 
     #[test]
