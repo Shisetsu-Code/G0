@@ -49,31 +49,30 @@ fn fold_constants(
         for node_index in 0..graph.nodes.len() {
             let node = &snapshot.nodes[node_index];
 
-            if node.operation == Operation::ConvertChecked {
-                if let Some(value) =
+            if node.operation == Operation::ConvertChecked
+                && let Some(value) =
                     constant_single_integer_input(&snapshot, node.id)
-                    && let Some(crate::gir::SemanticType::Integer(range)) =
-                        node.outputs.first().map(|port| &port.ty)
-                    && value >= range.min
-                    && value <= range.max
-                {
-                    let target = &mut graph.nodes[node_index];
-                    target.operation =
-                        Operation::Const(Literal::Integer(value));
-                    target.inputs.clear();
-                    graph.edges.retain(|edge| {
-                        !matches!(
-                            edge.to,
-                            TargetEndpoint::NodeInput {
-                                node: id,
-                                ..
-                            } if id == node.id
-                        )
-                    });
-                    report.folded_nodes.insert(node.id);
-                    changed = true;
-                    continue;
-                }
+                && let Some(crate::gir::SemanticType::Integer(range)) =
+                    node.outputs.first().map(|port| &port.ty)
+                && value >= range.min
+                && value <= range.max
+            {
+                let target = &mut graph.nodes[node_index];
+                target.operation =
+                    Operation::Const(Literal::Integer(value));
+                target.inputs.clear();
+                graph.edges.retain(|edge| {
+                    !matches!(
+                        edge.to,
+                        TargetEndpoint::NodeInput {
+                            node: id,
+                            ..
+                        } if id == node.id
+                    )
+                });
+                report.folded_nodes.insert(node.id);
+                changed = true;
+                continue;
             }
 
             let arithmetic = matches!(
