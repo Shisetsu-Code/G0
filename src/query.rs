@@ -179,7 +179,7 @@ mod tests {
             FieldSchema {
                 name: "author".into(),
                 ty: SemanticType::Text,
-                protection: FieldProtection::Private,
+                protection: FieldProtection::Public,
                 mutable: false,
             },
         ];
