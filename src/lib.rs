@@ -11,6 +11,7 @@ pub mod graph;
 pub mod information_flow;
 pub mod io;
 pub mod math;
+pub mod machine;
 pub mod memory;
 pub mod mir;
 pub mod network;
