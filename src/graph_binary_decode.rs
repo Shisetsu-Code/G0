@@ -241,6 +241,7 @@ fn read_operation(reader: &mut Reader<'_>) -> Result<Operation, BinaryDecodeIssu
         23 => Operation::Or,
         24 => Operation::Xor,
         25 => Operation::Not,
+        28 => Operation::ConvertChecked,
         4 => Operation::Select {
             when_true: reader.string()?,
             when_false: reader.string()?,
