@@ -398,6 +398,7 @@ impl StoreOperation {
 pub enum StoreAccessIssue {
     AuthorizationDenied(DenyReason),
     UnknownField(String),
+    DuplicateFieldInput(String),
     ImmutableField(String),
     CredentialReadForbidden(String),
     CredentialMutationRequiresVerifier(String),
@@ -450,6 +451,85 @@ fn authorize_field_action(
                 }
             }
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CreateAssignmentSource {
+    Client,
+    CurrentPrincipal,
+    CurrentScope,
+    Generated,
+    StoreClock,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreateAssignment {
+    pub field: String,
+    pub source: CreateAssignmentSource,
+}
+
+pub fn build_create_assignment_plan(
+    schema: &ResourceSchema,
+    client_fields: &[String],
+) -> Result<Vec<CreateAssignment>, Vec<StoreAccessIssue>> {
+    let mut issues = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut assignments = Vec::new();
+
+    for field in client_fields {
+        if !seen.insert(field.as_str()) {
+            issues.push(StoreAccessIssue::DuplicateFieldInput(
+                field.clone(),
+            ));
+            continue;
+        }
+
+        if schema.field(field).is_none() {
+            issues.push(StoreAccessIssue::UnknownField(field.clone()));
+            continue;
+        }
+
+        if schema.managed_field(field).is_some() {
+            issues.push(StoreAccessIssue::ManagedFieldCannotBeSupplied(
+                field.clone(),
+            ));
+            continue;
+        }
+
+        assignments.push(CreateAssignment {
+            field: field.clone(),
+            source: CreateAssignmentSource::Client,
+        });
+    }
+
+    for binding in &schema.managed_fields {
+        let source = match binding.source {
+            ManagedFieldSource::CurrentPrincipal => {
+                CreateAssignmentSource::CurrentPrincipal
+            }
+            ManagedFieldSource::CurrentScope => {
+                CreateAssignmentSource::CurrentScope
+            }
+            ManagedFieldSource::Generated => {
+                CreateAssignmentSource::Generated
+            }
+            ManagedFieldSource::StoreClock => {
+                CreateAssignmentSource::StoreClock
+            }
+        };
+        assignments.push(CreateAssignment {
+            field: binding.field.clone(),
+            source,
+        });
+    }
+
+    assignments.sort_by(|a, b| a.field.cmp(&b.field));
+
+    if issues.is_empty() {
+        Ok(assignments)
+    } else {
+        Err(issues)
     }
 }
 
