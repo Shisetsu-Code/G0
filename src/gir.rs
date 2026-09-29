@@ -32,6 +32,56 @@ pub enum SemanticType {
     Versioned(Box<SemanticType>),
 }
 
+pub fn type_assignable(
+    source: &SemanticType,
+    target: &SemanticType,
+) -> bool {
+    if source == target {
+        return true;
+    }
+
+    match (source, target) {
+        (SemanticType::Integer(source), SemanticType::Integer(target)) => {
+            target.contains(source)
+        }
+        (
+            SemanticType::Array(source, source_len),
+            SemanticType::Array(target, target_len),
+        ) => {
+            source_len == target_len
+                && type_assignable(source, target)
+        }
+        (SemanticType::Slice(source), SemanticType::Slice(target))
+        | (SemanticType::Option(source), SemanticType::Option(target))
+        | (SemanticType::Unique(source), SemanticType::Unique(target))
+        | (SemanticType::Borrow(source), SemanticType::Borrow(target))
+        | (SemanticType::Shared(source), SemanticType::Shared(target))
+        | (SemanticType::State(source), SemanticType::State(target))
+        | (SemanticType::Atomic(source), SemanticType::Atomic(target))
+        | (SemanticType::Versioned(source), SemanticType::Versioned(target))
+        | (SemanticType::Secret(source), SemanticType::Secret(target))
+        | (
+            SemanticType::Credential(source),
+            SemanticType::Credential(target),
+        ) => type_assignable(source, target),
+        (
+            SemanticType::Vector(source, source_len),
+            SemanticType::Vector(target, target_len),
+        ) => {
+            source_len == target_len
+                && type_assignable(source, target)
+        }
+        (
+            SemanticType::Result(source_ok, source_err),
+            SemanticType::Result(target_ok, target_err),
+        ) => {
+            type_assignable(source_ok, target_ok)
+                && type_assignable(source_err, target_err)
+        }
+        _ => false,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct IntegerType {
     pub min: i128,
@@ -286,6 +336,19 @@ mod tests {
     #[test]
     fn integer_ranges_reject_invalid_bounds() {
         assert!(IntegerType::new(10, 9).is_err());
+    }
+
+    #[test]
+    fn narrower_integer_range_is_assignable_to_wider_contract() {
+        let narrow = SemanticType::Integer(
+            IntegerType::new(20, 20).unwrap(),
+        );
+        let wide = SemanticType::Integer(
+            IntegerType::new(0, 100).unwrap(),
+        );
+
+        assert!(type_assignable(&narrow, &wide));
+        assert!(!type_assignable(&wide, &narrow));
     }
 
     #[test]
