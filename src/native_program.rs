@@ -239,6 +239,110 @@ mod tests {
         graph
     }
 
+    fn constant_branch(
+        name: &str,
+        value: i128,
+    ) -> Graph {
+        let mut graph = Graph::new(name);
+        graph.outputs = vec![Port {
+            id: 0,
+            name: "value".into(),
+            ty: int(1, 2),
+        }];
+        graph.nodes.push(Node {
+            id: 1,
+            operation: Operation::Const(Literal::Integer(value)),
+            inputs: vec![],
+            outputs: vec![Port {
+                id: 0,
+                name: "value".into(),
+                ty: int(value, value),
+            }],
+            effects: BTreeSet::new(),
+            required_capabilities: BTreeSet::new(),
+        });
+        graph.edges.push(Edge {
+            from: SourceEndpoint::NodeOutput { node: 1, port: 0 },
+            to: TargetEndpoint::GraphOutput(0),
+        });
+        graph
+    }
+
+    #[test]
+    fn native_program_emits_structured_select_branches() {
+        let mut main = Graph::new("select_main");
+        main.outputs = vec![Port {
+            id: 0,
+            name: "value".into(),
+            ty: int(1, 2),
+        }];
+        main.nodes = vec![
+            Node {
+                id: 1,
+                operation: Operation::Const(Literal::Bool(true)),
+                inputs: vec![],
+                outputs: vec![Port {
+                    id: 0,
+                    name: "condition".into(),
+                    ty: SemanticType::Bool,
+                }],
+                effects: BTreeSet::new(),
+                required_capabilities: BTreeSet::new(),
+            },
+            Node {
+                id: 2,
+                operation: Operation::Select {
+                    when_true: "branch_yes".into(),
+                    when_false: "branch_no".into(),
+                },
+                inputs: vec![Port {
+                    id: 0,
+                    name: "condition".into(),
+                    ty: SemanticType::Bool,
+                }],
+                outputs: vec![Port {
+                    id: 0,
+                    name: "value".into(),
+                    ty: int(1, 2),
+                }],
+                effects: BTreeSet::new(),
+                required_capabilities: BTreeSet::new(),
+            },
+        ];
+        main.edges = vec![
+            Edge {
+                from: SourceEndpoint::NodeOutput { node: 1, port: 0 },
+                to: TargetEndpoint::NodeInput { node: 2, port: 0 },
+            },
+            Edge {
+                from: SourceEndpoint::NodeOutput { node: 2, port: 0 },
+                to: TargetEndpoint::GraphOutput(0),
+            },
+        ];
+
+        let mut program = ProgramContract::default();
+        program.entry_graph = Some("select_main".into());
+        program.graphs = vec![
+            main,
+            constant_branch("branch_yes", 1),
+            constant_branch("branch_no", 2),
+        ];
+
+        let platform = PlatformContract::bootstrap_x86_64_v3();
+        let compiled = compile_program(
+            &program,
+            &platform,
+            MachineProfile::x86_64_v3(),
+        )
+        .unwrap();
+
+        assert!(compiled.assembly.contains("select_0_false"));
+        assert!(compiled.assembly.contains(&graph_symbol("branch_yes")));
+        assert!(compiled.assembly.contains(&graph_symbol("branch_no")));
+        assert!(compiled.graphs.contains_key("branch_yes"));
+        assert!(compiled.graphs.contains_key("branch_no"));
+    }
+
     #[test]
     fn only_reachable_graphs_are_emitted() {
         let program = ProgramContract {
