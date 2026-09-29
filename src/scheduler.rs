@@ -184,7 +184,7 @@ pub fn downstream_costs(
 
     let mut cost = BTreeMap::new();
     for id in order.into_iter().rev() {
-        let child_max = children
+        let child_max: u128 = children
             .get(&id)
             .into_iter()
             .flatten()
