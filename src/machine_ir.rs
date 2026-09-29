@@ -61,11 +61,17 @@ pub struct MachineInstruction {
     pub op: MachineOp,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MachineOutput {
+    pub location: PhysicalLocation,
+    pub ty: MachineValueType,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MachineProgram {
     pub operations: Vec<MachineInstruction>,
     pub stack_bytes: u32,
-    pub outputs: Vec<PhysicalLocation>,
+    pub outputs: Vec<MachineOutput>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -274,7 +280,15 @@ pub fn lower_mir(
             let Some(output) = location(allocation, *value) else {
                 return Err(vec![MachineLoweringIssue::MissingLocation(*value)]);
             };
-            outputs.push(output);
+            let Some(ty) = machine_value_type(mir, *value) else {
+                return Err(vec![
+                    MachineLoweringIssue::UnsupportedArithmeticType(*value),
+                ]);
+            };
+            outputs.push(MachineOutput {
+                location: output,
+                ty,
+            });
         }
 
         Ok(MachineProgram {
