@@ -33,7 +33,7 @@ pub struct MachineProfile {
 impl MachineProfile {
     pub fn x86_64_v3() -> Self {
         Self {
-            gpr_count: 9,
+            gpr_count: 8,
             stack_alignment: 16,
             cache_line_bytes: 64,
             vector_bits: 256,
@@ -103,8 +103,8 @@ pub fn linear_scan_allocate(
     }
 
     let intervals = compute_live_intervals(program)?;
+    // RAX is intentionally reserved as backend scratch/return register.
     let register_pool = [
-        Gpr::Rax,
         Gpr::Rcx,
         Gpr::Rdx,
         Gpr::Rsi,
