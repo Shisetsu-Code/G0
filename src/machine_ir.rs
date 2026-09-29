@@ -1,5 +1,6 @@
 use crate::machine::{AllocationResult, PhysicalLocation};
 use crate::memory::IntegerWidth;
+use crate::gir::NodeId;
 use crate::mir::{ArithmeticMode, MirOp, MirProgram, MirType, ValueId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,9 +38,15 @@ pub enum MachineOp {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MachineInstruction {
+    pub source_node: NodeId,
+    pub op: MachineOp,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MachineProgram {
-    pub operations: Vec<MachineOp>,
+    pub operations: Vec<MachineInstruction>,
     pub stack_bytes: u32,
 }
 
