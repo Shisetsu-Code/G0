@@ -4,6 +4,7 @@ use crate::authority::{
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StorageGuard {
+    Public,
     Capability(CapabilityGrant),
     OwnerIsPrincipal,
     RelationContainsPrincipal(String),
@@ -52,6 +53,7 @@ fn lower_expr(
     issues: &mut Vec<PolicyCompileIssue>,
 ) -> StorageGuard {
     match expr {
+        PolicyExpr::Public => StorageGuard::Public,
         PolicyExpr::Requires(capability) => {
             StorageGuard::Capability(capability.clone())
         }
