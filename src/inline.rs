@@ -26,7 +26,10 @@ pub enum InlineIssue {
         caller: String,
         callee: String,
     },
-    CallCarriesEffects(NodeId),
+    EffectSummaryMismatch {
+        call_node: NodeId,
+        callee: String,
+    },
     InterfaceMismatch {
         caller: String,
         call_node: NodeId,
@@ -83,7 +86,11 @@ pub fn inline_entry(
             .nodes
             .iter()
             .filter_map(|node| match &node.operation {
-                Operation::Subgraph(callee) => Some((node.id, callee.clone())),
+                Operation::Subgraph(callee)
+                    if !external_subgraphs.contains(callee) =>
+                {
+                    Some((node.id, callee.clone()))
+                }
                 _ => None,
             })
             .min_by_key(|(id, _)| *id);
@@ -91,13 +98,6 @@ pub fn inline_entry(
         let Some((call_id, callee_name)) = call else {
             break;
         };
-
-        if external_subgraphs.contains(&callee_name) {
-            return Err(vec![InlineIssue::ExternalCallNotInlineable {
-                caller: result.graph.name.clone(),
-                callee: callee_name,
-            }]);
-        }
 
         let Some(callee) = by_name.get(callee_name.as_str()).copied() else {
             return Err(vec![InlineIssue::ExternalCallNotInlineable {
@@ -131,10 +131,24 @@ fn inline_one(
         return Err(vec![InlineIssue::InvalidResult]);
     };
 
-    if !call_node.effects.is_empty()
-        || !call_node.required_capabilities.is_empty()
+    let callee_effects: BTreeSet<_> = callee
+        .nodes
+        .iter()
+        .flat_map(|node| node.effects.iter().copied())
+        .collect();
+    let callee_capabilities: BTreeSet<_> = callee
+        .nodes
+        .iter()
+        .flat_map(|node| node.required_capabilities.iter().cloned())
+        .collect();
+
+    if call_node.effects != callee_effects
+        || call_node.required_capabilities != callee_capabilities
     {
-        return Err(vec![InlineIssue::CallCarriesEffects(call_id)]);
+        return Err(vec![InlineIssue::EffectSummaryMismatch {
+            call_node: call_id,
+            callee: callee.name.clone(),
+        }]);
     }
 
     if !interfaces_match(&call_node.inputs, &callee.inputs)
@@ -459,7 +473,7 @@ mod tests {
                     outputs: vec![Port {
                         id: 0,
                         name: "y".into(),
-                        ty: int(),
+                        ty: int_plus_one(),
                     }],
                     effects: BTreeSet::new(),
                     required_capabilities: BTreeSet::new(),
