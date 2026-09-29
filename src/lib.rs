@@ -20,6 +20,7 @@ pub mod math;
 pub mod machine;
 pub mod memory;
 pub mod mir;
+pub mod mir_validate;
 pub mod network;
 pub mod optimize;
 pub mod ownership;
