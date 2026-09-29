@@ -46,6 +46,10 @@ pub enum MirOp {
     Call {
         target: String,
     },
+    SelectCall {
+        when_true: String,
+        when_false: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -161,6 +165,13 @@ pub fn lower_graph(graph: &Graph) -> Result<MirProgram, Vec<LoweringIssue>> {
             }),
             Operation::Subgraph(target) => Some(MirOp::Call {
                 target: target.clone(),
+            }),
+            Operation::Select {
+                when_true,
+                when_false,
+            } => Some(MirOp::SelectCall {
+                when_true: when_true.clone(),
+                when_false: when_false.clone(),
             }),
             operation => {
                 issues.push(LoweringIssue::UnsupportedOperation {
