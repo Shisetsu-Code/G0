@@ -14,6 +14,9 @@ use crate::math::{
     validate_math_requirement, MathContractIssue, MathOperation, MathProfile,
     MathRequirement,
 };
+use crate::memory::{
+    validate_memory_plan, MemoryIssue, MemoryPlan,
+};
 use crate::network::{
     validate_network_profile, ConnectionRequirement, NetworkProfile,
     NetworkProfileIssue,
@@ -54,6 +57,7 @@ pub struct ProgramContract {
     pub crypto: Vec<CryptoRequirement>,
     pub math: Vec<MathUse>,
     pub ownership: Vec<GraphOwnership>,
+    pub memory: Vec<MemoryPlan>,
     pub password_tuning: Option<PasswordTuning>,
     pub text_boundaries: Vec<TextBoundaryRequirement>,
     pub io_pipelines: Vec<(IoPipeline, IoValueKind)>,
@@ -96,6 +100,10 @@ pub enum ProgramIssue {
         issues: Vec<OwnershipIssue>,
     },
     OwnershipUnknownGraph(String),
+    Memory {
+        plan: usize,
+        issues: Vec<MemoryIssue>,
+    },
     Text(Vec<TextContractIssue>),
     TextBoundary {
         boundary: usize,
@@ -186,6 +194,15 @@ pub fn validate_program(
             None => issues.push(ProgramIssue::OwnershipUnknownGraph(
                 ownership.graph.clone(),
             )),
+        }
+    }
+
+    for (index, memory) in program.memory.iter().enumerate() {
+        if let Err(memory_issues) = validate_memory_plan(memory) {
+            issues.push(ProgramIssue::Memory {
+                plan: index,
+                issues: memory_issues,
+            });
         }
     }
 
@@ -447,6 +464,40 @@ mod tests {
             issues
                 .iter()
                 .any(|issue| matches!(issue, ProgramIssue::Io { .. }))
+        );
+    }
+
+    #[test]
+    fn invalid_zero_copy_memory_plan_blocks_program() {
+        use crate::memory::{
+            AllocationIntent, LayoutKind, LifetimeClass, MemoryDomain,
+        };
+
+        let program = ProgramContract {
+            memory: vec![MemoryPlan {
+                allocations: vec![AllocationIntent {
+                    id: "buffer".into(),
+                    size_bytes: ParameterPolicy::Fixed(4096),
+                    alignment_bytes: ParameterPolicy::Fixed(64),
+                    lifetime: LifetimeClass::Graph,
+                    interval: None,
+                    allowed_domains: [MemoryDomain::Stack]
+                        .into_iter()
+                        .collect(),
+                    layout: vec![LayoutKind::Native],
+                    zero_copy: true,
+                    movable: true,
+                    pinned: false,
+                }],
+            }],
+            ..ProgramContract::default()
+        };
+
+        let issues = validate_program(&program, &platform()).unwrap_err();
+        assert!(
+            issues
+                .iter()
+                .any(|issue| matches!(issue, ProgramIssue::Memory { .. }))
         );
     }
 
