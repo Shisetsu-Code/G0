@@ -151,6 +151,11 @@ pub fn linear_scan_allocate(
 
     let mut active: Vec<(ValueId, LiveInterval, Gpr)> = Vec::new();
     let mut free: BTreeSet<Gpr> = available_registers.iter().copied().collect();
+    for (value, register) in &precolored {
+        if intervals.contains_key(value) {
+            free.remove(register);
+        }
+    }
     let mut result = AllocationResult {
         intervals: intervals.clone(),
         ..AllocationResult::default()
