@@ -102,6 +102,7 @@ impl Role {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PolicyExpr {
+    Public,
     Requires(CapabilityGrant),
     PrincipalOwnsResource,
     PrincipalInRelation { relation: String },
@@ -220,6 +221,7 @@ pub fn authorize(
 
 fn evaluate_policy(expr: &PolicyExpr, principal: &Principal, resource: &ResourceContext) -> bool {
     match expr {
+        PolicyExpr::Public => true,
         PolicyExpr::Requires(required) => principal
             .grants
             .iter()
