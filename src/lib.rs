@@ -18,6 +18,7 @@ pub mod program;
 pub mod profiling;
 pub mod security;
 pub mod storage;
+pub mod symbol;
 pub mod text;
 pub mod tuning;
 pub mod validate;
