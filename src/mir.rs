@@ -66,6 +66,7 @@ pub struct MirInstruction {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MirProgram {
     pub values: BTreeMap<ValueId, MirValue>,
+    pub inputs: Vec<ValueId>,
     pub instructions: Vec<MirInstruction>,
     pub outputs: Vec<ValueId>,
 }
@@ -115,6 +116,7 @@ pub fn lower_graph(graph: &Graph) -> Result<MirProgram, Vec<LoweringIssue>> {
             },
         );
         graph_inputs.insert(input.id, value);
+        program.inputs.push(value);
     }
 
     let mut issues = Vec::new();
