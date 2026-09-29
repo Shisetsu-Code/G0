@@ -55,6 +55,14 @@ pub enum MirOp {
     Mul {
         mode: ArithmeticMode,
     },
+    Div {
+        mode: ArithmeticMode,
+        signed: bool,
+    },
+    Rem {
+        mode: ArithmeticMode,
+        signed: bool,
+    },
     Compare {
         kind: CompareKind,
         width: IntegerWidth,
@@ -193,6 +201,25 @@ pub fn lower_graph(graph: &Graph) -> Result<MirProgram, Vec<LoweringIssue>> {
             Operation::Mul => Some(MirOp::Mul {
                 mode: ArithmeticMode::Checked,
             }),
+            Operation::Div | Operation::Rem => {
+                let signed = node.inputs.iter().any(|port| {
+                    matches!(
+                        &port.ty,
+                        SemanticType::Integer(range) if range.min < 0
+                    )
+                });
+                Some(match node.operation {
+                    Operation::Div => MirOp::Div {
+                        mode: ArithmeticMode::Checked,
+                        signed,
+                    },
+                    Operation::Rem => MirOp::Rem {
+                        mode: ArithmeticMode::Checked,
+                        signed,
+                    },
+                    _ => unreachable!(),
+                })
+            }
             Operation::Eq
             | Operation::Lt
             | Operation::Le
