@@ -1,3 +1,8 @@
+use crate::auth::{
+    validate_authentication_profile, validate_one_time_code,
+    AuthenticationProfile, AuthenticationProfileIssue, OneTimeCodeContract,
+    OneTimeCodeIssue,
+};
 use crate::concurrency::{
     validate_concurrent_region, ConcurrencyIssue, ConcurrentRegion,
 };
@@ -106,6 +111,8 @@ pub struct ProgramContract {
     pub storage_crypto_bindings: Vec<ProtectedFieldBinding>,
     pub transactions: Vec<TransactionContract>,
     pub migrations: Vec<MigrationPlan>,
+    pub authentication: Vec<AuthenticationProfile>,
+    pub one_time_codes: Vec<OneTimeCodeContract>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -202,6 +209,14 @@ pub enum ProgramIssue {
     Migration {
         migration: usize,
         issues: Vec<MigrationIssue>,
+    },
+    Authentication {
+        profile: usize,
+        issues: Vec<AuthenticationProfileIssue>,
+    },
+    OneTimeCode {
+        profile: usize,
+        issues: Vec<OneTimeCodeIssue>,
     },
     Security(Vec<SecurityContractIssue>),
 }
@@ -452,6 +467,24 @@ pub fn validate_program(
             issues.push(ProgramIssue::Migration {
                 migration: index,
                 issues: migration_issues,
+            });
+        }
+    }
+
+    for (index, profile) in program.authentication.iter().enumerate() {
+        if let Err(auth_issues) = validate_authentication_profile(profile) {
+            issues.push(ProgramIssue::Authentication {
+                profile: index,
+                issues: auth_issues,
+            });
+        }
+    }
+
+    for (index, otp) in program.one_time_codes.iter().enumerate() {
+        if let Err(otp_issues) = validate_one_time_code(*otp) {
+            issues.push(ProgramIssue::OneTimeCode {
+                profile: index,
+                issues: otp_issues,
             });
         }
     }
