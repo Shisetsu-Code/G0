@@ -32,8 +32,8 @@ pub fn emit_x86_64(
     let mut trap_index = 0_u32;
     let mut trap_labels = Vec::new();
 
-    for op in &program.operations {
-        match op {
+    for instruction in &program.operations {
+        match &instruction.op {
             MachineOp::Move { dst, src } => {
                 if let Err(issue) = emit_move(&mut out, *dst, *src) {
                     issues.push(issue);
@@ -430,28 +430,38 @@ fn valid_symbol(value: &str) -> bool {
 mod tests {
     use super::*;
     use crate::machine::Gpr;
+    use crate::machine_ir::MachineInstruction;
 
     #[test]
     fn emits_basic_checked_machine_program() {
         let program = MachineProgram {
             operations: vec![
-                MachineOp::Move {
-                    dst: PhysicalLocation::Register(Gpr::Rcx),
-                    src: MachineOperand::Immediate(20),
+                MachineInstruction {
+                    source_node: 1,
+                    op: MachineOp::Move {
+                        dst: PhysicalLocation::Register(Gpr::Rcx),
+                        src: MachineOperand::Immediate(20),
+                    },
                 },
-                MachineOp::Move {
-                    dst: PhysicalLocation::Register(Gpr::Rdx),
-                    src: MachineOperand::Immediate(22),
+                MachineInstruction {
+                    source_node: 2,
+                    op: MachineOp::Move {
+                        dst: PhysicalLocation::Register(Gpr::Rdx),
+                        src: MachineOperand::Immediate(22),
+                    },
                 },
-                MachineOp::AddChecked {
-                    dst: PhysicalLocation::Register(Gpr::R8),
-                    left: MachineOperand::Location(
-                        PhysicalLocation::Register(Gpr::Rcx),
-                    ),
-                    right: MachineOperand::Location(
-                        PhysicalLocation::Register(Gpr::Rdx),
-                    ),
-                    width: IntegerWidth::U8,
+                MachineInstruction {
+                    source_node: 3,
+                    op: MachineOp::AddChecked {
+                        dst: PhysicalLocation::Register(Gpr::R8),
+                        left: MachineOperand::Location(
+                            PhysicalLocation::Register(Gpr::Rcx),
+                        ),
+                        right: MachineOperand::Location(
+                            PhysicalLocation::Register(Gpr::Rdx),
+                        ),
+                        width: IntegerWidth::U8,
+                    },
                 },
             ],
             stack_bytes: 0,
@@ -466,8 +476,11 @@ mod tests {
     #[test]
     fn unsafe_call_symbol_is_rejected() {
         let program = MachineProgram {
-            operations: vec![MachineOp::Call {
-                target: "foo; rm".into(),
+            operations: vec![MachineInstruction {
+                source_node: 1,
+                op: MachineOp::Call {
+                    target: "foo; rm".into(),
+                },
             }],
             stack_bytes: 0,
         };
@@ -481,12 +494,15 @@ mod tests {
     #[test]
     fn unsupported_wide_stack_slot_is_rejected() {
         let program = MachineProgram {
-            operations: vec![MachineOp::Move {
-                dst: PhysicalLocation::Stack {
-                    offset: 0,
-                    bytes: 16,
+            operations: vec![MachineInstruction {
+                source_node: 1,
+                op: MachineOp::Move {
+                    dst: PhysicalLocation::Stack {
+                        offset: 0,
+                        bytes: 16,
+                    },
+                    src: MachineOperand::Immediate(1),
                 },
-                src: MachineOperand::Immediate(1),
             }],
             stack_bytes: 16,
         };
