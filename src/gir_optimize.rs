@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, VecDeque};
 
 use crate::gir::{
-    Graph, Literal, NodeId, Op as _, Operation, SourceEndpoint, TargetEndpoint,
+    Graph, Literal, NodeId, Operation, SourceEndpoint, TargetEndpoint,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
