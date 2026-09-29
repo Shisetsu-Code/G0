@@ -441,13 +441,15 @@ mod tests {
             },
         ];
 
-        let mut program = ProgramContract::default();
-        program.entry_graph = Some("select_main".into());
-        program.graphs = vec![
-            main,
-            constant_branch("branch_yes", 1),
-            constant_branch("branch_no", 2),
-        ];
+        let program = ProgramContract {
+            entry_graph: Some("select_main".into()),
+            graphs: vec![
+                main,
+                constant_branch("branch_yes", 1),
+                constant_branch("branch_no", 2),
+            ],
+            ..ProgramContract::default()
+        };
 
         let platform = PlatformContract::bootstrap_x86_64_v3();
         let compiled = compile_program(
