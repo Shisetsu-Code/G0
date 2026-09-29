@@ -49,6 +49,7 @@ pub mod program;
 pub mod profiling;
 pub mod query;
 pub mod runtime;
+pub mod roles;
 pub mod scheduler;
 pub mod secure_index;
 pub mod security;
