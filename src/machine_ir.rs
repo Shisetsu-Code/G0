@@ -81,6 +81,7 @@ pub enum MachineLoweringIssue {
     UnsupportedArithmeticType(ValueId),
     NonCheckedArithmetic,
     WrongShape,
+    CallAbiNotImplemented(String),
 }
 
 pub fn lower_mir(
@@ -259,12 +260,9 @@ pub fn lower_mir(
                 });
             }
             MirOp::Call { target } => {
-                operations.push(MachineInstruction {
-                    source_node: instruction.source_node,
-                    op: MachineOp::Call {
-                        target: target.clone(),
-                    },
-                });
+                issues.push(MachineLoweringIssue::CallAbiNotImplemented(
+                    target.clone(),
+                ));
             }
             MirOp::Load | MirOp::Store => {
                 issues.push(MachineLoweringIssue::UnsupportedMirOperation(
