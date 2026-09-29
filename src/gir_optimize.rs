@@ -50,7 +50,11 @@ fn fold_constants(
             let node = &snapshot.nodes[node_index];
             let arithmetic = matches!(
                 node.operation,
-                Operation::Add | Operation::Sub | Operation::Mul
+                Operation::Add
+                    | Operation::Sub
+                    | Operation::Mul
+                    | Operation::Div
+                    | Operation::Rem
             );
             if !arithmetic {
                 continue;
@@ -65,11 +69,20 @@ fn fold_constants(
                 Operation::Add => left.checked_add(right),
                 Operation::Sub => left.checked_sub(right),
                 Operation::Mul => left.checked_mul(right),
+                Operation::Div => left.checked_div(right),
+                Operation::Rem => left.checked_rem(right),
                 _ => unreachable!(),
-            }
-            .ok_or_else(|| {
-                vec![GirOptimizationIssue::ArithmeticOverflow(node.id)]
-            })?;
+            };
+
+            let Some(value) = value else {
+                if matches!(node.operation, Operation::Div | Operation::Rem) {
+                    // Preserve checked runtime trap semantics (e.g. divisor zero).
+                    continue;
+                }
+                return Err(vec![
+                    GirOptimizationIssue::ArithmeticOverflow(node.id),
+                ]);
+            };
 
             let Some(output) = node.outputs.first() else {
                 continue;
