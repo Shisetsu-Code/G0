@@ -51,6 +51,7 @@ pub mod time;
 pub mod tuning;
 pub mod transaction;
 pub mod validate;
+pub mod vectorize;
 pub mod x86_codegen;
 
 use graph::Graph;
