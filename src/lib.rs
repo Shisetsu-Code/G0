@@ -1,6 +1,7 @@
 pub mod authority;
 pub mod backend;
 pub mod concurrency;
+pub mod effects;
 pub mod gir;
 pub mod gir_validate;
 pub mod graph;
