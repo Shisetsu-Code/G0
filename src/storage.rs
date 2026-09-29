@@ -500,6 +500,12 @@ pub fn authorize_store_operation(
             for name in fields {
                 if schema.field(name).is_none() {
                     issues.push(StoreAccessIssue::UnknownField(name.clone()));
+                } else if schema.managed_field(name).is_some() {
+                    issues.push(
+                        StoreAccessIssue::ManagedFieldCannotBeSupplied(
+                            name.clone(),
+                        ),
+                    );
                 } else if let Some(issue) = authorize_field_action(
                     schema,
                     principal,
@@ -513,6 +519,15 @@ pub fn authorize_store_operation(
         }
         StoreOperation::Update { fields } => {
             for name in fields {
+                if schema.managed_field(name).is_some() {
+                    issues.push(
+                        StoreAccessIssue::ManagedFieldCannotBeSupplied(
+                            name.clone(),
+                        ),
+                    );
+                    continue;
+                }
+
                 match schema.field(name) {
                     None => issues.push(StoreAccessIssue::UnknownField(name.clone())),
                     Some(field) if field.protection == FieldProtection::Credential => {
