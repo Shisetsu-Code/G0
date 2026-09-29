@@ -236,14 +236,30 @@ pub enum Literal {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MatchArm {
+    pub tag: String,
+    pub graph: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Operation {
     Const(Literal),
     Add,
     Sub,
     Mul,
-    Select,
-    Match,
-    Loop,
+    Select {
+        when_true: String,
+        when_false: String,
+    },
+    Match {
+        arms: Vec<MatchArm>,
+        default: String,
+    },
+    Loop {
+        condition: String,
+        body: String,
+        max_iterations: u64,
+    },
     Subgraph(String),
     Import(String),
     Instantiate(String),
