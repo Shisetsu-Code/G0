@@ -202,6 +202,107 @@ mod tests {
         }
     }
 
+    fn spill_graph() -> Graph {
+        let inputs: Vec<Port> = (0..6)
+            .map(|id| Port {
+                id,
+                name: format!("x{id}"),
+                ty: int(0, 10),
+            })
+            .collect();
+
+        let mut nodes = Vec::new();
+        for step in 0..5_u32 {
+            let max = 20 + step as i128 * 10;
+            nodes.push(Node {
+                id: 10 + step,
+                operation: Operation::Add,
+                inputs: vec![
+                    Port {
+                        id: 0,
+                        name: "left".into(),
+                        ty: if step == 0 {
+                            int(0, 10)
+                        } else {
+                            int(0, max - 10)
+                        },
+                    },
+                    Port {
+                        id: 1,
+                        name: "right".into(),
+                        ty: int(0, 10),
+                    },
+                ],
+                outputs: vec![Port {
+                    id: 0,
+                    name: "sum".into(),
+                    ty: int(0, max),
+                }],
+                effects: BTreeSet::new(),
+                required_capabilities: BTreeSet::new(),
+            });
+        }
+
+        let mut edges = vec![
+            Edge {
+                from: SourceEndpoint::GraphInput(0),
+                to: TargetEndpoint::NodeInput { node: 10, port: 0 },
+            },
+            Edge {
+                from: SourceEndpoint::GraphInput(1),
+                to: TargetEndpoint::NodeInput { node: 10, port: 1 },
+            },
+        ];
+
+        for step in 1..5_u32 {
+            edges.push(Edge {
+                from: SourceEndpoint::NodeOutput {
+                    node: 9 + step,
+                    port: 0,
+                },
+                to: TargetEndpoint::NodeInput {
+                    node: 10 + step,
+                    port: 0,
+                },
+            });
+            edges.push(Edge {
+                from: SourceEndpoint::GraphInput((step + 1) as u16),
+                to: TargetEndpoint::NodeInput {
+                    node: 10 + step,
+                    port: 1,
+                },
+            });
+        }
+        edges.push(Edge {
+            from: SourceEndpoint::NodeOutput { node: 14, port: 0 },
+            to: TargetEndpoint::GraphOutput(0),
+        });
+
+        Graph {
+            name: "spill".into(),
+            inputs,
+            outputs: vec![Port {
+                id: 0,
+                name: "sum".into(),
+                ty: int(0, 60),
+            }],
+            nodes,
+            edges,
+            authority: AuthorityMode::DefaultDeny,
+        }
+    }
+
+    #[test]
+    fn compiler_pipeline_supports_typed_integer_spills() {
+        let compiled =
+            compile_graph(&spill_graph(), MachineProfile::x86_64_v3())
+                .unwrap();
+
+        assert!(compiled.pressure.spills >= 1);
+        assert!(compiled.pressure.stack_bytes > 0);
+        assert!(compiled.assembly.contains("[rbp-"));
+    }
+
     #[test]
     fn compiler_pipeline_reaches_machine_allocation() {
         let compiled =
