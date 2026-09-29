@@ -263,6 +263,7 @@ mod tests {
     #[test]
     fn linear_scan_reuses_register_after_interval_ends() {
         let program = MirProgram {
+            inputs: vec![],
             values: BTreeMap::from([value(0), value(1), value(2), value(3)]),
             instructions: vec![
                 MirInstruction {
@@ -308,6 +309,7 @@ mod tests {
     #[test]
     fn register_pressure_reports_spills() {
         let program = MirProgram {
+            inputs: vec![],
             values: BTreeMap::from([value(0), value(1), value(2)]),
             instructions: vec![
                 MirInstruction {
