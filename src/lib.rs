@@ -31,6 +31,7 @@ pub mod migration;
 pub mod network;
 pub mod optimize;
 pub mod optimization_gate;
+pub mod optimizer_feedback;
 pub mod ownership;
 pub mod package;
 pub mod parser;
