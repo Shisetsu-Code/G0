@@ -78,6 +78,10 @@ pub enum MirOp {
         min: i128,
         max: i128,
     },
+    Truncate {
+        bits: u16,
+        signed: bool,
+    },
     Load,
     Store,
     Move,
@@ -282,6 +286,12 @@ pub fn lower_graph(graph: &Graph) -> Result<MirProgram, Vec<LoweringIssue>> {
                 Some(MirOp::ConvertChecked {
                     min: target.min,
                     max: target.max,
+                })
+            }
+            Operation::Truncate { bits, signed } => {
+                Some(MirOp::Truncate {
+                    bits: *bits,
+                    signed: *signed,
                 })
             }
             Operation::Subgraph(target) => Some(MirOp::Call {
