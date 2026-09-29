@@ -542,6 +542,66 @@ mod tests {
         assert!(structurally_equal(&graph, &decoded));
     }
 
+    fn valid_operation_graph(
+        name: &str,
+        operation: Operation,
+    ) -> Graph {
+        let comparison = matches!(
+            operation,
+            Operation::Eq
+                | Operation::Lt
+                | Operation::Le
+                | Operation::Gt
+                | Operation::Ge
+        );
+        let unary = matches!(operation, Operation::Not);
+
+        let input_ty = if comparison {
+            SemanticType::Integer(IntegerType::new(0, 10).unwrap())
+        } else {
+            SemanticType::Bool
+        };
+        let input_count = if unary { 1 } else { 2 };
+
+        let inputs: Vec<Port> = (0..input_count)
+            .map(|id| Port {
+                id,
+                name: format!("in{id}"),
+                ty: input_ty.clone(),
+            })
+            .collect();
+
+        let output = Port {
+            id: 0,
+            name: "out".into(),
+            ty: SemanticType::Bool,
+        };
+
+        let mut graph = Graph::new(name);
+        graph.inputs = inputs.clone();
+        graph.outputs = vec![output.clone()];
+        graph.nodes.push(Node {
+            id: 1,
+            operation,
+            inputs,
+            outputs: vec![output],
+            effects: BTreeSet::new(),
+            required_capabilities: BTreeSet::new(),
+        });
+
+        for port in 0..input_count {
+            graph.edges.push(Edge {
+                from: SourceEndpoint::GraphInput(port),
+                to: TargetEndpoint::NodeInput { node: 1, port },
+            });
+        }
+        graph.edges.push(Edge {
+            from: SourceEndpoint::NodeOutput { node: 1, port: 0 },
+            to: TargetEndpoint::GraphOutput(0),
+        });
+        graph
+    }
+
     #[test]
     fn comparison_and_boolean_operations_round_trip() {
         for (index, operation) in [
@@ -558,16 +618,8 @@ mod tests {
         .into_iter()
         .enumerate()
         {
-            let mut graph = Graph::new(format!("op-{index}"));
-            graph.nodes.push(Node {
-                id: 1,
-                operation,
-                inputs: vec![],
-                outputs: vec![],
-                effects: BTreeSet::new(),
-                required_capabilities: BTreeSet::new(),
-            });
-
+            let graph =
+                valid_operation_graph(&format!("op-{index}"), operation);
             let bytes = encode_graph(&graph).unwrap();
             let decoded = decode_graph(&bytes).unwrap();
             assert!(structurally_equal(&graph, &decoded));
