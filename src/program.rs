@@ -1,3 +1,4 @@
+use crate::authority::Action;
 use crate::auth::{
     validate_authentication_profile, validate_one_time_code,
     AuthenticationProfile, AuthenticationProfileIssue, OneTimeCodeContract,
@@ -40,6 +41,7 @@ use crate::network::{
 use crate::ownership::{
     validate_ownership, OwnershipIssue, OwnershipPlan,
 };
+use crate::policy_plan::{compile_policy, PolicyCompileIssue};
 use crate::query::{
     validate_query_with_protected_indexes, QueryIssue, QuerySpec,
 };
@@ -141,6 +143,11 @@ pub enum ProgramIssue {
         issues: Vec<SideChannelIssue>,
     },
     Store(Vec<StorageSchemaIssue>),
+    StorePolicy {
+        resource: String,
+        action: Action,
+        issues: Vec<PolicyCompileIssue>,
+    },
     Concurrency {
         region: usize,
         issues: Vec<ConcurrencyIssue>,
@@ -251,6 +258,20 @@ pub fn validate_program(
 
     if let Err(store_issues) = validate_store_schema(&program.store) {
         issues.push(ProgramIssue::Store(store_issues));
+    }
+
+    for resource in &program.store.resources {
+        for rule in &resource.policies.rules {
+            if let Err(policy_issues) =
+                compile_policy(&resource.policies, &rule.action)
+            {
+                issues.push(ProgramIssue::StorePolicy {
+                    resource: resource.name.clone(),
+                    action: rule.action.clone(),
+                    issues: policy_issues,
+                });
+            }
+        }
     }
 
     for (index, region) in program.concurrent_regions.iter().enumerate() {
