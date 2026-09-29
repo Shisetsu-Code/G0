@@ -1,7 +1,6 @@
 use crate::machine::{Gpr, PhysicalLocation};
 use crate::machine_ir::{
-    MachineOp, MachineOperand, MachineOutput, MachineProgram,
-    MachineValueType,
+    MachineOp, MachineOperand, MachineProgram, MachineValueType,
 };
 use crate::memory::IntegerWidth;
 
@@ -16,6 +15,7 @@ pub enum X86CodegenIssue {
     ImmediateOutOfRange(i128),
     InvalidCallTarget(String),
     UnsupportedReturnArity(usize),
+    OperandWidthMismatch,
 }
 
 pub fn emit_x86_64(
@@ -65,9 +65,11 @@ pub fn emit_x86_64(
                     *dst,
                     *left,
                     *right,
-                    *left_width,
-                    *right_width,
-                    *width,
+                    ArithmeticWidths {
+                        left: *left_width,
+                        right: *right_width,
+                        result: *width,
+                    },
                     &trap,
                 ) {
                     issues.push(issue);
@@ -91,9 +93,11 @@ pub fn emit_x86_64(
                     *dst,
                     *left,
                     *right,
-                    *left_width,
-                    *right_width,
-                    *width,
+                    ArithmeticWidths {
+                        left: *left_width,
+                        right: *right_width,
+                        result: *width,
+                    },
                     &trap,
                 ) {
                     issues.push(issue);
@@ -117,9 +121,11 @@ pub fn emit_x86_64(
                     *dst,
                     *left,
                     *right,
-                    *left_width,
-                    *right_width,
-                    *width,
+                    ArithmeticWidths {
+                        left: *left_width,
+                        right: *right_width,
+                        result: *width,
+                    },
                     &trap,
                 ) {
                     issues.push(issue);
@@ -197,17 +203,28 @@ fn emit_move(
     store_from_register(out, dst, "rax", ty)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ArithmeticWidths {
+    left: IntegerWidth,
+    right: IntegerWidth,
+    result: IntegerWidth,
+}
+
 fn emit_checked_binary(
     out: &mut String,
     mnemonic: &str,
     dst: PhysicalLocation,
     left: MachineOperand,
     right: MachineOperand,
-    _left_width: IntegerWidth,
-    _right_width: IntegerWidth,
-    width: IntegerWidth,
+    widths: ArithmeticWidths,
     trap: &str,
 ) -> Result<(), X86CodegenIssue> {
+    if operand_integer_width(left) != Some(widths.left)
+        || operand_integer_width(right) != Some(widths.right)
+    {
+        return Err(X86CodegenIssue::OperandWidthMismatch);
+    }
+    let width = widths.result;
     if matches!(width, IntegerWidth::U128 | IntegerWidth::I128) {
         return Err(X86CodegenIssue::Unsupported128BitInteger);
     }
@@ -243,6 +260,18 @@ fn emit_checked_binary(
         "rax",
         MachineValueType::Integer(width),
     )
+}
+
+fn operand_integer_width(
+    operand: MachineOperand,
+) -> Option<IntegerWidth> {
+    match operand {
+        MachineOperand::Location {
+            ty: MachineValueType::Integer(width),
+            ..
+        } => Some(width),
+        _ => None,
+    }
 }
 
 fn emit_overflow_guard(
@@ -536,7 +565,7 @@ fn valid_symbol(value: &str) -> bool {
 mod tests {
     use super::*;
     use crate::machine::Gpr;
-    use crate::machine_ir::MachineInstruction;
+    use crate::machine_ir::{MachineInstruction, MachineOutput};
 
     #[test]
     fn emits_basic_checked_machine_program() {
