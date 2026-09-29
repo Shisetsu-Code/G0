@@ -158,6 +158,24 @@ pub enum Operation {
     Subgraph(String),
     Import(String),
     Instantiate(String),
+    StoreRead {
+        resource: String,
+        fields: Vec<String>,
+    },
+    StoreCreate {
+        resource: String,
+        fields: Vec<String>,
+    },
+    StoreUpdate {
+        resource: String,
+        fields: Vec<String>,
+    },
+    StoreDelete {
+        resource: String,
+    },
+    StoreEnumerate {
+        resource: String,
+    },
     LocalExecute(String),
     RemoteExecute { target: String, artifact: String },
 }
