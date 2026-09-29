@@ -152,6 +152,34 @@ impl TextContract {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TextBoundaryRequirement {
+    pub name: String,
+    pub codec: TextCodec,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TextBoundaryIssue {
+    CodecNotEnabled {
+        boundary: String,
+        codec: TextCodec,
+    },
+}
+
+pub fn validate_text_boundary(
+    contract: &TextContract,
+    requirement: &TextBoundaryRequirement,
+) -> Result<(), TextBoundaryIssue> {
+    if contract.codec_enabled(&requirement.codec) {
+        Ok(())
+    } else {
+        Err(TextBoundaryIssue::CodecNotEnabled {
+            boundary: requirement.name.clone(),
+            codec: requirement.codec.clone(),
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TextContractIssue {
     SilentReplacementEnabled,
     RawByteIndexingEnabled,
@@ -228,6 +256,38 @@ mod tests {
         assert!(contract.codec_enabled(&TextCodec::Adapter(
             "legacy.vendor.codec".into()
         )));
+    }
+
+    #[test]
+    fn different_boundaries_can_choose_different_enabled_codecs() {
+        let mut contract = TextContract::strict("platform-selected");
+        contract.enable_core_codec(CoreTextCodec::Utf16Le);
+
+        let api = TextBoundaryRequirement {
+            name: "api".into(),
+            codec: TextCodec::Core(CoreTextCodec::Utf8),
+        };
+        let file = TextBoundaryRequirement {
+            name: "import-file".into(),
+            codec: TextCodec::Core(CoreTextCodec::Utf16Le),
+        };
+
+        assert!(validate_text_boundary(&contract, &api).is_ok());
+        assert!(validate_text_boundary(&contract, &file).is_ok());
+    }
+
+    #[test]
+    fn disabled_codec_is_rejected_instead_of_silent_fallback() {
+        let contract = TextContract::strict("platform-selected");
+        let file = TextBoundaryRequirement {
+            name: "import-file".into(),
+            codec: TextCodec::Core(CoreTextCodec::Utf32Le),
+        };
+
+        assert!(matches!(
+            validate_text_boundary(&contract, &file),
+            Err(TextBoundaryIssue::CodecNotEnabled { .. })
+        ));
     }
 
     #[test]
