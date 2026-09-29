@@ -265,6 +265,30 @@ pub fn emit_x86_64_named(
                     trap_labels.push(trap);
                 }
             }
+            MachineOp::ConvertChecked {
+                dst,
+                source,
+                output_width,
+                min,
+                max,
+            } => {
+                let trap =
+                    format!(".L{}_trap_{}", symbol, trap_index);
+                trap_index += 1;
+                if let Err(issue) = emit_checked_convert(
+                    &mut out,
+                    *dst,
+                    *source,
+                    *output_width,
+                    *min,
+                    *max,
+                    &trap,
+                ) {
+                    issues.push(issue);
+                } else {
+                    trap_labels.push(trap);
+                }
+            }
             MachineOp::Call {
                 target,
                 args,
@@ -683,6 +707,106 @@ fn emit_result_width_guard(
         IntegerWidth::U64 | IntegerWidth::I64 => {}
         IntegerWidth::U128 | IntegerWidth::I128 => {}
     }
+}
+
+fn emit_checked_convert(
+    out: &mut String,
+    dst: PhysicalLocation,
+    source: MachineOperand,
+    output_width: IntegerWidth,
+    min: i128,
+    max: i128,
+    trap: &str,
+) -> Result<(), X86CodegenIssue> {
+    if matches!(
+        output_width,
+        IntegerWidth::U128 | IntegerWidth::I128
+    ) {
+        return Err(X86CodegenIssue::Unsupported128BitInteger);
+    }
+
+    let Some(source_width) = operand_integer_width(source) else {
+        return Err(X86CodegenIssue::OperandWidthMismatch);
+    };
+    if matches!(
+        source_width,
+        IntegerWidth::U128 | IntegerWidth::I128
+    ) {
+        return Err(X86CodegenIssue::Unsupported128BitInteger);
+    }
+
+    load_operand_to_register(out, "rax", source)?;
+
+    let source_signed = matches!(
+        source_width,
+        IntegerWidth::I8
+            | IntegerWidth::I16
+            | IntegerWidth::I32
+            | IntegerWidth::I64
+            | IntegerWidth::I128
+    );
+
+    if source_signed {
+        if min >= 0 {
+            out.push_str("    test rax, rax\n");
+            out.push_str(&format!("    js {}\n", trap));
+
+            if min > 0 {
+                out.push_str(&format!(
+                    "    mov r11, {}\n",
+                    render_immediate(min)?
+                ));
+                out.push_str("    cmp rax, r11\n");
+                out.push_str(&format!("    jb {}\n", trap));
+            }
+
+            out.push_str(&format!(
+                "    mov r11, {}\n",
+                render_immediate(max)?
+            ));
+            out.push_str("    cmp rax, r11\n");
+            out.push_str(&format!("    ja {}\n", trap));
+        } else {
+            out.push_str(&format!(
+                "    mov r11, {}\n",
+                render_immediate(min)?
+            ));
+            out.push_str("    cmp rax, r11\n");
+            out.push_str(&format!("    jl {}\n", trap));
+            out.push_str(&format!(
+                "    mov r11, {}\n",
+                render_immediate(max)?
+            ));
+            out.push_str("    cmp rax, r11\n");
+            out.push_str(&format!("    jg {}\n", trap));
+        }
+    } else {
+        if max < 0 {
+            out.push_str(&format!("    jmp {}\n", trap));
+        } else {
+            if min > 0 {
+                out.push_str(&format!(
+                    "    mov r11, {}\n",
+                    render_immediate(min)?
+                ));
+                out.push_str("    cmp rax, r11\n");
+                out.push_str(&format!("    jb {}\n", trap));
+            }
+            out.push_str(&format!(
+                "    mov r11, {}\n",
+                render_immediate(max)?
+            ));
+            out.push_str("    cmp rax, r11\n");
+            out.push_str(&format!("    ja {}\n", trap));
+        }
+    }
+
+    store_from_register(
+        out,
+        dst,
+        "rax",
+        MachineValueType::Integer(output_width),
+    )
 }
 
 fn emit_compare(
