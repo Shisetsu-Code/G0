@@ -1,3 +1,4 @@
+pub mod artifact;
 pub mod authority;
 pub mod backend;
 pub mod concurrency;
