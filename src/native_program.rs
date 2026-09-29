@@ -268,6 +268,125 @@ mod tests {
         graph
     }
 
+    fn false_condition() -> Graph {
+        let mut graph = Graph::new("loop_condition");
+        graph.inputs = vec![Port {
+            id: 0,
+            name: "state".into(),
+            ty: int(0, 10),
+        }];
+        graph.outputs = vec![Port {
+            id: 0,
+            name: "continue".into(),
+            ty: SemanticType::Bool,
+        }];
+        graph.nodes.push(Node {
+            id: 1,
+            operation: Operation::Const(Literal::Bool(false)),
+            inputs: vec![],
+            outputs: vec![Port {
+                id: 0,
+                name: "continue".into(),
+                ty: SemanticType::Bool,
+            }],
+            effects: BTreeSet::new(),
+            required_capabilities: BTreeSet::new(),
+        });
+        graph.edges.push(Edge {
+            from: SourceEndpoint::NodeOutput { node: 1, port: 0 },
+            to: TargetEndpoint::GraphOutput(0),
+        });
+        graph
+    }
+
+    fn identity_body() -> Graph {
+        let mut graph = Graph::new("loop_body");
+        graph.inputs = vec![Port {
+            id: 0,
+            name: "state".into(),
+            ty: int(0, 10),
+        }];
+        graph.outputs = graph.inputs.clone();
+        graph.edges.push(Edge {
+            from: SourceEndpoint::GraphInput(0),
+            to: TargetEndpoint::GraphOutput(0),
+        });
+        graph
+    }
+
+    #[test]
+    fn native_program_emits_bounded_structured_loop() {
+        let mut main = Graph::new("loop_main");
+        main.outputs = vec![Port {
+            id: 0,
+            name: "state".into(),
+            ty: int(0, 10),
+        }];
+        main.nodes = vec![
+            Node {
+                id: 1,
+                operation: Operation::Const(Literal::Integer(7)),
+                inputs: vec![],
+                outputs: vec![Port {
+                    id: 0,
+                    name: "initial".into(),
+                    ty: int(7, 7),
+                }],
+                effects: BTreeSet::new(),
+                required_capabilities: BTreeSet::new(),
+            },
+            Node {
+                id: 2,
+                operation: Operation::Loop {
+                    condition: "loop_condition".into(),
+                    body: "loop_body".into(),
+                    max_iterations: 5,
+                },
+                inputs: vec![Port {
+                    id: 0,
+                    name: "state".into(),
+                    ty: int(0, 10),
+                }],
+                outputs: vec![Port {
+                    id: 0,
+                    name: "state".into(),
+                    ty: int(0, 10),
+                }],
+                effects: BTreeSet::new(),
+                required_capabilities: BTreeSet::new(),
+            },
+        ];
+        main.edges = vec![
+            Edge {
+                from: SourceEndpoint::NodeOutput { node: 1, port: 0 },
+                to: TargetEndpoint::NodeInput { node: 2, port: 0 },
+            },
+            Edge {
+                from: SourceEndpoint::NodeOutput { node: 2, port: 0 },
+                to: TargetEndpoint::GraphOutput(0),
+            },
+        ];
+
+        let mut program = ProgramContract::default();
+        program.entry_graph = Some("loop_main".into());
+        program.graphs = vec![main, false_condition(), identity_body()];
+
+        let platform = PlatformContract::bootstrap_x86_64_v3();
+        let compiled = compile_program(
+            &program,
+            &platform,
+            MachineProfile::x86_64_v3(),
+        )
+        .unwrap();
+
+        assert!(compiled.assembly.contains("loop_0_head"));
+        assert!(compiled.assembly.contains("loop_0_bound"));
+        assert!(compiled.assembly.contains(&graph_symbol("loop_condition")));
+        assert!(compiled.assembly.contains(&graph_symbol("loop_body")));
+        assert!(compiled.graphs.contains_key("loop_condition"));
+        assert!(compiled.graphs.contains_key("loop_body"));
+    }
+
     #[test]
     fn native_program_emits_structured_select_branches() {
         let mut main = Graph::new("select_main");
