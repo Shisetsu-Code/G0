@@ -49,6 +49,31 @@ fn fold_constants(
         for node_index in 0..graph.nodes.len() {
             let node = &snapshot.nodes[node_index];
 
+            if let Operation::Truncate { bits, signed } =
+                node.operation
+                && let Some(value) =
+                    constant_single_integer_input(&snapshot, node.id)
+                && let Some(value) =
+                    truncate_constant(value, bits, signed)
+            {
+                let target = &mut graph.nodes[node_index];
+                target.operation =
+                    Operation::Const(Literal::Integer(value));
+                target.inputs.clear();
+                graph.edges.retain(|edge| {
+                    !matches!(
+                        edge.to,
+                        TargetEndpoint::NodeInput {
+                            node: id,
+                            ..
+                        } if id == node.id
+                    )
+                });
+                report.folded_nodes.insert(node.id);
+                changed = true;
+                continue;
+            }
+
             if node.operation == Operation::ConvertChecked
                 && let Some(value) =
                     constant_single_integer_input(&snapshot, node.id)
@@ -143,6 +168,30 @@ fn fold_constants(
     }
 
     Ok(())
+}
+
+fn truncate_constant(
+    value: i128,
+    bits: u16,
+    signed: bool,
+) -> Option<i128> {
+    if bits == 0 || bits > 64 {
+        return None;
+    }
+
+    let modulus = 1_u128.checked_shl(u32::from(bits))?;
+    let raw = (value as u128) & (modulus - 1);
+
+    if signed {
+        let sign_bit = 1_u128 << (bits - 1);
+        if raw & sign_bit != 0 {
+            Some(raw as i128 - modulus as i128)
+        } else {
+            Some(raw as i128)
+        }
+    } else {
+        Some(raw as i128)
+    }
 }
 
 fn constant_single_integer_input(
