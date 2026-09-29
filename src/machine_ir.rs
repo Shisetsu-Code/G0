@@ -62,6 +62,13 @@ pub enum MachineOp {
         args: Vec<MachineOperand>,
         output: Option<MachineOutput>,
     },
+    LoopCall {
+        condition: String,
+        body: String,
+        state: MachineOperand,
+        output: MachineOutput,
+        max_iterations: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -392,6 +399,74 @@ pub fn lower_mir(
                     });
                 }
             }
+            MirOp::LoopCall {
+                condition,
+                body,
+                max_iterations,
+            } => {
+                if instruction.inputs.len() != 1
+                    || instruction.outputs.len() != 1
+                    || *max_iterations == 0
+                {
+                    issues.push(MachineLoweringIssue::WrongShape);
+                    continue;
+                }
+
+                let input = instruction.inputs[0];
+                let output_value = instruction.outputs[0];
+
+                let Some(input_location) = location(allocation, input) else {
+                    issues.push(MachineLoweringIssue::MissingLocation(input));
+                    continue;
+                };
+                let Some(output_location) =
+                    location(allocation, output_value)
+                else {
+                    issues.push(MachineLoweringIssue::MissingLocation(
+                        output_value,
+                    ));
+                    continue;
+                };
+
+                let Some(input_ty) = machine_value_type(mir, input) else {
+                    issues.push(
+                        MachineLoweringIssue::UnsupportedArithmeticType(input),
+                    );
+                    continue;
+                };
+                let Some(output_ty) =
+                    machine_value_type(mir, output_value)
+                else {
+                    issues.push(
+                        MachineLoweringIssue::UnsupportedArithmeticType(
+                            output_value,
+                        ),
+                    );
+                    continue;
+                };
+
+                if input_ty != output_ty {
+                    issues.push(MachineLoweringIssue::WrongShape);
+                    continue;
+                }
+
+                operations.push(MachineInstruction {
+                    source_node: instruction.source_node,
+                    op: MachineOp::LoopCall {
+                        condition: crate::abi::graph_symbol(condition),
+                        body: crate::abi::graph_symbol(body),
+                        state: MachineOperand::Location {
+                            location: input_location,
+                            ty: input_ty,
+                        },
+                        output: MachineOutput {
+                            location: output_location,
+                            ty: output_ty,
+                        },
+                        max_iterations: *max_iterations,
+                    },
+                });
+            }
             MirOp::Call { target } => {
                 if instruction.inputs.len() > crate::abi::G0_SCALAR_ARG_LIMIT {
                     issues.push(MachineLoweringIssue::CallTooManyArguments {
@@ -485,7 +560,9 @@ pub fn lower_mir(
             .any(|instruction| {
                 matches!(
                     instruction.op,
-                    MachineOp::Call { .. } | MachineOp::SelectCall { .. }
+                    MachineOp::Call { .. }
+                        | MachineOp::SelectCall { .. }
+                        | MachineOp::LoopCall { .. }
                 )
             });
         let stack_bytes = if has_call {
