@@ -117,9 +117,16 @@ impl ResourceSchema {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StorageSchemaIssue {
+    DuplicateResource(String),
     DuplicateField(String),
     DuplicateRelation(String),
+    DuplicateMemberName(String),
+    DuplicatePolicyAction(String),
     UnknownIndexField(String),
+    UnknownRelationTarget {
+        relation: String,
+        target: String,
+    },
     CredentialFieldMustUseCredentialType(String),
     SecretFieldMustUseSecretType(String),
 }
@@ -128,6 +135,7 @@ pub fn validate_resource_schema(resource: &ResourceSchema) -> Result<(), Vec<Sto
     let mut issues = Vec::new();
     let mut field_names = BTreeSet::new();
     let mut relation_names = BTreeSet::new();
+    let mut policy_actions = BTreeSet::new();
 
     for field in &resource.fields {
         if !field_names.insert(field.name.as_str()) {
@@ -153,12 +161,70 @@ pub fn validate_resource_schema(resource: &ResourceSchema) -> Result<(), Vec<Sto
         if !relation_names.insert(relation.name.as_str()) {
             issues.push(StorageSchemaIssue::DuplicateRelation(relation.name.clone()));
         }
+        if field_names.contains(relation.name.as_str()) {
+            issues.push(StorageSchemaIssue::DuplicateMemberName(
+                relation.name.clone(),
+            ));
+        }
+    }
+
+    for rule in &resource.policies.rules {
+        if !policy_actions.insert(rule.action.0.as_str()) {
+            issues.push(StorageSchemaIssue::DuplicatePolicyAction(
+                rule.action.0.clone(),
+            ));
+        }
     }
 
     for index in &resource.indexes {
         for field in &index.fields {
             if !field_names.contains(field.as_str()) {
                 issues.push(StorageSchemaIssue::UnknownIndexField(field.clone()));
+            }
+        }
+    }
+
+    if issues.is_empty() {
+        Ok(())
+    } else {
+        Err(issues)
+    }
+}
+
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct StoreSchema {
+    pub resources: Vec<ResourceSchema>,
+}
+
+impl StoreSchema {
+    pub fn resource(&self, name: &str) -> Option<&ResourceSchema> {
+        self.resources.iter().find(|resource| resource.name == name)
+    }
+}
+
+pub fn validate_store_schema(store: &StoreSchema) -> Result<(), Vec<StorageSchemaIssue>> {
+    let mut issues = Vec::new();
+    let mut resource_names = BTreeSet::new();
+
+    for resource in &store.resources {
+        if !resource_names.insert(resource.name.as_str()) {
+            issues.push(StorageSchemaIssue::DuplicateResource(
+                resource.name.clone(),
+            ));
+        }
+        if let Err(resource_issues) = validate_resource_schema(resource) {
+            issues.extend(resource_issues);
+        }
+    }
+
+    for resource in &store.resources {
+        for relation in &resource.relations {
+            if !resource_names.contains(relation.target_resource.as_str()) {
+                issues.push(StorageSchemaIssue::UnknownRelationTarget {
+                    relation: format!("{}.{}", resource.name, relation.name),
+                    target: relation.target_resource.clone(),
+                });
             }
         }
     }
@@ -336,6 +402,49 @@ mod tests {
         });
 
         assert!(validate_resource_schema(&resource).is_ok());
+    }
+
+
+    #[test]
+    fn relation_targets_are_verified_by_the_store_schema() {
+        let mut message = ResourceSchema::new("Message");
+        message.relations.push(RelationSchema {
+            name: "author".into(),
+            target_resource: "User".into(),
+            cardinality: Cardinality::One,
+            on_delete: DeleteRule::Restrict,
+        });
+
+        let store = StoreSchema {
+            resources: vec![message],
+        };
+
+        let issues = validate_store_schema(&store).unwrap_err();
+        assert!(issues.iter().any(|issue| {
+            matches!(
+                issue,
+                StorageSchemaIssue::UnknownRelationTarget { relation, target }
+                if relation == "Message.author" && target == "User"
+            )
+        }));
+    }
+
+    #[test]
+    fn relation_targets_validate_when_resource_exists() {
+        let user = ResourceSchema::new("User");
+        let mut message = ResourceSchema::new("Message");
+        message.relations.push(RelationSchema {
+            name: "author".into(),
+            target_resource: "User".into(),
+            cardinality: Cardinality::One,
+            on_delete: DeleteRule::Restrict,
+        });
+
+        let store = StoreSchema {
+            resources: vec![user, message],
+        };
+
+        assert!(validate_store_schema(&store).is_ok());
     }
 
     #[test]
