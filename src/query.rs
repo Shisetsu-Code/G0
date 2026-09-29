@@ -226,7 +226,7 @@ mod tests {
         });
         message.policies.rules.push(PolicyRule {
             action: Action::read(),
-            allow_if: PolicyExpr::All(vec![]),
+            allow_if: PolicyExpr::Public,
         });
 
         StoreSchema {
