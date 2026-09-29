@@ -208,6 +208,20 @@ pub fn validate_resource_schema(resource: &ResourceSchema) -> Result<(), Vec<Sto
         }
     }
 
+    let mut field_policy_names = BTreeSet::new();
+    for policy in &resource.field_policies {
+        if !field_policy_names.insert(policy.field.as_str()) {
+            issues.push(StorageSchemaIssue::DuplicateFieldPolicy(
+                policy.field.clone(),
+            ));
+        }
+        if !field_names.contains(policy.field.as_str()) {
+            issues.push(StorageSchemaIssue::UnknownFieldPolicyTarget(
+                policy.field.clone(),
+            ));
+        }
+    }
+
     for relation in &resource.relations {
         if !relation_names.insert(relation.name.as_str()) {
             issues.push(StorageSchemaIssue::DuplicateRelation(relation.name.clone()));
