@@ -52,6 +52,8 @@ pub enum MachineOp {
     },
     Call {
         target: String,
+        args: Vec<MachineOperand>,
+        output: Option<MachineOutput>,
     },
 }
 
@@ -81,7 +83,16 @@ pub enum MachineLoweringIssue {
     UnsupportedArithmeticType(ValueId),
     NonCheckedArithmetic,
     WrongShape,
-    CallAbiNotImplemented(String),
+    CallTooManyArguments {
+        target: String,
+        count: usize,
+        maximum: usize,
+    },
+    CallTooManyOutputs {
+        target: String,
+        count: usize,
+        maximum: usize,
+    },
 }
 
 pub fn lower_mir(
@@ -260,9 +271,67 @@ pub fn lower_mir(
                 });
             }
             MirOp::Call { target } => {
-                issues.push(MachineLoweringIssue::CallAbiNotImplemented(
-                    target.clone(),
-                ));
+                if instruction.inputs.len() > crate::abi::G0_SCALAR_ARG_LIMIT {
+                    issues.push(MachineLoweringIssue::CallTooManyArguments {
+                        target: target.clone(),
+                        count: instruction.inputs.len(),
+                        maximum: crate::abi::G0_SCALAR_ARG_LIMIT,
+                    });
+                    continue;
+                }
+                if instruction.outputs.len() > 1 {
+                    issues.push(MachineLoweringIssue::CallTooManyOutputs {
+                        target: target.clone(),
+                        count: instruction.outputs.len(),
+                        maximum: 1,
+                    });
+                    continue;
+                }
+
+                let mut args = Vec::with_capacity(instruction.inputs.len());
+                let mut call_invalid = false;
+                for value in &instruction.inputs {
+                    let Some(location) = location(allocation, *value) else {
+                        issues.push(MachineLoweringIssue::MissingLocation(*value));
+                        call_invalid = true;
+                        continue;
+                    };
+                    let Some(ty) = machine_value_type(mir, *value) else {
+                        issues.push(
+                            MachineLoweringIssue::UnsupportedArithmeticType(*value),
+                        );
+                        call_invalid = true;
+                        continue;
+                    };
+                    args.push(MachineOperand::Location { location, ty });
+                }
+
+                let output = if let Some(value) = instruction.outputs.first() {
+                    let Some(location) = location(allocation, *value) else {
+                        issues.push(MachineLoweringIssue::MissingLocation(*value));
+                        continue;
+                    };
+                    let Some(ty) = machine_value_type(mir, *value) else {
+                        issues.push(
+                            MachineLoweringIssue::UnsupportedArithmeticType(*value),
+                        );
+                        continue;
+                    };
+                    Some(MachineOutput { location, ty })
+                } else {
+                    None
+                };
+
+                if !call_invalid {
+                    operations.push(MachineInstruction {
+                        source_node: instruction.source_node,
+                        op: MachineOp::Call {
+                            target: crate::abi::graph_symbol(target),
+                            args,
+                            output,
+                        },
+                    });
+                }
             }
             MirOp::Load | MirOp::Store => {
                 issues.push(MachineLoweringIssue::UnsupportedMirOperation(
@@ -289,9 +358,22 @@ pub fn lower_mir(
             });
         }
 
+        let has_call = operations
+            .iter()
+            .any(|instruction| matches!(instruction.op, MachineOp::Call { .. }));
+        let stack_bytes = if has_call {
+            allocation
+                .stack_bytes
+                .saturating_add(128)
+                .div_ceil(16)
+                .saturating_mul(16)
+        } else {
+            allocation.stack_bytes
+        };
+
         Ok(MachineProgram {
             operations,
-            stack_bytes: allocation.stack_bytes,
+            stack_bytes,
             outputs,
         })
     } else {
