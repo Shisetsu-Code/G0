@@ -55,6 +55,13 @@ pub enum MachineOp {
         args: Vec<MachineOperand>,
         output: Option<MachineOutput>,
     },
+    SelectCall {
+        condition: MachineOperand,
+        when_true: String,
+        when_false: String,
+        args: Vec<MachineOperand>,
+        output: Option<MachineOutput>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -270,6 +277,121 @@ pub fn lower_mir(
                     },
                 });
             }
+            MirOp::SelectCall {
+                when_true,
+                when_false,
+            } => {
+                if instruction.inputs.is_empty() {
+                    issues.push(MachineLoweringIssue::WrongShape);
+                    continue;
+                }
+                let payload_count = instruction.inputs.len() - 1;
+                if payload_count > crate::abi::G0_SCALAR_ARG_LIMIT {
+                    issues.push(MachineLoweringIssue::CallTooManyArguments {
+                        target: format!("{when_true}|{when_false}"),
+                        count: payload_count,
+                        maximum: crate::abi::G0_SCALAR_ARG_LIMIT,
+                    });
+                    continue;
+                }
+                if instruction.outputs.len() > 1 {
+                    issues.push(MachineLoweringIssue::CallTooManyOutputs {
+                        target: format!("{when_true}|{when_false}"),
+                        count: instruction.outputs.len(),
+                        maximum: 1,
+                    });
+                    continue;
+                }
+
+                let condition_value = instruction.inputs[0];
+                let Some(condition_location) =
+                    location(allocation, condition_value)
+                else {
+                    issues.push(MachineLoweringIssue::MissingLocation(
+                        condition_value,
+                    ));
+                    continue;
+                };
+                if mir.values.get(&condition_value).map(|value| value.ty)
+                    != Some(MirType::Bool)
+                {
+                    issues.push(
+                        MachineLoweringIssue::UnsupportedArithmeticType(
+                            condition_value,
+                        ),
+                    );
+                    continue;
+                }
+                let condition = MachineOperand::Location {
+                    location: condition_location,
+                    ty: MachineValueType::Bool,
+                };
+
+                let mut args = Vec::with_capacity(payload_count);
+                let mut invalid = false;
+                for value in instruction.inputs.iter().skip(1) {
+                    let Some(value_location) = location(allocation, *value)
+                    else {
+                        issues.push(MachineLoweringIssue::MissingLocation(
+                            *value,
+                        ));
+                        invalid = true;
+                        continue;
+                    };
+                    let Some(ty) = machine_value_type(mir, *value) else {
+                        issues.push(
+                            MachineLoweringIssue::UnsupportedArithmeticType(
+                                *value,
+                            ),
+                        );
+                        invalid = true;
+                        continue;
+                    };
+                    args.push(MachineOperand::Location {
+                        location: value_location,
+                        ty,
+                    });
+                }
+
+                let output =
+                    if let Some(value) = instruction.outputs.first() {
+                        let Some(value_location) =
+                            location(allocation, *value)
+                        else {
+                            issues.push(
+                                MachineLoweringIssue::MissingLocation(*value),
+                            );
+                            continue;
+                        };
+                        let Some(ty) = machine_value_type(mir, *value) else {
+                            issues.push(
+                                MachineLoweringIssue::UnsupportedArithmeticType(
+                                    *value,
+                                ),
+                            );
+                            continue;
+                        };
+                        Some(MachineOutput {
+                            location: value_location,
+                            ty,
+                        })
+                    } else {
+                        None
+                    };
+
+                if !invalid {
+                    operations.push(MachineInstruction {
+                        source_node: instruction.source_node,
+                        op: MachineOp::SelectCall {
+                            condition,
+                            when_true: crate::abi::graph_symbol(when_true),
+                            when_false: crate::abi::graph_symbol(when_false),
+                            args,
+                            output,
+                        },
+                    });
+                }
+            }
             MirOp::Call { target } => {
                 if instruction.inputs.len() > crate::abi::G0_SCALAR_ARG_LIMIT {
                     issues.push(MachineLoweringIssue::CallTooManyArguments {
@@ -360,7 +482,12 @@ pub fn lower_mir(
 
         let has_call = operations
             .iter()
-            .any(|instruction| matches!(instruction.op, MachineOp::Call { .. }));
+            .any(|instruction| {
+                matches!(
+                    instruction.op,
+                    MachineOp::Call { .. } | MachineOp::SelectCall { .. }
+                )
+            });
         let stack_bytes = if has_call {
             allocation
                 .stack_bytes
