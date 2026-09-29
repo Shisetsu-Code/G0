@@ -217,6 +217,7 @@ mod tests {
     #[test]
     fn checked_integer_mir_validates() {
         let program = MirProgram {
+            inputs: vec![],
             values: BTreeMap::from([
                 value(0, MirType::Integer(IntegerWidth::U8)),
                 value(1, MirType::Integer(IntegerWidth::U8)),
@@ -253,6 +254,7 @@ mod tests {
     #[test]
     fn program_output_must_be_defined() {
         let program = MirProgram {
+            inputs: vec![],
             values: BTreeMap::from([value(
                 0,
                 MirType::Integer(IntegerWidth::U8),
@@ -270,6 +272,7 @@ mod tests {
     #[test]
     fn wrapping_arithmetic_is_not_an_implicit_lowering_choice() {
         let program = MirProgram {
+            inputs: vec![],
             values: BTreeMap::from([
                 value(0, MirType::Integer(IntegerWidth::U8)),
                 value(1, MirType::Integer(IntegerWidth::U8)),
@@ -297,6 +300,7 @@ mod tests {
     #[test]
     fn ssa_value_cannot_be_defined_twice() {
         let program = MirProgram {
+            inputs: vec![],
             values: BTreeMap::from([value(
                 0,
                 MirType::Integer(IntegerWidth::U8),
