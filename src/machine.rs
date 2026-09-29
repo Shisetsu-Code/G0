@@ -59,6 +59,11 @@ pub struct AllocationResult {
 pub enum AllocationIssue {
     UnknownValue(ValueId),
     InvalidProfile,
+    TooManyInputs {
+        inputs: usize,
+        capacity: usize,
+    },
+    UnsupportedInputType(ValueId),
 }
 
 pub fn compute_live_intervals(
@@ -103,11 +108,11 @@ pub fn linear_scan_allocate(
     }
 
     let intervals = compute_live_intervals(program)?;
-    // RAX/RDX/R11 are reserved for checked arithmetic and backend scratch.
+    // G0 integer/pointer ABI input order. RAX/RDX/R11 remain backend scratch.
     let register_pool = [
-        Gpr::Rcx,
-        Gpr::Rsi,
         Gpr::Rdi,
+        Gpr::Rsi,
+        Gpr::Rcx,
         Gpr::R8,
         Gpr::R9,
         Gpr::R10,
@@ -116,6 +121,29 @@ pub fn linear_scan_allocate(
         .into_iter()
         .take(profile.gpr_count.min(register_pool.len()))
         .collect();
+
+    if program.inputs.len() > available_registers.len() {
+        return Err(AllocationIssue::TooManyInputs {
+            inputs: program.inputs.len(),
+            capacity: available_registers.len(),
+        });
+    }
+
+    let mut precolored = BTreeMap::<ValueId, Gpr>::new();
+    for (value, register) in program
+        .inputs
+        .iter()
+        .copied()
+        .zip(available_registers.iter().copied())
+    {
+        let Some(mir_value) = program.values.get(&value) else {
+            return Err(AllocationIssue::UnknownValue(value));
+        };
+        if !scalar_register_eligible(mir_value.ty) {
+            return Err(AllocationIssue::UnsupportedInputType(value));
+        }
+        precolored.insert(value, register);
+    }
 
     let mut ordered: Vec<(ValueId, LiveInterval)> =
         intervals.iter().map(|(id, interval)| (*id, *interval)).collect();
@@ -138,6 +166,16 @@ pub fn linear_scan_allocate(
                 true
             }
         });
+
+        if let Some(register) = precolored.get(&value).copied() {
+            free.remove(&register);
+            result
+                .locations
+                .insert(value, PhysicalLocation::Register(register));
+            active.push((value, interval, register));
+            active.sort_by_key(|(_, active_interval, _)| active_interval.end);
+            continue;
+        }
 
         if scalar_register_eligible(program.values[&value].ty)
             && let Some(register) = free.pop_first()
