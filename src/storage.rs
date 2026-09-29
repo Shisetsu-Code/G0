@@ -3,6 +3,10 @@ use std::collections::BTreeSet;
 use crate::authority::{
     Action, AuthorizationDecision, DenyReason, PolicySet, Principal, ResourceContext, authorize,
 };
+use crate::freshness::{
+    consume_mutation_proof, issue_mutation_proof, FreshnessIssue, MutationAuthorizationProof,
+    SecurityEpoch,
+};
 use crate::gir::SemanticType;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -258,6 +262,8 @@ pub enum StoreAccessIssue {
     ImmutableField(String),
     CredentialReadForbidden(String),
     CredentialMutationRequiresVerifier(String),
+    MutationProofNotApplicable,
+    Freshness(FreshnessIssue),
 }
 
 pub fn authorize_store_operation(
@@ -324,6 +330,51 @@ pub fn authorize_store_operation(
     } else {
         Err(issues)
     }
+}
+
+pub fn authorize_store_mutation(
+    schema: &ResourceSchema,
+    principal: &Principal,
+    resource: &ResourceContext,
+    operation: &StoreOperation,
+    epoch: SecurityEpoch,
+) -> Result<MutationAuthorizationProof, Vec<StoreAccessIssue>> {
+    if !matches!(operation, StoreOperation::Update { .. } | StoreOperation::Delete) {
+        return Err(vec![StoreAccessIssue::MutationProofNotApplicable]);
+    }
+
+    authorize_store_operation(schema, principal, resource, operation)?;
+
+    issue_mutation_proof(
+        principal,
+        resource,
+        &schema.policies,
+        &operation.action(),
+        schema.is_global(),
+        epoch,
+    )
+    .map_err(|issue| vec![StoreAccessIssue::Freshness(issue)])
+}
+
+pub fn commit_store_mutation(
+    proof: MutationAuthorizationProof,
+    principal: &Principal,
+    resource: &ResourceContext,
+    operation: &StoreOperation,
+    current_epoch: SecurityEpoch,
+) -> Result<(), StoreAccessIssue> {
+    if !matches!(operation, StoreOperation::Update { .. } | StoreOperation::Delete) {
+        return Err(StoreAccessIssue::MutationProofNotApplicable);
+    }
+
+    consume_mutation_proof(
+        proof,
+        principal,
+        resource,
+        &operation.action(),
+        current_epoch,
+    )
+    .map_err(StoreAccessIssue::Freshness)
 }
 
 #[cfg(test)]
@@ -561,6 +612,86 @@ mod tests {
                 StoreAccessIssue::AuthorizationDenied(DenyReason::NoPolicy)
             )
         }));
+    }
+
+    #[test]
+    fn store_mutation_rejects_stale_authorization_proof() {
+        let mut schema = message_schema();
+        schema.policies.rules.push(PolicyRule {
+            action: Action::update(),
+            allow_if: PolicyExpr::PrincipalOwnsResource,
+        });
+
+        let principal = Principal::new("alice", "tenant-a");
+        let mut message = ResourceContext::new("Message", "m1", "tenant-a");
+        message.owner = Some(principal.id.clone());
+        let operation = StoreOperation::Update {
+            fields: vec!["body".into()],
+        };
+        let authorized_at = SecurityEpoch::new(4, 2, 9);
+
+        let proof = authorize_store_mutation(
+            &schema,
+            &principal,
+            &message,
+            &operation,
+            authorized_at,
+        )
+        .unwrap();
+
+        let current = SecurityEpoch::new(4, 3, 9);
+        assert_eq!(
+            commit_store_mutation(
+                proof,
+                &principal,
+                &message,
+                &operation,
+                current,
+            ),
+            Err(StoreAccessIssue::Freshness(
+                FreshnessIssue::SecurityStateChanged {
+                    authorized_at,
+                    current,
+                }
+            ))
+        );
+    }
+
+    #[test]
+    fn store_mutation_accepts_fresh_consumed_proof() {
+        let mut schema = message_schema();
+        schema.policies.rules.push(PolicyRule {
+            action: Action::update(),
+            allow_if: PolicyExpr::PrincipalOwnsResource,
+        });
+
+        let principal = Principal::new("alice", "tenant-a");
+        let mut message = ResourceContext::new("Message", "m1", "tenant-a");
+        message.owner = Some(principal.id.clone());
+        let operation = StoreOperation::Update {
+            fields: vec!["body".into()],
+        };
+        let epoch = SecurityEpoch::new(4, 2, 9);
+
+        let proof = authorize_store_mutation(
+            &schema,
+            &principal,
+            &message,
+            &operation,
+            epoch,
+        )
+        .unwrap();
+
+        assert!(
+            commit_store_mutation(
+                proof,
+                &principal,
+                &message,
+                &operation,
+                epoch,
+            )
+            .is_ok()
+        );
     }
 
     #[test]
