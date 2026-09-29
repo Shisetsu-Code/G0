@@ -1,6 +1,12 @@
 use crate::gir::Graph;
+use crate::gir_optimize::{
+    optimize_gir, GirOptimizationIssue, GirOptimizationReport,
+};
 use crate::gir_validate::ValidationIssue;
-use crate::invariants::{ledger_for_validated_graph, InvariantLedger};
+use crate::invariants::{
+    ledger_for_validated_graph, validate_preservation_with_retired_nodes,
+    InvariantLedger, PreservationIssue,
+};
 use crate::machine::{
     linear_scan_allocate, register_pressure, AllocationIssue,
     AllocationResult, MachineProfile, RegisterPressure,
@@ -11,6 +17,7 @@ use crate::machine_ir::{
 };
 use crate::mir_validate::{validate_mir, MirIssue};
 use crate::source_map::{build_source_map, SourceMap};
+use crate::side_channel::{validate_side_channels, SideChannelIssue};
 use crate::x86_codegen::{emit_x86_64, X86CodegenIssue};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,11 +30,15 @@ pub struct CompiledGraph {
     pub assembly: String,
     pub invariants: InvariantLedger,
     pub source_map: SourceMap,
+    pub optimization: GirOptimizationReport,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PipelineIssue {
     Gir(Vec<ValidationIssue>),
+    SideChannel(Vec<SideChannelIssue>),
+    Optimize(Vec<GirOptimizationIssue>),
+    InvariantPreservation(Vec<PreservationIssue>),
     Lowering(Vec<LoweringIssue>),
     Mir(Vec<MirIssue>),
     Allocation(AllocationIssue),
@@ -43,9 +54,23 @@ pub fn compile_graph(
     if let Err(report) = crate::gir_validate::validate(graph) {
         return Err(PipelineIssue::Gir(report.issues));
     }
+    if let Err(issues) = validate_side_channels(graph) {
+        return Err(PipelineIssue::SideChannel(issues));
+    }
 
-    let invariants = ledger_for_validated_graph(graph);
-    let mir = lower_graph(graph).map_err(PipelineIssue::Lowering)?;
+    let baseline_invariants = ledger_for_validated_graph(graph);
+    let (optimized_graph, optimization) =
+        optimize_gir(graph).map_err(PipelineIssue::Optimize)?;
+    let invariants = ledger_for_validated_graph(&optimized_graph);
+    validate_preservation_with_retired_nodes(
+        &baseline_invariants,
+        &invariants,
+        &optimization.removed_nodes,
+    )
+    .map_err(PipelineIssue::InvariantPreservation)?;
+
+    let mir =
+        lower_graph(&optimized_graph).map_err(PipelineIssue::Lowering)?;
     validate_mir(&mir).map_err(PipelineIssue::Mir)?;
     let allocation =
         linear_scan_allocate(&mir, machine).map_err(PipelineIssue::Allocation)?;
@@ -68,6 +93,7 @@ pub fn compile_graph(
         assembly,
         invariants,
         source_map,
+        optimization,
     })
 }
 
