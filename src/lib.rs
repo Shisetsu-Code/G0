@@ -17,6 +17,7 @@ pub mod gir_validate;
 pub mod graph;
 pub mod hardware;
 pub mod information_flow;
+pub mod ingress;
 pub mod io;
 pub mod math;
 pub mod machine;
