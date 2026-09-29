@@ -230,6 +230,15 @@ fn read_operation(reader: &mut Reader<'_>) -> Result<Operation, BinaryDecodeIssu
         1 => Operation::Add,
         2 => Operation::Sub,
         3 => Operation::Mul,
+        17 => Operation::Eq,
+        18 => Operation::Lt,
+        19 => Operation::Le,
+        20 => Operation::Gt,
+        21 => Operation::Ge,
+        22 => Operation::And,
+        23 => Operation::Or,
+        24 => Operation::Xor,
+        25 => Operation::Not,
         4 => Operation::Select {
             when_true: reader.string()?,
             when_false: reader.string()?,
@@ -531,6 +540,38 @@ mod tests {
         let bytes = encode_graph(&graph).unwrap();
         let decoded = decode_graph(&bytes).unwrap();
         assert!(structurally_equal(&graph, &decoded));
+    }
+
+    #[test]
+    fn comparison_and_boolean_operations_round_trip() {
+        for (index, operation) in [
+            Operation::Eq,
+            Operation::Lt,
+            Operation::Le,
+            Operation::Gt,
+            Operation::Ge,
+            Operation::And,
+            Operation::Or,
+            Operation::Xor,
+            Operation::Not,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut graph = Graph::new(format!("op-{index}"));
+            graph.nodes.push(Node {
+                id: 1,
+                operation,
+                inputs: vec![],
+                outputs: vec![],
+                effects: BTreeSet::new(),
+                required_capabilities: BTreeSet::new(),
+            });
+
+            let bytes = encode_graph(&graph).unwrap();
+            let decoded = decode_graph(&bytes).unwrap();
+            assert!(structurally_equal(&graph, &decoded));
+        }
     }
 
     #[test]
