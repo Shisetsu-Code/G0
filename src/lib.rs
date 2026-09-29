@@ -25,6 +25,7 @@ pub mod machine_ir;
 pub mod memory;
 pub mod mir;
 pub mod mir_validate;
+pub mod migration;
 pub mod network;
 pub mod optimize;
 pub mod ownership;
