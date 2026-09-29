@@ -184,6 +184,24 @@ fn validate_instruction(
                 });
             }
         }
+        MirOp::ConvertChecked { .. } => {
+            require_shape(index, instruction, 1, 1, issues);
+            let all_integer = instruction
+                .inputs
+                .iter()
+                .chain(instruction.outputs.iter())
+                .all(|value| {
+                    matches!(
+                        program.values.get(value).map(|value| value.ty),
+                        Some(MirType::Integer(_))
+                    )
+                });
+            if !all_integer {
+                issues.push(MirIssue::TypeMismatch {
+                    instruction: index,
+                });
+            }
+        }
         MirOp::Copy | MirOp::Move => {
             require_shape(index, instruction, 1, 1, issues);
             if let (Some(input), Some(output)) = (
