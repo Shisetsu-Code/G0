@@ -124,7 +124,7 @@ pub enum AuthorityMode {
     DefaultDeny,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParameterPolicy<T> {
     Fixed(T),
     Bounded { min: T, max: T },
