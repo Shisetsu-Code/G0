@@ -128,6 +128,58 @@ fn validate_instruction(
                 issues,
             );
         }
+        MirOp::Compare { .. } => {
+            require_shape(index, instruction, 2, 1, issues);
+            let inputs_are_integer = instruction.inputs.iter().all(|value| {
+                matches!(
+                    program.values.get(value).map(|value| value.ty),
+                    Some(MirType::Integer(_))
+                )
+            });
+            let output_is_bool = instruction
+                .outputs
+                .first()
+                .and_then(|value| program.values.get(value))
+                .map(|value| value.ty)
+                == Some(MirType::Bool);
+            if !inputs_are_integer || !output_is_bool {
+                issues.push(MirIssue::TypeMismatch {
+                    instruction: index,
+                });
+            }
+        }
+        MirOp::BoolBinary { .. } => {
+            require_shape(index, instruction, 2, 1, issues);
+            let all_bool = instruction
+                .inputs
+                .iter()
+                .chain(instruction.outputs.iter())
+                .all(|value| {
+                    program.values.get(value).map(|value| value.ty)
+                        == Some(MirType::Bool)
+                });
+            if !all_bool {
+                issues.push(MirIssue::TypeMismatch {
+                    instruction: index,
+                });
+            }
+        }
+        MirOp::BoolNot => {
+            require_shape(index, instruction, 1, 1, issues);
+            let all_bool = instruction
+                .inputs
+                .iter()
+                .chain(instruction.outputs.iter())
+                .all(|value| {
+                    program.values.get(value).map(|value| value.ty)
+                        == Some(MirType::Bool)
+                });
+            if !all_bool {
+                issues.push(MirIssue::TypeMismatch {
+                    instruction: index,
+                });
+            }
+        }
         MirOp::Copy | MirOp::Move => {
             require_shape(index, instruction, 1, 1, issues);
             if let (Some(input), Some(output)) = (
