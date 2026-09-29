@@ -10,6 +10,7 @@ use crate::machine_ir::{
     lower_mir as lower_machine_ir, MachineLoweringIssue, MachineProgram,
 };
 use crate::mir_validate::{validate_mir, MirIssue};
+use crate::source_map::{build_source_map, SourceMap};
 use crate::x86_codegen::{emit_x86_64, X86CodegenIssue};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +22,7 @@ pub struct CompiledGraph {
     pub machine_ir: MachineProgram,
     pub assembly: String,
     pub invariants: InvariantLedger,
+    pub source_map: SourceMap,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,6 +55,7 @@ pub fn compile_graph(
     }
     let machine_ir =
         lower_machine_ir(&mir, &allocation).map_err(PipelineIssue::Machine)?;
+    let source_map = build_source_map(&machine_ir);
     let assembly =
         emit_x86_64(&machine_ir).map_err(PipelineIssue::Codegen)?;
 
@@ -64,6 +67,7 @@ pub fn compile_graph(
         machine_ir,
         assembly,
         invariants,
+        source_map,
     })
 }
 
