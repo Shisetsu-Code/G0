@@ -1,6 +1,7 @@
 pub mod backend;
 pub mod graph;
 pub mod gir;
+pub mod gir_validate;
 pub mod optimize;
 pub mod parser;
 pub mod validate;
