@@ -133,10 +133,10 @@ pub fn validate(graph: &Graph) -> Result<(), ValidationReport> {
             SourceEndpoint::NodeOutput { node: from, .. },
             TargetEndpoint::NodeInput { node: to, .. },
         ) = (&edge.from, &edge.to)
+            && node_ids.contains(from)
+            && node_ids.contains(to)
         {
-            if node_ids.contains(from) && node_ids.contains(to) {
-                adjacency.entry(*from).or_default().push(*to);
-            }
+            adjacency.entry(*from).or_default().push(*to);
         }
     }
 
@@ -250,16 +250,16 @@ fn validate_operation(node: &Node, report: &mut ValidationReport) {
     match &node.operation {
         Operation::Const(literal) => {
             require_shape(node, 0, 1, report);
-            if let Some(output) = node.outputs.first() {
-                if !literal_fits(literal, &output.ty) {
-                    report.push(
-                        ValidationCode::OperationShape,
-                        format!(
-                            "node {} constant {:?} is incompatible with output type {:?}",
-                            node.id, literal, output.ty
-                        ),
-                    );
-                }
+            if let Some(output) = node.outputs.first()
+                && !literal_fits(literal, &output.ty)
+            {
+                report.push(
+                    ValidationCode::OperationShape,
+                    format!(
+                        "node {} constant {:?} is incompatible with output type {:?}",
+                        node.id, literal, output.ty
+                    ),
+                );
             }
             require_pure(node, report);
         }
