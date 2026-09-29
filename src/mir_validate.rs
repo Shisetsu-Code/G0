@@ -164,6 +164,39 @@ fn validate_instruction(
                 });
             }
         }
+        MirOp::LoopCall { max_iterations, .. } => {
+            if instruction.inputs.len() != 1 {
+                issues.push(MirIssue::WrongInputCount {
+                    instruction: index,
+                    expected: 1,
+                    actual: instruction.inputs.len(),
+                });
+            }
+            if instruction.outputs.len() != 1 {
+                issues.push(MirIssue::WrongOutputCount {
+                    instruction: index,
+                    expected: 1,
+                    actual: instruction.outputs.len(),
+                });
+            }
+            if *max_iterations == 0 {
+                issues.push(MirIssue::WrongInputCount {
+                    instruction: index,
+                    expected: 1,
+                    actual: 0,
+                });
+            }
+            if let (Some(input), Some(output)) = (
+                instruction.inputs.first(),
+                instruction.outputs.first(),
+            ) && program.values.get(input).map(|value| value.ty)
+                != program.values.get(output).map(|value| value.ty)
+            {
+                issues.push(MirIssue::TypeMismatch {
+                    instruction: index,
+                });
+            }
+        }
         MirOp::Load | MirOp::Store | MirOp::Call { .. } => {}
     }
 }
