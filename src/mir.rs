@@ -58,10 +58,12 @@ pub enum MirOp {
     Div {
         mode: ArithmeticMode,
         signed: bool,
+        compute_width: IntegerWidth,
     },
     Rem {
         mode: ArithmeticMode,
         signed: bool,
+        compute_width: IntegerWidth,
     },
     Compare {
         kind: CompareKind,
@@ -202,20 +204,27 @@ pub fn lower_graph(graph: &Graph) -> Result<MirProgram, Vec<LoweringIssue>> {
                 mode: ArithmeticMode::Checked,
             }),
             Operation::Div | Operation::Rem => {
-                let signed = node.inputs.iter().any(|port| {
-                    matches!(
-                        &port.ty,
-                        SemanticType::Integer(range) if range.min < 0
-                    )
-                });
+                let ranges: Vec<&IntegerType> = node
+                    .inputs
+                    .iter()
+                    .filter_map(|port| match &port.ty {
+                        SemanticType::Integer(range) => Some(range),
+                        _ => None,
+                    })
+                    .collect();
+                let signed = ranges.iter().any(|range| range.min < 0);
+                let compute_width =
+                    division_compute_width(&ranges, signed);
                 Some(match node.operation {
                     Operation::Div => MirOp::Div {
                         mode: ArithmeticMode::Checked,
                         signed,
+                        compute_width,
                     },
                     Operation::Rem => MirOp::Rem {
                         mode: ArithmeticMode::Checked,
                         signed,
+                        compute_width,
                     },
                     _ => unreachable!(),
                 })
@@ -350,6 +359,30 @@ pub fn lower_graph(graph: &Graph) -> Result<MirProgram, Vec<LoweringIssue>> {
         Ok(program)
     } else {
         Err(issues)
+    }
+}
+
+fn division_compute_width(
+    ranges: &[&IntegerType],
+    signed: bool,
+) -> IntegerWidth {
+    let min = ranges.iter().map(|range| range.min).min().unwrap_or(0);
+    let max = ranges.iter().map(|range| range.max).max().unwrap_or(0);
+
+    if !signed {
+        return choose_integer_width(&IntegerType { min: 0, max });
+    }
+
+    if min >= i8::MIN as i128 && max <= i8::MAX as i128 {
+        IntegerWidth::I8
+    } else if min >= i16::MIN as i128 && max <= i16::MAX as i128 {
+        IntegerWidth::I16
+    } else if min >= i32::MIN as i128 && max <= i32::MAX as i128 {
+        IntegerWidth::I32
+    } else if min >= i64::MIN as i128 && max <= i64::MAX as i128 {
+        IntegerWidth::I64
+    } else {
+        IntegerWidth::I128
     }
 }
 
