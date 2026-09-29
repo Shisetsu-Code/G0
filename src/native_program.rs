@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 
 use crate::abi::graph_symbol;
-use crate::call_graph::{build_call_graph, reachable_from, CallGraphIssue};
+use crate::call_graph::{
+    build_call_graph, reachable_program_graphs, CallGraphIssue,
+};
 use crate::compiler::{compile_graph, CompiledGraph, PipelineIssue};
 use crate::machine::MachineProfile;
 use crate::program::{validate_program, PlatformContract, ProgramContract, ProgramIssue};
@@ -56,7 +58,8 @@ pub fn compile_program(
         &program.external_subgraphs,
     )
     .map_err(ProgramCompileIssue::CallGraph)?;
-    let reachable = reachable_from(&call_graph, &entry);
+    let reachable =
+        reachable_program_graphs(&call_graph, &program.graphs, &entry);
 
     let mut graphs = BTreeMap::new();
     let mut assembly = String::new();
