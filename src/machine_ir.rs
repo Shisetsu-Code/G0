@@ -48,6 +48,7 @@ pub struct MachineInstruction {
 pub struct MachineProgram {
     pub operations: Vec<MachineInstruction>,
     pub stack_bytes: u32,
+    pub outputs: Vec<PhysicalLocation>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -212,9 +213,18 @@ pub fn lower_mir(
     }
 
     if issues.is_empty() {
+        let mut outputs = Vec::with_capacity(mir.outputs.len());
+        for value in &mir.outputs {
+            let Some(output) = location(allocation, *value) else {
+                return Err(vec![MachineLoweringIssue::MissingLocation(*value)]);
+            };
+            outputs.push(output);
+        }
+
         Ok(MachineProgram {
             operations,
             stack_bytes: allocation.stack_bytes,
+            outputs,
         })
     } else {
         Err(issues)
