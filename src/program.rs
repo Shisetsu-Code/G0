@@ -32,6 +32,7 @@ use crate::network::{
 use crate::ownership::{
     validate_ownership, OwnershipIssue, OwnershipPlan,
 };
+use crate::query::{validate_query, QueryIssue, QuerySpec};
 use crate::runtime::{validate_region_plan, RegionIssue, RegionPlan};
 use crate::scheduler::{
     validate_schedule, ScheduleGraph, ScheduleIssue, SchedulerProfile,
@@ -80,6 +81,7 @@ pub struct ProgramContract {
     pub time_uses: Vec<(ClockKind, TimeUse)>,
     pub randomness_uses: Vec<(RandomnessClass, RandomUse)>,
     pub schedules: Vec<ScheduleGraph>,
+    pub queries: Vec<QuerySpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,6 +156,10 @@ pub enum ProgramIssue {
     Schedule {
         schedule: usize,
         issues: Vec<ScheduleIssue>,
+    },
+    Query {
+        query: usize,
+        issues: Vec<QueryIssue>,
     },
     Security(Vec<SecurityContractIssue>),
 }
@@ -323,6 +329,15 @@ pub fn validate_program(
             issues.push(ProgramIssue::Schedule {
                 schedule: index,
                 issues: schedule_issues,
+            });
+        }
+    }
+
+    for (index, query) in program.queries.iter().enumerate() {
+        if let Err(query_issues) = validate_query(&program.store, query) {
+            issues.push(ProgramIssue::Query {
+                query: index,
+                issues: query_issues,
             });
         }
     }
