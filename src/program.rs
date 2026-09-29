@@ -7,9 +7,16 @@ use crate::crypto::{
 };
 use crate::gir::Graph;
 use crate::gir_validate::{self, ValidationIssue};
+use crate::math::{
+    validate_math_requirement, MathContractIssue, MathOperation, MathProfile,
+    MathRequirement,
+};
 use crate::network::{
     validate_network_profile, ConnectionRequirement, NetworkProfile,
     NetworkProfileIssue,
+};
+use crate::ownership::{
+    validate_ownership, OwnershipIssue, OwnershipPlan,
 };
 use crate::security::{
     validate_password_contract, PasswordTuning, SecurityContractIssue,
@@ -18,6 +25,21 @@ use crate::security::{
 use crate::storage::{
     validate_store_schema, StorageSchemaIssue, StoreSchema,
 };
+use crate::text::{
+    validate_text_contract, TextContract, TextContractIssue,
+};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MathUse {
+    pub operation: MathOperation,
+    pub requirement: MathRequirement,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GraphOwnership {
+    pub graph: String,
+    pub plan: OwnershipPlan,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ProgramContract {
@@ -26,6 +48,8 @@ pub struct ProgramContract {
     pub concurrent_regions: Vec<ConcurrentRegion>,
     pub connections: Vec<ConnectionRequirement>,
     pub crypto: Vec<CryptoRequirement>,
+    pub math: Vec<MathUse>,
+    pub ownership: Vec<GraphOwnership>,
     pub password_tuning: Option<PasswordTuning>,
 }
 
@@ -34,6 +58,8 @@ pub struct PlatformContract {
     pub network: NetworkProfile,
     pub crypto: CryptoProfile,
     pub security: SecurityProfile,
+    pub math: MathProfile,
+    pub text: TextContract,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,6 +81,16 @@ pub enum ProgramIssue {
         requirement: usize,
         issues: Vec<CryptoProfileIssue>,
     },
+    Math {
+        requirement: usize,
+        issues: Vec<MathContractIssue>,
+    },
+    Ownership {
+        graph: String,
+        issues: Vec<OwnershipIssue>,
+    },
+    OwnershipUnknownGraph(String),
+    Text(Vec<TextContractIssue>),
     Security(Vec<SecurityContractIssue>),
 }
 
@@ -108,6 +144,41 @@ pub fn validate_program(
         }
     }
 
+    for (index, math_use) in program.math.iter().enumerate() {
+        if let Err(math_issues) = validate_math_requirement(
+            &platform.math,
+            math_use.operation,
+            math_use.requirement,
+        ) {
+            issues.push(ProgramIssue::Math {
+                requirement: index,
+                issues: math_issues,
+            });
+        }
+    }
+
+    for ownership in &program.ownership {
+        match program.graphs.iter().find(|graph| graph.name == ownership.graph) {
+            Some(graph) => {
+                if let Err(ownership_issues) =
+                    validate_ownership(graph, &ownership.plan)
+                {
+                    issues.push(ProgramIssue::Ownership {
+                        graph: ownership.graph.clone(),
+                        issues: ownership_issues,
+                    });
+                }
+            }
+            None => issues.push(ProgramIssue::OwnershipUnknownGraph(
+                ownership.graph.clone(),
+            )),
+        }
+    }
+
+    if let Err(text_issues) = validate_text_contract(&platform.text) {
+        issues.push(ProgramIssue::Text(text_issues));
+    }
+
     if let Some(password_tuning) = program.password_tuning
         && let Err(security_issues) =
             validate_password_contract(&platform.security, password_tuning)
@@ -132,7 +203,9 @@ mod tests {
     };
     use crate::crypto::{CryptoGuarantee, CryptoPrimitive};
     use crate::gir::ParameterPolicy;
+    use crate::math::{MathMode, RoundingMode};
     use crate::network::ConnectionFeature;
+    use crate::text::TextContract;
     use crate::storage::{Cardinality, DeleteRule, RelationSchema, ResourceSchema};
 
     fn platform() -> PlatformContract {
@@ -172,6 +245,19 @@ mod tests {
                 uniform_public_auth_failure: true,
                 credential_storage_is_verifier_only: true,
             },
+            math: MathProfile {
+                id: "math.current".into(),
+                max_precision_bits: 4096,
+                deterministic: true,
+                correctly_rounded_transcendentals: true,
+                supported_rounding: vec![
+                    RoundingMode::NearestEven,
+                    RoundingMode::TowardZero,
+                    RoundingMode::TowardPositive,
+                    RoundingMode::TowardNegative,
+                ],
+            },
+            text: TextContract::strict("platform-selected"),
         }
     }
 
@@ -245,6 +331,44 @@ mod tests {
             issues
                 .iter()
                 .any(|issue| matches!(issue, ProgramIssue::Security(_)))
+        );
+    }
+
+    #[test]
+    fn math_precision_is_part_of_program_validation() {
+        let program = ProgramContract {
+            math: vec![MathUse {
+                operation: MathOperation::Sin,
+                requirement: MathRequirement {
+                    mode: MathMode::Exact,
+                    precision_bits: ParameterPolicy::Fixed(256),
+                    rounding: RoundingMode::NearestEven,
+                    max_relative_error_ppb: Some(0),
+                    allow_reassociation: false,
+                },
+            }],
+            ..ProgramContract::default()
+        };
+
+        let issues = validate_program(&program, &platform()).unwrap_err();
+        assert!(
+            issues
+                .iter()
+                .any(|issue| matches!(issue, ProgramIssue::Math { .. }))
+        );
+    }
+
+    #[test]
+    fn invalid_text_platform_contract_blocks_program() {
+        let mut platform = platform();
+        platform.text.allow_raw_byte_indexing = true;
+
+        let issues =
+            validate_program(&ProgramContract::default(), &platform).unwrap_err();
+        assert!(
+            issues
+                .iter()
+                .any(|issue| matches!(issue, ProgramIssue::Text(_)))
         );
     }
 
