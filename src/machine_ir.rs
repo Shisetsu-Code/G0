@@ -338,6 +338,7 @@ mod tests {
     #[test]
     fn checked_add_lowers_to_three_operand_machine_op() {
         let mir = MirProgram {
+            inputs: vec![],
             values: BTreeMap::from([
                 (
                     0,
