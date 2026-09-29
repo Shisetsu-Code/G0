@@ -242,6 +242,20 @@ fn read_operation(reader: &mut Reader<'_>) -> Result<Operation, BinaryDecodeIssu
         24 => Operation::Xor,
         25 => Operation::Not,
         28 => Operation::ConvertChecked,
+        29 => {
+            let bits = reader.u16()?;
+            let signed = match reader.u8()? {
+                0 => false,
+                1 => true,
+                tag => {
+                    return Err(BinaryDecodeIssue::InvalidTag {
+                        domain: "truncate signed flag",
+                        tag,
+                    });
+                }
+            };
+            Operation::Truncate { bits, signed }
+        }
         4 => Operation::Select {
             when_true: reader.string()?,
             when_false: reader.string()?,
