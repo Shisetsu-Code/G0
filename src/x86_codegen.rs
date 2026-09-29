@@ -8,6 +8,10 @@ use crate::memory::IntegerWidth;
 pub enum X86CodegenIssue {
     Unsupported128BitInteger,
     UnsupportedStackWidth(u16),
+    StackTypeWidthMismatch {
+        slot_bytes: u16,
+        type_bytes: u16,
+    },
     ImmediateOutOfRange(i128),
     InvalidCallTarget(String),
     UnsupportedReturnArity(usize),
@@ -136,8 +140,13 @@ pub fn emit_x86_64(
 
     match program.outputs.as_slice() {
         [] => {}
-        [location] => {
-            if let Err(issue) = load_to_register(&mut out, "rax", *location) {
+        [output] => {
+            if let Err(issue) = load_to_register(
+                &mut out,
+                "rax",
+                output.location,
+                output.ty,
+            ) {
                 issues.push(issue);
             }
         }
@@ -170,17 +179,21 @@ fn emit_move(
     out: &mut String,
     dst: PhysicalLocation,
     src: MachineOperand,
+    ty: MachineValueType,
 ) -> Result<(), X86CodegenIssue> {
     match src {
         MachineOperand::Immediate(value) => {
             emit_immediate_to_rax(out, value)?;
         }
-        MachineOperand::Location(location) => {
-            load_to_register(out, "rax", location)?;
+        MachineOperand::Location {
+            location,
+            ty: source_ty,
+        } => {
+            load_to_register(out, "rax", location, source_ty)?;
         }
     }
 
-    store_from_register(out, dst, "rax")
+    store_from_register(out, dst, "rax", ty)
 }
 
 fn emit_checked_binary(
@@ -189,17 +202,13 @@ fn emit_checked_binary(
     dst: PhysicalLocation,
     left: MachineOperand,
     right: MachineOperand,
+    _left_width: IntegerWidth,
+    _right_width: IntegerWidth,
     width: IntegerWidth,
     trap: &str,
 ) -> Result<(), X86CodegenIssue> {
     if matches!(width, IntegerWidth::U128 | IntegerWidth::I128) {
         return Err(X86CodegenIssue::Unsupported128BitInteger);
-    }
-
-    if matches!(left, MachineOperand::Location(PhysicalLocation::Stack { .. }))
-        || matches!(right, MachineOperand::Location(PhysicalLocation::Stack { .. }))
-    {
-        return Err(X86CodegenIssue::ArithmeticSpillUnsupported);
     }
 
     load_operand_to_register(out, "rax", left)?;
@@ -224,7 +233,12 @@ fn emit_checked_binary(
         _ => unreachable!(),
     }
 
-    store_from_register(out, dst, "rax")
+    store_from_register(
+        out,
+        dst,
+        "rax",
+        MachineValueType::Integer(width),
+    )
 }
 
 fn emit_overflow_guard(
