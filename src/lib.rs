@@ -12,6 +12,7 @@ pub mod information_flow;
 pub mod math;
 pub mod network;
 pub mod optimize;
+pub mod ownership;
 pub mod parser;
 pub mod program;
 pub mod profiling;
