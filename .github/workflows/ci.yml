@@ -60,3 +60,14 @@ jobs:
           EOF
           cc target/native_divrem.s target/native_divrem_harness.c -o target/native_divrem
           ./target/native_divrem
+      - name: Compile and execute checked conversion
+        run: |
+          cargo run --release --example native_convert > target/native_convert.s
+          cat > target/native_convert_harness.c <<'EOF'
+          long g0_machine_main(void);
+          int main(void) {
+              return g0_machine_main() == 200 ? 0 : 1;
+          }
+          EOF
+          cc target/native_convert.s target/native_convert_harness.c -o target/native_convert
+          ./target/native_convert
