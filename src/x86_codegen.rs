@@ -619,6 +619,84 @@ mod tests {
     }
 
     #[test]
+    fn signed_spill_reload_uses_sign_extension() {
+        let stack = PhysicalLocation::Stack {
+            offset: 0,
+            bytes: 1,
+        };
+        let program = MachineProgram {
+            operations: vec![
+                MachineInstruction {
+                    source_node: 1,
+                    op: MachineOp::Move {
+                        dst: stack,
+                        src: MachineOperand::Immediate(-1),
+                        ty: MachineValueType::Integer(IntegerWidth::I8),
+                    },
+                },
+                MachineInstruction {
+                    source_node: 2,
+                    op: MachineOp::Move {
+                        dst: PhysicalLocation::Register(Gpr::Rcx),
+                        src: MachineOperand::Location {
+                            location: stack,
+                            ty: MachineValueType::Integer(IntegerWidth::I8),
+                        },
+                        ty: MachineValueType::Integer(IntegerWidth::I8),
+                    },
+                },
+            ],
+            stack_bytes: 16,
+            outputs: vec![MachineOutput {
+                location: PhysicalLocation::Register(Gpr::Rcx),
+                ty: MachineValueType::Integer(IntegerWidth::I8),
+            }],
+        };
+
+        let asm = emit_x86_64(&program).unwrap();
+        assert!(asm.contains("movsx rax, BYTE PTR"));
+    }
+
+    #[test]
+    fn unsigned_spill_reload_uses_zero_extension() {
+        let stack = PhysicalLocation::Stack {
+            offset: 0,
+            bytes: 1,
+        };
+        let program = MachineProgram {
+            operations: vec![
+                MachineInstruction {
+                    source_node: 1,
+                    op: MachineOp::Move {
+                        dst: stack,
+                        src: MachineOperand::Immediate(255),
+                        ty: MachineValueType::Integer(IntegerWidth::U8),
+                    },
+                },
+                MachineInstruction {
+                    source_node: 2,
+                    op: MachineOp::Move {
+                        dst: PhysicalLocation::Register(Gpr::Rcx),
+                        src: MachineOperand::Location {
+                            location: stack,
+                            ty: MachineValueType::Integer(IntegerWidth::U8),
+                        },
+                        ty: MachineValueType::Integer(IntegerWidth::U8),
+                    },
+                },
+            ],
+            stack_bytes: 16,
+            outputs: vec![MachineOutput {
+                location: PhysicalLocation::Register(Gpr::Rcx),
+                ty: MachineValueType::Integer(IntegerWidth::U8),
+            }],
+        };
+
+        let asm = emit_x86_64(&program).unwrap();
+        assert!(asm.contains("movzx rax, BYTE PTR"));
+    }
+
+    #[test]
     fn unsafe_call_symbol_is_rejected() {
         let program = MachineProgram {
             operations: vec![MachineInstruction {
