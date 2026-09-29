@@ -33,6 +33,9 @@ use crate::ownership::{
     validate_ownership, OwnershipIssue, OwnershipPlan,
 };
 use crate::runtime::{validate_region_plan, RegionIssue, RegionPlan};
+use crate::scheduler::{
+    validate_schedule, ScheduleGraph, ScheduleIssue, SchedulerProfile,
+};
 use crate::security::{
     validate_password_contract, PasswordTuning, SecurityContractIssue,
     SecurityProfile,
@@ -76,6 +79,7 @@ pub struct ProgramContract {
     pub schemas: Vec<DataSchema>,
     pub time_uses: Vec<(ClockKind, TimeUse)>,
     pub randomness_uses: Vec<(RandomnessClass, RandomUse)>,
+    pub schedules: Vec<ScheduleGraph>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,6 +90,7 @@ pub struct PlatformContract {
     pub math: MathProfile,
     pub text: TextContract,
     pub hardware: HardwareProfile,
+    pub scheduler: SchedulerProfile,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,6 +150,10 @@ pub enum ProgramIssue {
     Entropy {
         usage: usize,
         issue: EntropyIssue,
+    },
+    Schedule {
+        schedule: usize,
+        issues: Vec<ScheduleIssue>,
     },
     Security(Vec<SecurityContractIssue>),
 }
@@ -307,6 +316,17 @@ pub fn validate_program(
         }
     }
 
+    for (index, schedule) in program.schedules.iter().enumerate() {
+        if let Err(schedule_issues) =
+            validate_schedule(schedule, &platform.scheduler)
+        {
+            issues.push(ProgramIssue::Schedule {
+                schedule: index,
+                issues: schedule_issues,
+            });
+        }
+    }
+
     if let Some(password_tuning) = program.password_tuning
         && let Err(security_issues) =
             validate_password_contract(&platform.security, password_tuning)
@@ -388,6 +408,11 @@ mod tests {
                 ],
             },
             text: TextContract::strict("platform-selected"),
+            scheduler: SchedulerProfile {
+                parallel_capacity: 12,
+                work_stealing: true,
+                numa_aware: true,
+            },
             hardware: HardwareProfile {
                 id: "x86_64-v3-dev".into(),
                 logical_cores: 12,
@@ -655,6 +680,42 @@ mod tests {
         }));
         assert!(issues.iter().any(|issue| {
             matches!(issue, ProgramIssue::Entropy { .. })
+        }));
+    }
+
+    #[test]
+    fn invalid_schedule_is_rejected_by_program_gate() {
+        use crate::scheduler::{
+            Affinity, ParallelismPolicy, SchedulingClass, TaskSpec,
+        };
+
+        let program = ProgramContract {
+            schedules: vec![ScheduleGraph {
+                tasks: vec![
+                    TaskSpec {
+                        id: 1,
+                        dependencies: [2].into_iter().collect(),
+                        class: SchedulingClass::Throughput,
+                        parallelism: ParallelismPolicy::Auto,
+                        affinity: Affinity::Any,
+                        estimated_cost_ns: 1,
+                    },
+                    TaskSpec {
+                        id: 2,
+                        dependencies: [1].into_iter().collect(),
+                        class: SchedulingClass::Throughput,
+                        parallelism: ParallelismPolicy::Auto,
+                        affinity: Affinity::Any,
+                        estimated_cost_ns: 1,
+                    },
+                ],
+            }],
+            ..ProgramContract::default()
+        };
+
+        let issues = validate_program(&program, &platform()).unwrap_err();
+        assert!(issues.iter().any(|issue| {
+            matches!(issue, ProgramIssue::Schedule { .. })
         }));
     }
 
