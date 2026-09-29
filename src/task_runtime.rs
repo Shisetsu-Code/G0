@@ -126,6 +126,37 @@ pub fn validate_task_plan(plan: &TaskPlan) -> Result<(), Vec<TaskPlanIssue>> {
     if issues.is_empty() { Ok(()) } else { Err(issues) }
 }
 
+pub fn tasks_cancelled_with_scope(
+    plan: &TaskPlan,
+    cancelled_scope: u32,
+) -> Vec<u32> {
+    use std::collections::BTreeSet;
+
+    let mut cancelled_scopes = BTreeSet::from([cancelled_scope]);
+    let mut changed = true;
+
+    while changed {
+        changed = false;
+        for scope in &plan.scopes {
+            if let Some(parent) = scope.parent
+                && cancelled_scopes.contains(&parent)
+                && cancelled_scopes.insert(scope.id)
+            {
+                changed = true;
+            }
+        }
+    }
+
+    let mut tasks: Vec<u32> = plan
+        .tasks
+        .iter()
+        .filter(|task| cancelled_scopes.contains(&task.scope))
+        .map(|task| task.id)
+        .collect();
+    tasks.sort_unstable();
+    tasks
+}
+
 fn exceeds_u128(child: Option<u128>, parent: Option<u128>) -> bool {
     match (child, parent) {
         (Some(child), Some(parent)) => child > parent,
@@ -145,6 +176,43 @@ fn exceeds_u64(child: Option<u64>, parent: Option<u64>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancellation_propagates_to_child_scopes() {
+        let budget = ResourceBudget {
+            cpu_ns: None,
+            wall_ns: None,
+            memory_bytes: None,
+        };
+        let plan = TaskPlan {
+            scopes: vec![
+                CancellationScope {
+                    id: 1,
+                    parent: None,
+                    budget,
+                },
+                CancellationScope {
+                    id: 2,
+                    parent: Some(1),
+                    budget,
+                },
+            ],
+            tasks: vec![
+                RuntimeTask {
+                    id: 10,
+                    scope: 1,
+                    budget,
+                },
+                RuntimeTask {
+                    id: 20,
+                    scope: 2,
+                    budget,
+                },
+            ],
+        };
+
+        assert_eq!(tasks_cancelled_with_scope(&plan, 1), vec![10, 20]);
+    }
 
     #[test]
     fn child_cannot_be_less_bounded_than_parent() {
