@@ -154,6 +154,16 @@ fn inline_one(
     call_stack.push(callee.name.clone());
 
     let incoming = input_sources(&result.graph, &call_node)?;
+    let incoming_by_callee_port: BTreeMap<u16, SourceEndpoint> = callee
+        .inputs
+        .iter()
+        .filter_map(|port| {
+            incoming
+                .get(&port.name)
+                .cloned()
+                .map(|source| (port.id, source))
+        })
+        .collect();
     let outgoing = output_targets(&result.graph, &call_node);
 
     let mut next_id = result
@@ -196,7 +206,11 @@ fn inline_one(
             continue;
         }
 
-        let from = map_source(&edge.from, &id_map, &incoming)?;
+        let from = map_source(
+            &edge.from,
+            &id_map,
+            &incoming_by_callee_port,
+        )?;
         let to = match edge.to {
             TargetEndpoint::NodeInput { node, port } => {
                 TargetEndpoint::NodeInput {
@@ -313,7 +327,7 @@ fn output_targets(
 fn map_source(
     source: &SourceEndpoint,
     ids: &BTreeMap<NodeId, NodeId>,
-    incoming: &BTreeMap<String, SourceEndpoint>,
+    incoming: &BTreeMap<u16, SourceEndpoint>,
 ) -> Result<SourceEndpoint, Vec<InlineIssue>> {
     match source {
         SourceEndpoint::NodeOutput { node, port } => {
@@ -322,12 +336,15 @@ fn map_source(
                 port: *port,
             })
         }
-        SourceEndpoint::GraphInput(port) => {
-            Err(vec![InlineIssue::MissingCalleeOutput {
-                callee: "internal-input-name-required".into(),
-                port: port.to_string(),
-            }])
-        }
+        SourceEndpoint::GraphInput(port) => incoming
+            .get(port)
+            .cloned()
+            .ok_or_else(|| {
+                vec![InlineIssue::MissingCalleeOutput {
+                    callee: "callee-input".into(),
+                    port: port.to_string(),
+                }]
+            }),
     }
 }
 
