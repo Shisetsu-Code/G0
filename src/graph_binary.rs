@@ -249,6 +249,11 @@ fn put_operation(
         Operation::Xor => put_u8(out, 24),
         Operation::Not => put_u8(out, 25),
         Operation::ConvertChecked => put_u8(out, 28),
+        Operation::Truncate { bits, signed } => {
+            put_u8(out, 29);
+            put_u16(out, *bits);
+            put_u8(out, u8::from(*signed));
+        }
         Operation::Select {
             when_true,
             when_false,
