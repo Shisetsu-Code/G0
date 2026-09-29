@@ -1,11 +1,12 @@
 use crate::machine::{Gpr, PhysicalLocation};
-use crate::machine_ir::{MachineOp, MachineOperand, MachineProgram};
+use crate::machine_ir::{
+    MachineOp, MachineOperand, MachineProgram, MachineValueType,
+};
 use crate::memory::IntegerWidth;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum X86CodegenIssue {
     Unsupported128BitInteger,
-    ArithmeticSpillUnsupported,
     UnsupportedStackWidth(u16),
     ImmediateOutOfRange(i128),
     InvalidCallTarget(String),
@@ -38,8 +39,8 @@ pub fn emit_x86_64(
             instruction.source_node
         ));
         match &instruction.op {
-            MachineOp::Move { dst, src } => {
-                if let Err(issue) = emit_move(&mut out, *dst, *src) {
+            MachineOp::Move { dst, src, ty } => {
+                if let Err(issue) = emit_move(&mut out, *dst, *src, *ty) {
                     issues.push(issue);
                 }
             }
@@ -47,6 +48,8 @@ pub fn emit_x86_64(
                 dst,
                 left,
                 right,
+                left_width,
+                right_width,
                 width,
             } => {
                 let trap = format!(".Ltrap_{}", trap_index);
@@ -57,6 +60,8 @@ pub fn emit_x86_64(
                     *dst,
                     *left,
                     *right,
+                    *left_width,
+                    *right_width,
                     *width,
                     &trap,
                 ) {
@@ -69,6 +74,8 @@ pub fn emit_x86_64(
                 dst,
                 left,
                 right,
+                left_width,
+                right_width,
                 width,
             } => {
                 let trap = format!(".Ltrap_{}", trap_index);
@@ -79,6 +86,8 @@ pub fn emit_x86_64(
                     *dst,
                     *left,
                     *right,
+                    *left_width,
+                    *right_width,
                     *width,
                     &trap,
                 ) {
@@ -91,6 +100,8 @@ pub fn emit_x86_64(
                 dst,
                 left,
                 right,
+                left_width,
+                right_width,
                 width,
             } => {
                 let trap = format!(".Ltrap_{}", trap_index);
@@ -101,6 +112,8 @@ pub fn emit_x86_64(
                     *dst,
                     *left,
                     *right,
+                    *left_width,
+                    *right_width,
                     *width,
                     &trap,
                 ) {
