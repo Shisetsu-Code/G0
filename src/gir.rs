@@ -7,7 +7,11 @@ pub type PortId = u16;
 pub enum SemanticType {
     Bool,
     Integer(IntegerType),
+    BigInteger,
+    Rational,
+    Decimal(DecimalType),
     Float(FloatType),
+    BigFloat(BigFloatType),
     Text,
     Bytes,
     Array(Box<SemanticType>, usize),
@@ -54,6 +58,41 @@ impl IntegerType {
 
     pub fn contains(&self, other: &Self) -> bool {
         self.min <= other.min && self.max >= other.max
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DecimalType {
+    pub precision_digits: u32,
+    pub scale: i32,
+}
+
+impl DecimalType {
+    pub fn new(
+        precision_digits: u32,
+        scale: i32,
+    ) -> Result<Self, &'static str> {
+        if precision_digits == 0 {
+            return Err("decimal precision must be greater than zero");
+        }
+        Ok(Self {
+            precision_digits,
+            scale,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct BigFloatType {
+    pub precision_bits: u32,
+}
+
+impl BigFloatType {
+    pub fn new(precision_bits: u32) -> Result<Self, &'static str> {
+        if precision_bits < 2 {
+            return Err("big-float precision must be at least 2 bits");
+        }
+        Ok(Self { precision_bits })
     }
 }
 
@@ -255,6 +294,27 @@ mod tests {
         let narrow = IntegerType::new(10, 20).unwrap();
         assert!(wide.contains(&narrow));
         assert!(!narrow.contains(&wide));
+    }
+
+    #[test]
+    fn arbitrary_precision_numeric_types_are_semantic_types() {
+        let decimal = SemanticType::Decimal(
+            DecimalType::new(50, 8).unwrap(),
+        );
+        let big_float = SemanticType::BigFloat(
+            BigFloatType::new(1024).unwrap(),
+        );
+
+        assert!(matches!(decimal, SemanticType::Decimal(_)));
+        assert!(matches!(big_float, SemanticType::BigFloat(_)));
+        assert!(matches!(
+            SemanticType::BigInteger,
+            SemanticType::BigInteger
+        ));
+        assert!(matches!(
+            SemanticType::Rational,
+            SemanticType::Rational
+        ));
     }
 
     #[test]
