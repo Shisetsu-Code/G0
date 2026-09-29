@@ -31,6 +31,7 @@ pub mod package;
 pub mod parser;
 pub mod program;
 pub mod profiling;
+pub mod query;
 pub mod runtime;
 pub mod scheduler;
 pub mod security;
