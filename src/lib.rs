@@ -40,6 +40,7 @@ pub mod optimizer_feedback;
 pub mod ownership;
 pub mod package;
 pub mod parser;
+pub mod performance_gate;
 pub mod policy_plan;
 pub mod program;
 pub mod profiling;
