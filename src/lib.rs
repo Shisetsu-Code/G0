@@ -1,4 +1,5 @@
 pub mod artifact;
+pub mod auth;
 pub mod authority;
 pub mod backend;
 pub mod build_lock;
