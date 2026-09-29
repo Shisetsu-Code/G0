@@ -247,6 +247,8 @@ pub enum Operation {
     Add,
     Sub,
     Mul,
+    Div,
+    Rem,
     Eq,
     Lt,
     Le,
