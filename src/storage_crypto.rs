@@ -43,6 +43,14 @@ pub enum StorageCryptoIssue {
     MissingTenantBinding,
     MissingResourceBinding,
     MissingFieldBinding,
+    MissingProtectedFieldBinding {
+        resource: String,
+        field: String,
+    },
+    DuplicateProtectedFieldBinding {
+        resource: String,
+        field: String,
+    },
 }
 
 pub fn validate_storage_crypto_profile(
@@ -119,6 +127,36 @@ pub fn validate_field_binding(
     } else {
         Err(issues)
     }
+}
+
+pub fn validate_binding_coverage(
+    store: &StoreSchema,
+    bindings: &[ProtectedFieldBinding],
+) -> Result<(), Vec<StorageCryptoIssue>> {
+    let required = required_bindings(store);
+    let mut seen = BTreeSet::new();
+    let mut issues = Vec::new();
+
+    for binding in bindings {
+        let key = (binding.resource.clone(), binding.field.clone());
+        if !seen.insert(key.clone()) {
+            issues.push(StorageCryptoIssue::DuplicateProtectedFieldBinding {
+                resource: key.0,
+                field: key.1,
+            });
+        }
+    }
+
+    for (resource, field) in required {
+        if !seen.contains(&(resource.clone(), field.clone())) {
+            issues.push(StorageCryptoIssue::MissingProtectedFieldBinding {
+                resource,
+                field,
+            });
+        }
+    }
+
+    if issues.is_empty() { Ok(()) } else { Err(issues) }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -225,6 +263,19 @@ mod tests {
         assert!(
             validate_field_binding(&store(), &profile(), &binding).is_ok()
         );
+    }
+
+    #[test]
+    fn every_private_field_requires_crypto_binding() {
+        assert!(matches!(
+            validate_binding_coverage(&store(), &[]),
+            Err(issues) if issues.contains(
+                &StorageCryptoIssue::MissingProtectedFieldBinding {
+                    resource: "User".into(),
+                    field: "email".into(),
+                }
+            )
+        ));
     }
 
     #[test]
