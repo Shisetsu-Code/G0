@@ -48,6 +48,34 @@ fn fold_constants(
 
         for node_index in 0..graph.nodes.len() {
             let node = &snapshot.nodes[node_index];
+
+            if node.operation == Operation::ConvertChecked {
+                if let Some(value) =
+                    constant_single_integer_input(&snapshot, node.id)
+                    && let Some(crate::gir::SemanticType::Integer(range)) =
+                        node.outputs.first().map(|port| &port.ty)
+                    && value >= range.min
+                    && value <= range.max
+                {
+                    let target = &mut graph.nodes[node_index];
+                    target.operation =
+                        Operation::Const(Literal::Integer(value));
+                    target.inputs.clear();
+                    graph.edges.retain(|edge| {
+                        !matches!(
+                            edge.to,
+                            TargetEndpoint::NodeInput {
+                                node: id,
+                                ..
+                            } if id == node.id
+                        )
+                    });
+                    report.folded_nodes.insert(node.id);
+                    changed = true;
+                    continue;
+                }
+            }
+
             let arithmetic = matches!(
                 node.operation,
                 Operation::Add
@@ -116,6 +144,37 @@ fn fold_constants(
     }
 
     Ok(())
+}
+
+fn constant_single_integer_input(
+    graph: &Graph,
+    node: NodeId,
+) -> Option<i128> {
+    let target = graph.nodes.iter().find(|item| item.id == node)?;
+    let input = target.inputs.first()?;
+    let edge = graph.edges.iter().find(|edge| {
+        matches!(
+            edge.to,
+            TargetEndpoint::NodeInput {
+                node: id,
+                port
+            } if id == node && port == input.id
+        )
+    })?;
+
+    let SourceEndpoint::NodeOutput {
+        node: source,
+        ..
+    } = edge.from
+    else {
+        return None;
+    };
+    let source_node = graph.nodes.iter().find(|item| item.id == source)?;
+    let Operation::Const(Literal::Integer(value)) = source_node.operation
+    else {
+        return None;
+    };
+    Some(value)
 }
 
 fn constant_integer_inputs(
