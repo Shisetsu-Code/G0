@@ -24,6 +24,7 @@ pub mod hardware;
 pub mod information_flow;
 pub mod ingress;
 pub mod invariants;
+pub mod instrumentation;
 pub mod io;
 pub mod math;
 pub mod math_lowering;
