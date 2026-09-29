@@ -4,8 +4,18 @@ use crate::gir::NodeId;
 use crate::mir::{ArithmeticMode, MirOp, MirProgram, MirType, ValueId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MachineValueType {
+    Bool,
+    Integer(IntegerWidth),
+    Pointer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MachineOperand {
-    Location(PhysicalLocation),
+    Location {
+        location: PhysicalLocation,
+        ty: MachineValueType,
+    },
     Immediate(i128),
 }
 
@@ -14,23 +24,30 @@ pub enum MachineOp {
     Move {
         dst: PhysicalLocation,
         src: MachineOperand,
+        ty: MachineValueType,
     },
     AddChecked {
         dst: PhysicalLocation,
         left: MachineOperand,
         right: MachineOperand,
+        left_width: IntegerWidth,
+        right_width: IntegerWidth,
         width: IntegerWidth,
     },
     SubChecked {
         dst: PhysicalLocation,
         left: MachineOperand,
         right: MachineOperand,
+        left_width: IntegerWidth,
+        right_width: IntegerWidth,
         width: IntegerWidth,
     },
     MulChecked {
         dst: PhysicalLocation,
         left: MachineOperand,
         right: MachineOperand,
+        left_width: IntegerWidth,
+        right_width: IntegerWidth,
         width: IntegerWidth,
     },
     Call {
