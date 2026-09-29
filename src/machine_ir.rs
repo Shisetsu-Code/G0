@@ -79,9 +79,12 @@ pub fn lower_mir(
                     ));
                     continue;
                 };
-                operations.push(MachineOp::Move {
-                    dst,
-                    src: MachineOperand::Immediate(*value),
+                operations.push(MachineInstruction {
+                    source_node: instruction.source_node,
+                    op: MachineOp::Move {
+                        dst,
+                        src: MachineOperand::Immediate(*value),
+                    },
                 });
             }
             MirOp::ConstBool(value) => {
@@ -95,9 +98,12 @@ pub fn lower_mir(
                     ));
                     continue;
                 };
-                operations.push(MachineOp::Move {
-                    dst,
-                    src: MachineOperand::Immediate(i128::from(*value)),
+                operations.push(MachineInstruction {
+                    source_node: instruction.source_node,
+                    op: MachineOp::Move {
+                        dst,
+                        src: MachineOperand::Immediate(i128::from(*value)),
+                    },
                 });
             }
             MirOp::Add { mode } | MirOp::Sub { mode } | MirOp::Mul { mode } => {
@@ -159,7 +165,10 @@ pub fn lower_mir(
                     },
                     _ => unreachable!(),
                 };
-                operations.push(op);
+                operations.push(MachineInstruction {
+                    source_node: instruction.source_node,
+                    op,
+                });
             }
             MirOp::Copy | MirOp::Move => {
                 if instruction.inputs.len() != 1 || instruction.outputs.len() != 1 {
@@ -178,14 +187,20 @@ pub fn lower_mir(
                     ));
                     continue;
                 };
-                operations.push(MachineOp::Move {
-                    dst,
-                    src: MachineOperand::Location(src),
+                operations.push(MachineInstruction {
+                    source_node: instruction.source_node,
+                    op: MachineOp::Move {
+                        dst,
+                        src: MachineOperand::Location(src),
+                    },
                 });
             }
             MirOp::Call { target } => {
-                operations.push(MachineOp::Call {
-                    target: target.clone(),
+                operations.push(MachineInstruction {
+                    source_node: instruction.source_node,
+                    op: MachineOp::Call {
+                        target: target.clone(),
+                    },
                 });
             }
             MirOp::Load | MirOp::Store => {
@@ -279,7 +294,7 @@ mod tests {
 
         let machine = lower_mir(&mir, &allocation).unwrap();
         assert!(matches!(
-            machine.operations[0],
+            machine.operations[0].op,
             MachineOp::AddChecked {
                 dst: PhysicalLocation::Register(Gpr::R8),
                 ..
