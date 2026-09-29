@@ -52,6 +52,7 @@ pub fn emit_x86_64_named(
     }
 
     let mut trap_index = 0_u32;
+    let mut control_index = 0_u32;
     let mut trap_labels = Vec::new();
 
     for instruction in &program.operations {
@@ -166,6 +167,55 @@ pub fn emit_x86_64_named(
                 ) {
                     issues.push(issue);
                 }
+            }
+            MachineOp::SelectCall {
+                condition,
+                when_true,
+                when_false,
+                args,
+                output,
+            } => {
+                let false_label = format!(
+                    ".L{}_select_{}_false",
+                    symbol, control_index
+                );
+                let join_label = format!(
+                    ".L{}_select_{}_join",
+                    symbol, control_index
+                );
+                control_index += 1;
+
+                if let Err(issue) =
+                    load_operand_to_register(&mut out, "rax", *condition)
+                {
+                    issues.push(issue);
+                    continue;
+                }
+                out.push_str("    test rax, rax\n");
+                out.push_str(&format!("    jz {}\n", false_label));
+
+                if let Err(issue) = emit_call(
+                    &mut out,
+                    when_true,
+                    args,
+                    *output,
+                    program.stack_bytes,
+                ) {
+                    issues.push(issue);
+                }
+                out.push_str(&format!("    jmp {}\n", join_label));
+                out.push_str(&format!("{}:\n", false_label));
+
+                if let Err(issue) = emit_call(
+                    &mut out,
+                    when_false,
+                    args,
+                    *output,
+                    program.stack_bytes,
+                ) {
+                    issues.push(issue);
+                }
+                out.push_str(&format!("{}:\n", join_label));
             }
         }
     }
