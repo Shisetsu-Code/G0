@@ -94,6 +94,8 @@ pub struct GraphOwnership {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ProgramContract {
     pub graphs: Vec<Graph>,
+    /// None means a library. Executables name exactly one explicit entry graph.
+    pub entry_graph: Option<String>,
     pub store: StoreSchema,
     pub concurrent_regions: Vec<ConcurrentRegion>,
     pub connections: Vec<ConnectionRequirement>,
@@ -134,6 +136,8 @@ pub struct PlatformContract {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProgramIssue {
+    DuplicateGraphName(String),
+    UnknownEntryGraph(String),
     Graph {
         graph: String,
         issues: Vec<ValidationIssue>,
@@ -240,6 +244,21 @@ pub fn validate_program(
     platform: &PlatformContract,
 ) -> Result<(), Vec<ProgramIssue>> {
     let mut issues = Vec::new();
+
+    let mut graph_names = std::collections::BTreeSet::new();
+    for graph in &program.graphs {
+        if !graph_names.insert(graph.name.as_str()) {
+            issues.push(ProgramIssue::DuplicateGraphName(
+                graph.name.clone(),
+            ));
+        }
+    }
+
+    if let Some(entry) = &program.entry_graph
+        && !graph_names.contains(entry.as_str())
+    {
+        issues.push(ProgramIssue::UnknownEntryGraph(entry.clone()));
+    }
 
     for graph in &program.graphs {
         if let Err(report) = gir_validate::validate(graph) {
@@ -641,6 +660,19 @@ mod tests {
                 .collect(),
             },
         }
+    }
+
+    #[test]
+    fn explicit_entry_must_name_existing_graph() {
+        let program = ProgramContract {
+            entry_graph: Some("missing".into()),
+            ..ProgramContract::default()
+        };
+
+        assert_eq!(
+            validate_program(&program, &platform()),
+            Err(vec![ProgramIssue::UnknownEntryGraph("missing".into())])
+        );
     }
 
     #[test]
