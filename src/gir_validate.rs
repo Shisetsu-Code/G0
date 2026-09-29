@@ -326,6 +326,11 @@ fn validate_operation(node: &Node, report: &mut ValidationReport) {
             require_pure(node, report);
             validate_checked_conversion(node, report);
         }
+        Operation::Truncate { bits, signed } => {
+            require_shape(node, 1, 1, report);
+            require_pure(node, report);
+            validate_truncate(node, *bits, *signed, report);
+        }
         Operation::Import(_) => {
             if !node.effects.is_empty() {
                 report.push(
@@ -420,6 +425,72 @@ fn literal_fits(literal: &Literal, ty: &SemanticType) -> bool {
         (Literal::Text(_), SemanticType::Text) => true,
         (Literal::Bytes(_), SemanticType::Bytes) => true,
         _ => false,
+    }
+}
+
+fn validate_truncate(
+    node: &Node,
+    bits: u16,
+    signed: bool,
+    report: &mut ValidationReport,
+) {
+    if node.inputs.len() != 1 || node.outputs.len() != 1 {
+        return;
+    }
+
+    if !matches!(node.inputs[0].ty, SemanticType::Integer(_)) {
+        report.push(
+            ValidationCode::OperationShape,
+            format!(
+                "node {} Truncate accepts semantic Integer input only",
+                node.id
+            ),
+        );
+        return;
+    }
+
+    let Some(expected) = truncate_integer_range(bits, signed) else {
+        report.push(
+            ValidationCode::OperationShape,
+            format!(
+                "node {} Truncate supports bit widths 1..=64 in the bootstrap backend",
+                node.id
+            ),
+        );
+        return;
+    };
+
+    if node.outputs[0].ty != SemanticType::Integer(expected.clone()) {
+        report.push(
+            ValidationCode::OperationShape,
+            format!(
+                "node {} Truncate({}, signed={}) must declare output range {}..={}",
+                node.id, bits, signed, expected.min, expected.max
+            ),
+        );
+    }
+}
+
+fn truncate_integer_range(
+    bits: u16,
+    signed: bool,
+) -> Option<IntegerType> {
+    if bits == 0 || bits > 64 {
+        return None;
+    }
+
+    if signed {
+        let magnitude = 1_i128.checked_shl(u32::from(bits - 1))?;
+        Some(IntegerType {
+            min: -magnitude,
+            max: magnitude - 1,
+        })
+    } else {
+        let span = 1_i128.checked_shl(u32::from(bits))?;
+        Some(IntegerType {
+            min: 0,
+            max: span - 1,
+        })
     }
 }
 
