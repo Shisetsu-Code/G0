@@ -212,7 +212,10 @@ mod tests {
             compile_graph(&graph(), MachineProfile::x86_64_v3()).unwrap();
 
         assert_eq!(compiled.graph_name, "answer");
-        assert_eq!(compiled.mir.instructions.len(), 3);
+        assert_eq!(compiled.mir.instructions.len(), 1);
+        assert!(compiled.optimization.folded_nodes.contains(&3));
+        assert!(compiled.optimization.removed_nodes.contains(&1));
+        assert!(compiled.optimization.removed_nodes.contains(&2));
         assert!(!compiled.allocation.locations.is_empty());
         assert!(!compiled.machine_ir.operations.is_empty());
         assert!(compiled.assembly.contains("g0_machine_main"));
