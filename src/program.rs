@@ -138,6 +138,106 @@ pub struct PlatformContract {
     pub storage_crypto: StorageCryptoProfile,
 }
 
+impl PlatformContract {
+    pub fn bootstrap_x86_64_v3() -> Self {
+        use crate::crypto::{CryptoGuarantee, CryptoPrimitive};
+        use crate::hardware::{CacheProfile, HardwareFeature};
+        use crate::math::RoundingMode;
+        use crate::network::ConnectionFeature;
+
+        Self {
+            network: NetworkProfile::new(
+                "network.current",
+                [
+                    ConnectionFeature::Reliable,
+                    ConnectionFeature::Ordered,
+                    ConnectionFeature::Multiplexed,
+                    ConnectionFeature::Migratable,
+                ],
+            ),
+            crypto: CryptoProfile {
+                id: "crypto.current".into(),
+                security_bits: 192,
+                primitives: [
+                    CryptoPrimitive::Seal,
+                    CryptoPrimitive::Open,
+                    CryptoPrimitive::Sign,
+                    CryptoPrimitive::Verify,
+                    CryptoPrimitive::DeriveKey,
+                    CryptoPrimitive::KeyExchange,
+                ]
+                .into_iter()
+                .collect(),
+                guarantees: [
+                    CryptoGuarantee::AuthenticatedEncryption,
+                    CryptoGuarantee::Integrity,
+                    CryptoGuarantee::Unforgeability,
+                    CryptoGuarantee::ForwardSecrecy,
+                ]
+                .into_iter()
+                .collect(),
+            },
+            security: SecurityProfile {
+                id: "security.high".into(),
+                password_memory_floor_mib: 128,
+                password_work_floor: 3,
+                side_channel_resistant_verification: true,
+                uniform_public_auth_failure: true,
+                credential_storage_is_verifier_only: true,
+            },
+            math: MathProfile {
+                id: "math.current".into(),
+                max_precision_bits: 4096,
+                deterministic: true,
+                correctly_rounded_transcendentals: true,
+                supported_rounding: vec![
+                    RoundingMode::NearestEven,
+                    RoundingMode::TowardZero,
+                    RoundingMode::TowardPositive,
+                    RoundingMode::TowardNegative,
+                ],
+            },
+            text: TextContract::strict("platform-selected"),
+            hardware: HardwareProfile {
+                id: "x86_64-v3".into(),
+                logical_cores: 12,
+                physical_cores: 6,
+                memory_bytes: 32 * 1024 * 1024 * 1024,
+                numa_nodes: 1,
+                cache: CacheProfile {
+                    line_bytes: 64,
+                    l1_data_bytes: 32 * 1024,
+                    l2_bytes_per_core: 512 * 1024,
+                    l3_bytes_total: 32 * 1024 * 1024,
+                },
+                features: [
+                    HardwareFeature::Vector128,
+                    HardwareFeature::Vector256,
+                    HardwareFeature::FusedMultiplyAdd,
+                    HardwareFeature::BitManipulation,
+                    HardwareFeature::PopulationCount,
+                    HardwareFeature::Iommu,
+                ]
+                .into_iter()
+                .collect(),
+            },
+            scheduler: SchedulerProfile {
+                parallel_capacity: 12,
+                work_stealing: true,
+                numa_aware: true,
+            },
+            storage_crypto: StorageCryptoProfile {
+                id: "store.secure".into(),
+                minimum_security_bits: 192,
+                current_key_version: 1,
+                bind_tenant_as_aad: true,
+                bind_resource_as_aad: true,
+                bind_field_as_aad: true,
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProgramIssue {
     DuplicateGraphName(String),
