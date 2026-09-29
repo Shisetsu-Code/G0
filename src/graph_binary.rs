@@ -248,6 +248,7 @@ fn put_operation(
         Operation::Or => put_u8(out, 23),
         Operation::Xor => put_u8(out, 24),
         Operation::Not => put_u8(out, 25),
+        Operation::ConvertChecked => put_u8(out, 28),
         Operation::Select {
             when_true,
             when_false,
