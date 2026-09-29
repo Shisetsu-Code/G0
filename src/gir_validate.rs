@@ -26,6 +26,8 @@ pub enum ValidationCode {
     ImportHasCapabilities,
     ExecutionMissingEffect,
     ExecutionMissingCapability,
+    StorageMissingEffect,
+    StorageMissingCapability,
     PureNodeHasEffects,
     PureNodeHasCapabilities,
 }
@@ -282,6 +284,13 @@ fn validate_operation(node: &Node, report: &mut ValidationReport) {
                 );
             }
         }
+        Operation::StoreRead { .. }
+        | Operation::StoreCreate { .. }
+        | Operation::StoreUpdate { .. }
+        | Operation::StoreDelete { .. }
+        | Operation::StoreEnumerate { .. } => {
+            require_storage(node, report);
+        }
         Operation::LocalExecute(_) => {
             require_execution(
                 node,
@@ -475,6 +484,32 @@ fn validate_effect_capabilities(node: &Node, report: &mut ValidationReport) {
                 ),
             );
         }
+    }
+}
+
+fn require_storage(node: &Node, report: &mut ValidationReport) {
+    if !node.effects.contains(&Effect::Storage) {
+        report.push(
+            ValidationCode::StorageMissingEffect,
+            format!(
+                "node {} {:?} is a Store operation but does not declare Storage effect",
+                node.id, node.operation
+            ),
+        );
+    }
+
+    if !node
+        .required_capabilities
+        .iter()
+        .any(|cap| cap.class == CapabilityClass::Storage)
+    {
+        report.push(
+            ValidationCode::StorageMissingCapability,
+            format!(
+                "node {} {:?} is a Store operation without explicit Storage capability",
+                node.id, node.operation
+            ),
+        );
     }
 }
 
@@ -737,6 +772,63 @@ mod tests {
                 .iter()
                 .any(|i| i.code == ValidationCode::ExecutionMissingCapability)
         );
+    }
+
+    #[test]
+    fn native_store_operation_requires_storage_effect_and_capability() {
+        let mut graph = Graph::new("store");
+        graph.nodes = vec![pure_node(
+            1,
+            Operation::StoreRead {
+                resource: "Message".into(),
+                fields: vec!["body".into()],
+            },
+            vec![],
+            vec![],
+        )];
+
+        let report = validate(&graph).unwrap_err();
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|i| i.code == ValidationCode::StorageMissingEffect)
+        );
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|i| i.code == ValidationCode::StorageMissingCapability)
+        );
+    }
+
+    #[test]
+    fn native_store_operation_accepts_explicit_storage_authority() {
+        let mut effects = BTreeSet::new();
+        effects.insert(Effect::Storage);
+
+        let mut capabilities = BTreeSet::new();
+        capabilities.insert(Capability::new(
+            CapabilityClass::Storage,
+            "access",
+            "Store",
+            "current",
+        ));
+
+        let mut graph = Graph::new("store");
+        graph.nodes = vec![Node {
+            id: 1,
+            operation: Operation::StoreRead {
+                resource: "Message".into(),
+                fields: vec!["body".into()],
+            },
+            inputs: vec![],
+            outputs: vec![],
+            effects,
+            required_capabilities: capabilities,
+        }];
+
+        assert!(validate(&graph).is_ok());
     }
 
     #[test]
