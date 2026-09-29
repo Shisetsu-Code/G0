@@ -91,8 +91,10 @@ pub fn emit_x86_64_named(
                         result: *result_width,
                         compute: *compute_width,
                     },
-                    *signed,
-                    false,
+                    DivisionSemantics {
+                        signed: *signed,
+                        remainder: false,
+                    },
                     &trap,
                 ) {
                     issues.push(issue);
@@ -124,8 +126,10 @@ pub fn emit_x86_64_named(
                         result: *result_width,
                         compute: *compute_width,
                     },
-                    *signed,
-                    true,
+                    DivisionSemantics {
+                        signed: *signed,
+                        remainder: true,
+                    },
                     &trap,
                 ) {
                     issues.push(issue);
@@ -550,6 +554,12 @@ fn scratch_address(base: u32, offset: u32) -> String {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DivisionSemantics {
+    signed: bool,
+    remainder: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct DivisionWidths {
     left: IntegerWidth,
     right: IntegerWidth,
@@ -563,8 +573,7 @@ fn emit_checked_divrem(
     left: MachineOperand,
     right: MachineOperand,
     widths: DivisionWidths,
-    signed: bool,
-    remainder: bool,
+    semantics: DivisionSemantics,
     trap: &str,
 ) -> Result<(), X86CodegenIssue> {
     if operand_integer_width(left) != Some(widths.left)
@@ -587,10 +596,10 @@ fn emit_checked_divrem(
     out.push_str("    test r11, r11\n");
     out.push_str(&format!("    je {}\n", trap));
 
-    if signed {
+    if semantics.signed {
         if widths.compute == IntegerWidth::I64 {
             let normal = format!("{}_div_normal", trap);
-            if remainder {
+            if semantics.remainder {
                 let done = format!("{}_rem_done", trap);
                 out.push_str("    mov rdx, -9223372036854775808\n");
                 out.push_str("    cmp rax, rdx\n");
@@ -617,14 +626,14 @@ fn emit_checked_divrem(
         } else {
             out.push_str("    cqo\n");
             out.push_str("    idiv r11\n");
-            if remainder {
+            if semantics.remainder {
                 out.push_str("    mov rax, rdx\n");
             }
         }
     } else {
         out.push_str("    xor rdx, rdx\n");
         out.push_str("    div r11\n");
-        if remainder {
+        if semantics.remainder {
             out.push_str("    mov rax, rdx\n");
         }
     }
