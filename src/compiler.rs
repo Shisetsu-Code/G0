@@ -104,7 +104,11 @@ mod tests {
         Graph {
             name: "answer".into(),
             inputs: vec![],
-            outputs: vec![],
+            outputs: vec![Port {
+                id: 0,
+                name: "answer".into(),
+                ty: int(42, 42),
+            }],
             nodes: vec![
                 Node {
                     id: 1,
@@ -162,6 +166,10 @@ mod tests {
                 Edge {
                     from: SourceEndpoint::NodeOutput { node: 2, port: 0 },
                     to: TargetEndpoint::NodeInput { node: 3, port: 1 },
+                },
+                Edge {
+                    from: SourceEndpoint::NodeOutput { node: 3, port: 0 },
+                    to: TargetEndpoint::GraphOutput(0),
                 },
             ],
             authority: AuthorityMode::DefaultDeny,
