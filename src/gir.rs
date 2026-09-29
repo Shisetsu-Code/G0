@@ -78,6 +78,8 @@ pub enum Effect {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CapabilityClass {
+    /// Application/resource authorization such as Read<Message> in a scope.
+    Resource,
     Storage,
     Network,
     Clock,
