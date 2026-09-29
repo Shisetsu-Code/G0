@@ -1,7 +1,8 @@
 use std::collections::BTreeSet;
 
 use crate::authority::{
-    Action, AuthorizationDecision, DenyReason, PolicySet, Principal, ResourceContext, authorize,
+    Action, AuthorizationDecision, DenyReason, PolicyExpr, PolicyRule, PolicySet, Principal,
+    ResourceContext, authorize,
 };
 use crate::freshness::{
     FreshnessIssue, MutationAuthorizationProof, SecurityEpoch, consume_mutation_proof,
@@ -68,6 +69,44 @@ pub struct FieldSchema {
     pub ty: SemanticType,
     pub protection: FieldProtection,
     pub mutable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FieldAccessRule {
+    Inherit,
+    Deny,
+    Require(PolicyExpr),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldPolicy {
+    pub field: String,
+    pub read: FieldAccessRule,
+    pub create: FieldAccessRule,
+    pub update: FieldAccessRule,
+}
+
+impl FieldPolicy {
+    pub fn inherit(field: impl Into<String>) -> Self {
+        Self {
+            field: field.into(),
+            read: FieldAccessRule::Inherit,
+            create: FieldAccessRule::Inherit,
+            update: FieldAccessRule::Inherit,
+        }
+    }
+
+    fn rule_for(&self, action: &Action) -> Option<&FieldAccessRule> {
+        if action == &Action::read() {
+            Some(&self.read)
+        } else if action == &Action::create() {
+            Some(&self.create)
+        } else if action == &Action::update() {
+            Some(&self.update)
+        } else {
+            None
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
