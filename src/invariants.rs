@@ -79,8 +79,6 @@ pub fn validate_preservation(
 pub fn ledger_for_validated_graph(
     graph: &crate::gir::Graph,
 ) -> InvariantLedger {
-    use crate::gir::Operation;
-
     let mut ledger = InvariantLedger::default();
     ledger.record(
         InvariantKey {
@@ -101,10 +99,9 @@ pub fn ledger_for_validated_graph(
             InvariantStatus::Proven,
         );
 
-        if matches!(
-            node.operation,
-            Operation::Add | Operation::Sub | Operation::Mul
-        ) {
+        if node.outputs.iter().any(|port| {
+            matches!(port.ty, crate::gir::SemanticType::Integer(_))
+        }) {
             ledger.record(
                 InvariantKey {
                     graph: graph.name.clone(),
@@ -117,6 +114,19 @@ pub fn ledger_for_validated_graph(
     }
 
     ledger
+}
+
+pub fn validate_preservation_with_retired_nodes(
+    before: &InvariantLedger,
+    after: &InvariantLedger,
+    retired_nodes: &std::collections::BTreeSet<NodeId>,
+) -> Result<(), Vec<PreservationIssue>> {
+    let mut filtered = before.clone();
+    filtered.entries.retain(|key, _| {
+        key.node
+            .is_none_or(|node| !retired_nodes.contains(&node))
+    });
+    validate_preservation(&filtered, after)
 }
 
 #[cfg(test)]
