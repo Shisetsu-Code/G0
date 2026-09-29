@@ -22,6 +22,7 @@ pub mod gir;
 pub mod gir_validate;
 pub mod gir_optimize;
 pub mod graph;
+pub mod graph_binary;
 pub mod graph_format;
 pub mod hardware;
 pub mod information_flow;
