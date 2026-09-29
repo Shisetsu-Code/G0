@@ -7,6 +7,10 @@ use crate::crypto::{
 };
 use crate::gir::Graph;
 use crate::gir_validate::{self, ValidationIssue};
+use crate::hardware::{
+    validate_hardware_profile, CacheProfile, HardwareFeature, HardwareIssue,
+    HardwareProfile, HardwareRequirement,
+};
 use crate::io::{
     validate_io_pipeline, IoPipeline, IoPipelineIssue, IoValueKind,
 };
@@ -61,6 +65,7 @@ pub struct ProgramContract {
     pub password_tuning: Option<PasswordTuning>,
     pub text_boundaries: Vec<TextBoundaryRequirement>,
     pub io_pipelines: Vec<(IoPipeline, IoValueKind)>,
+    pub hardware: HardwareRequirement,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,6 +75,7 @@ pub struct PlatformContract {
     pub security: SecurityProfile,
     pub math: MathProfile,
     pub text: TextContract,
+    pub hardware: HardwareProfile,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -113,6 +119,7 @@ pub enum ProgramIssue {
         pipeline: usize,
         issues: Vec<IoPipelineIssue>,
     },
+    Hardware(Vec<HardwareIssue>),
     Security(Vec<SecurityContractIssue>),
 }
 
@@ -230,6 +237,12 @@ pub fn validate_program(
         }
     }
 
+    if let Err(hardware_issues) =
+        validate_hardware_profile(&platform.hardware, &program.hardware)
+    {
+        issues.push(ProgramIssue::Hardware(hardware_issues));
+    }
+
     if let Some(password_tuning) = program.password_tuning
         && let Err(security_issues) =
             validate_password_contract(&platform.security, password_tuning)
@@ -310,6 +323,29 @@ mod tests {
                 ],
             },
             text: TextContract::strict("platform-selected"),
+            hardware: HardwareProfile {
+                id: "x86_64-v3-dev".into(),
+                logical_cores: 12,
+                physical_cores: 6,
+                memory_bytes: 32 * 1024 * 1024 * 1024,
+                numa_nodes: 1,
+                cache: CacheProfile {
+                    line_bytes: 64,
+                    l1_data_bytes: 32 * 1024,
+                    l2_bytes_per_core: 512 * 1024,
+                    l3_bytes_total: 32 * 1024 * 1024,
+                },
+                features: [
+                    HardwareFeature::Vector128,
+                    HardwareFeature::Vector256,
+                    HardwareFeature::FusedMultiplyAdd,
+                    HardwareFeature::BitManipulation,
+                    HardwareFeature::PopulationCount,
+                    HardwareFeature::Iommu,
+                ]
+                .into_iter()
+                .collect(),
+            },
         }
     }
 
@@ -498,6 +534,27 @@ mod tests {
             issues
                 .iter()
                 .any(|issue| matches!(issue, ProgramIssue::Memory { .. }))
+        );
+    }
+
+    #[test]
+    fn hardware_requirement_is_a_compile_gate() {
+        let program = ProgramContract {
+            hardware: HardwareRequirement {
+                min_logical_cores: 8,
+                min_memory_bytes: 8 * 1024 * 1024 * 1024,
+                required_features: [HardwareFeature::Vector512]
+                    .into_iter()
+                    .collect(),
+            },
+            ..ProgramContract::default()
+        };
+
+        let issues = validate_program(&program, &platform()).unwrap_err();
+        assert!(
+            issues
+                .iter()
+                .any(|issue| matches!(issue, ProgramIssue::Hardware(_)))
         );
     }
 
