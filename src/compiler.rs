@@ -42,7 +42,6 @@ pub enum PipelineIssue {
     Lowering(Vec<LoweringIssue>),
     Mir(Vec<MirIssue>),
     Allocation(AllocationIssue),
-    SpillsUnsupported(u32),
     Machine(Vec<MachineLoweringIssue>),
     Codegen(Vec<X86CodegenIssue>),
 }
@@ -75,9 +74,6 @@ pub fn compile_graph(
     let allocation =
         linear_scan_allocate(&mir, machine).map_err(PipelineIssue::Allocation)?;
     let pressure = register_pressure(&allocation);
-    if allocation.spills != 0 {
-        return Err(PipelineIssue::SpillsUnsupported(allocation.spills));
-    }
     let machine_ir =
         lower_machine_ir(&mir, &allocation).map_err(PipelineIssue::Machine)?;
     let source_map = build_source_map(&machine_ir);
