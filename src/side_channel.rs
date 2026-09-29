@@ -23,13 +23,13 @@ pub fn validate_side_channels(
         }
 
         match node.operation {
-            Operation::Select => {
+            Operation::Select { .. } => {
                 issues.push(SideChannelIssue::SensitiveBranch(node.id));
             }
-            Operation::Match => {
+            Operation::Match { .. } => {
                 issues.push(SideChannelIssue::SensitiveMatch(node.id));
             }
-            Operation::Loop => {
+            Operation::Loop { .. } => {
                 issues.push(SideChannelIssue::SensitiveLoop(node.id));
             }
             _ => {}
@@ -73,7 +73,10 @@ mod tests {
         let mut graph = Graph::new("auth");
         graph.nodes.push(Node {
             id: 1,
-            operation: Operation::Select,
+            operation: Operation::Select {
+                when_true: "yes".into(),
+                when_false: "no".into(),
+            },
             inputs: vec![Port {
                 id: 0,
                 name: "condition".into(),
