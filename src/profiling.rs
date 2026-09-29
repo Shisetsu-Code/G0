@@ -74,12 +74,11 @@ impl ProfileReport {
             .values()
             .map(|profile| {
                 let value = metric_value(profile.metrics, metric);
-                let share_ppm = if total == 0 {
-                    0
-                } else {
-                    ((value.saturating_mul(1_000_000) / total)
-                        .min(u32::MAX as u128)) as u32
-                };
+                let share_ppm = value
+                    .saturating_mul(1_000_000)
+                    .checked_div(total)
+                    .unwrap_or(0)
+                    .min(u32::MAX as u128) as u32;
                 Hotspot {
                     location: profile.location.clone(),
                     value,
