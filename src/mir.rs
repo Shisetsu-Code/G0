@@ -50,6 +50,11 @@ pub enum MirOp {
         when_true: String,
         when_false: String,
     },
+    LoopCall {
+        condition: String,
+        body: String,
+        max_iterations: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -172,6 +177,15 @@ pub fn lower_graph(graph: &Graph) -> Result<MirProgram, Vec<LoweringIssue>> {
             } => Some(MirOp::SelectCall {
                 when_true: when_true.clone(),
                 when_false: when_false.clone(),
+            }),
+            Operation::Loop {
+                condition,
+                body,
+                max_iterations,
+            } => Some(MirOp::LoopCall {
+                condition: condition.clone(),
+                body: body.clone(),
+                max_iterations: *max_iterations,
             }),
             operation => {
                 issues.push(LoweringIssue::UnsupportedOperation {
