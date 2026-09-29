@@ -9,6 +9,7 @@ pub mod gir;
 pub mod gir_validate;
 pub mod graph;
 pub mod information_flow;
+pub mod io;
 pub mod math;
 pub mod network;
 pub mod optimize;
