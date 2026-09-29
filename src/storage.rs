@@ -336,8 +336,55 @@ pub enum StoreAccessIssue {
     ImmutableField(String),
     CredentialReadForbidden(String),
     CredentialMutationRequiresVerifier(String),
+    FieldPolicyDenied {
+        field: String,
+        reason: DenyReason,
+    },
     MutationProofNotApplicable,
     Freshness(FreshnessIssue),
+}
+
+fn authorize_field_action(
+    schema: &ResourceSchema,
+    principal: &Principal,
+    resource: &ResourceContext,
+    field: &str,
+    action: &Action,
+) -> Option<StoreAccessIssue> {
+    let policy = schema.field_policy(field)?;
+    let rule = policy.rule_for(action)?;
+
+    match rule {
+        FieldAccessRule::Inherit => None,
+        FieldAccessRule::Deny => Some(StoreAccessIssue::FieldPolicyDenied {
+            field: field.to_owned(),
+            reason: DenyReason::PolicyUnsatisfied,
+        }),
+        FieldAccessRule::Require(expr) => {
+            let policies = PolicySet {
+                rules: vec![PolicyRule {
+                    action: action.clone(),
+                    allow_if: expr.clone(),
+                }],
+            };
+
+            match authorize(
+                principal,
+                resource,
+                &policies,
+                action,
+                schema.is_global(),
+            ) {
+                AuthorizationDecision::Allow => None,
+                AuthorizationDecision::Deny(reason) => {
+                    Some(StoreAccessIssue::FieldPolicyDenied {
+                        field: field.to_owned(),
+                        reason,
+                    })
+                }
+            }
+        }
+    }
 }
 
 pub fn authorize_store_operation(
