@@ -1,7 +1,10 @@
 use crate::machine::{AllocationResult, PhysicalLocation};
 use crate::memory::IntegerWidth;
 use crate::gir::NodeId;
-use crate::mir::{ArithmeticMode, MirOp, MirProgram, MirType, ValueId};
+use crate::mir::{
+    ArithmeticMode, BoolBinaryKind, CompareKind, MirOp, MirProgram, MirType,
+    ValueId,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MachineValueType {
@@ -49,6 +52,23 @@ pub enum MachineOp {
         left_width: IntegerWidth,
         right_width: IntegerWidth,
         width: IntegerWidth,
+    },
+    Compare {
+        dst: PhysicalLocation,
+        left: MachineOperand,
+        right: MachineOperand,
+        kind: CompareKind,
+        signed: bool,
+    },
+    BoolBinary {
+        dst: PhysicalLocation,
+        left: MachineOperand,
+        right: MachineOperand,
+        kind: BoolBinaryKind,
+    },
+    BoolNot {
+        dst: PhysicalLocation,
+        value: MachineOperand,
     },
     Call {
         target: String,
@@ -247,6 +267,159 @@ pub fn lower_mir(
                 operations.push(MachineInstruction {
                     source_node: instruction.source_node,
                     op,
+                });
+            }
+            MirOp::Compare {
+                kind,
+                signed,
+                ..
+            } => {
+                if instruction.inputs.len() != 2
+                    || instruction.outputs.len() != 1
+                {
+                    issues.push(MachineLoweringIssue::WrongShape);
+                    continue;
+                }
+
+                let Some(left_location) =
+                    location(allocation, instruction.inputs[0])
+                else {
+                    issues.push(MachineLoweringIssue::MissingLocation(
+                        instruction.inputs[0],
+                    ));
+                    continue;
+                };
+                let Some(right_location) =
+                    location(allocation, instruction.inputs[1])
+                else {
+                    issues.push(MachineLoweringIssue::MissingLocation(
+                        instruction.inputs[1],
+                    ));
+                    continue;
+                };
+                let Some(dst) =
+                    location(allocation, instruction.outputs[0])
+                else {
+                    issues.push(MachineLoweringIssue::MissingLocation(
+                        instruction.outputs[0],
+                    ));
+                    continue;
+                };
+                let Some(left_ty) =
+                    machine_value_type(mir, instruction.inputs[0])
+                else {
+                    issues.push(
+                        MachineLoweringIssue::UnsupportedArithmeticType(
+                            instruction.inputs[0],
+                        ),
+                    );
+                    continue;
+                };
+                let Some(right_ty) =
+                    machine_value_type(mir, instruction.inputs[1])
+                else {
+                    issues.push(
+                        MachineLoweringIssue::UnsupportedArithmeticType(
+                            instruction.inputs[1],
+                        ),
+                    );
+                    continue;
+                };
+
+                operations.push(MachineInstruction {
+                    source_node: instruction.source_node,
+                    op: MachineOp::Compare {
+                        dst,
+                        left: MachineOperand::Location {
+                            location: left_location,
+                            ty: left_ty,
+                        },
+                        right: MachineOperand::Location {
+                            location: right_location,
+                            ty: right_ty,
+                        },
+                        kind: *kind,
+                        signed: *signed,
+                    },
+                });
+            }
+            MirOp::BoolBinary { kind } => {
+                if instruction.inputs.len() != 2
+                    || instruction.outputs.len() != 1
+                {
+                    issues.push(MachineLoweringIssue::WrongShape);
+                    continue;
+                }
+                let Some(left) = location(allocation, instruction.inputs[0])
+                else {
+                    issues.push(MachineLoweringIssue::MissingLocation(
+                        instruction.inputs[0],
+                    ));
+                    continue;
+                };
+                let Some(right) = location(allocation, instruction.inputs[1])
+                else {
+                    issues.push(MachineLoweringIssue::MissingLocation(
+                        instruction.inputs[1],
+                    ));
+                    continue;
+                };
+                let Some(dst) = location(allocation, instruction.outputs[0])
+                else {
+                    issues.push(MachineLoweringIssue::MissingLocation(
+                        instruction.outputs[0],
+                    ));
+                    continue;
+                };
+
+                operations.push(MachineInstruction {
+                    source_node: instruction.source_node,
+                    op: MachineOp::BoolBinary {
+                        dst,
+                        left: MachineOperand::Location {
+                            location: left,
+                            ty: MachineValueType::Bool,
+                        },
+                        right: MachineOperand::Location {
+                            location: right,
+                            ty: MachineValueType::Bool,
+                        },
+                        kind: *kind,
+                    },
+                });
+            }
+            MirOp::BoolNot => {
+                if instruction.inputs.len() != 1
+                    || instruction.outputs.len() != 1
+                {
+                    issues.push(MachineLoweringIssue::WrongShape);
+                    continue;
+                }
+                let Some(value_location) =
+                    location(allocation, instruction.inputs[0])
+                else {
+                    issues.push(MachineLoweringIssue::MissingLocation(
+                        instruction.inputs[0],
+                    ));
+                    continue;
+                };
+                let Some(dst) = location(allocation, instruction.outputs[0])
+                else {
+                    issues.push(MachineLoweringIssue::MissingLocation(
+                        instruction.outputs[0],
+                    ));
+                    continue;
+                };
+
+                operations.push(MachineInstruction {
+                    source_node: instruction.source_node,
+                    op: MachineOp::BoolNot {
+                        dst,
+                        value: MachineOperand::Location {
+                            location: value_location,
+                            ty: MachineValueType::Bool,
+                        },
+                    },
                 });
             }
             MirOp::Copy | MirOp::Move => {
