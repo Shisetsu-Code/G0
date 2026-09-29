@@ -37,7 +37,6 @@ pub fn emit_x86_64(
             MachineOp::Move { dst, src } => {
                 if let Err(issue) = emit_move(&mut out, *dst, *src) {
                     issues.push(issue);
-                } else {
                 }
             }
             MachineOp::AddChecked {
