@@ -5,6 +5,7 @@ use crate::auth::{
     OneTimeCodeIssue,
 };
 use crate::call_graph::{build_call_graph, CallGraphIssue};
+use crate::control::{validate_control_graphs, ControlIssue};
 use crate::concurrency::{
     validate_concurrent_region, ConcurrencyIssue, ConcurrentRegion,
 };
@@ -243,6 +244,7 @@ pub enum ProgramIssue {
     DuplicateGraphName(String),
     UnknownEntryGraph(String),
     CallGraph(Vec<CallGraphIssue>),
+    Control(Vec<ControlIssue>),
     Graph {
         graph: String,
         issues: Vec<ValidationIssue>,
@@ -370,6 +372,10 @@ pub fn validate_program(
         build_call_graph(&program.graphs, &program.external_subgraphs)
     {
         issues.push(ProgramIssue::CallGraph(call_issues));
+    }
+
+    if let Err(control_issues) = validate_control_graphs(&program.graphs) {
+        issues.push(ProgramIssue::Control(control_issues));
     }
 
     for graph in &program.graphs {
