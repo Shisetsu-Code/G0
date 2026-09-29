@@ -1,9 +1,11 @@
+pub mod authority;
 pub mod backend;
 pub mod gir;
 pub mod gir_validate;
 pub mod graph;
 pub mod optimize;
 pub mod parser;
+pub mod storage;
 pub mod validate;
 
 use graph::Graph;
