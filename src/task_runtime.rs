@@ -19,6 +19,22 @@ pub struct RuntimeTask {
     pub budget: ResourceBudget,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TaskPlan {
+    pub scopes: Vec<CancellationScope>,
+    pub tasks: Vec<RuntimeTask>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TaskPlanIssue {
+    DuplicateScope(u32),
+    DuplicateTask(u32),
+    UnknownParent { scope: u32, parent: u32 },
+    UnknownTaskScope { task: u32, scope: u32 },
+    ScopeCycle(u32),
+    Budget(TaskBudgetIssue),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskBudgetIssue {
     CpuExceedsParent(u32),
@@ -40,6 +56,71 @@ pub fn validate_child_budget(
     }
     if exceeds_u64(task.budget.memory_bytes, parent.budget.memory_bytes) {
         issues.push(TaskBudgetIssue::MemoryExceedsParent(task.id));
+    }
+
+    if issues.is_empty() { Ok(()) } else { Err(issues) }
+}
+
+pub fn validate_task_plan(plan: &TaskPlan) -> Result<(), Vec<TaskPlanIssue>> {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let mut issues = Vec::new();
+    let mut scopes = BTreeMap::<u32, &CancellationScope>::new();
+
+    for scope in &plan.scopes {
+        if scopes.insert(scope.id, scope).is_some() {
+            issues.push(TaskPlanIssue::DuplicateScope(scope.id));
+        }
+    }
+
+    for scope in &plan.scopes {
+        if let Some(parent) = scope.parent
+            && !scopes.contains_key(&parent)
+        {
+            issues.push(TaskPlanIssue::UnknownParent {
+                scope: scope.id,
+                parent,
+            });
+        }
+
+        let mut seen = BTreeSet::new();
+        let mut current = scope.id;
+        while seen.insert(current) {
+            let Some(item) = scopes.get(&current).copied() else {
+                break;
+            };
+            let Some(parent) = item.parent else {
+                break;
+            };
+            current = parent;
+        }
+        if seen.contains(&current)
+            && scopes.get(&current).and_then(|scope| scope.parent).is_some()
+        {
+            issues.push(TaskPlanIssue::ScopeCycle(scope.id));
+        }
+    }
+
+    let mut task_ids = BTreeSet::new();
+    for task in &plan.tasks {
+        if !task_ids.insert(task.id) {
+            issues.push(TaskPlanIssue::DuplicateTask(task.id));
+        }
+        let Some(scope) = scopes.get(&task.scope).copied() else {
+            issues.push(TaskPlanIssue::UnknownTaskScope {
+                task: task.id,
+                scope: task.scope,
+            });
+            continue;
+        };
+
+        if let Err(budget_issues) = validate_child_budget(task, scope) {
+            issues.extend(
+                budget_issues
+                    .into_iter()
+                    .map(TaskPlanIssue::Budget),
+            );
+        }
     }
 
     if issues.is_empty() { Ok(()) } else { Err(issues) }
