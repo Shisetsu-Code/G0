@@ -74,6 +74,10 @@ pub enum MirOp {
         kind: BoolBinaryKind,
     },
     BoolNot,
+    ConvertChecked {
+        min: i128,
+        max: i128,
+    },
     Load,
     Store,
     Move,
@@ -266,6 +270,20 @@ pub fn lower_graph(graph: &Graph) -> Result<MirProgram, Vec<LoweringIssue>> {
                 Some(MirOp::BoolBinary { kind })
             }
             Operation::Not => Some(MirOp::BoolNot),
+            Operation::ConvertChecked => {
+                let Some(SemanticType::Integer(target)) =
+                    node.outputs.first().map(|port| &port.ty)
+                else {
+                    issues.push(LoweringIssue::UnsupportedType {
+                        node: node.id,
+                    });
+                    continue;
+                };
+                Some(MirOp::ConvertChecked {
+                    min: target.min,
+                    max: target.max,
+                })
+            }
             Operation::Subgraph(target) => Some(MirOp::Call {
                 target: target.clone(),
             }),
