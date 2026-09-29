@@ -4,6 +4,7 @@ pub mod backend;
 pub mod concurrency;
 pub mod compiler;
 pub mod crypto;
+pub mod data_format;
 pub mod effects;
 pub mod evolution;
 pub mod freshness;
