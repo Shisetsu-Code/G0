@@ -15,6 +15,9 @@ pub struct NodeMetrics {
     pub calls: u64,
     pub wall_ns_total: u128,
     pub cpu_ns_total: u128,
+    pub queue_ns_total: u128,
+    pub blocked_ns_total: u128,
+    pub io_wait_ns_total: u128,
     pub latency_p50_ns: u64,
     pub latency_p95_ns: u64,
     pub latency_p99_ns: u64,
@@ -31,6 +34,9 @@ pub struct NodeMetrics {
 pub enum CostMetric {
     WallTime,
     CpuTime,
+    QueueTime,
+    BlockedTime,
+    IoWaitTime,
     AllocatedBytes,
     PeakLiveBytes,
     NetworkBytes,
@@ -101,6 +107,9 @@ fn metric_value(metrics: NodeMetrics, metric: CostMetric) -> u128 {
     match metric {
         CostMetric::WallTime => metrics.wall_ns_total,
         CostMetric::CpuTime => metrics.cpu_ns_total,
+        CostMetric::QueueTime => metrics.queue_ns_total,
+        CostMetric::BlockedTime => metrics.blocked_ns_total,
+        CostMetric::IoWaitTime => metrics.io_wait_ns_total,
         CostMetric::AllocatedBytes => metrics.allocated_bytes,
         CostMetric::PeakLiveBytes => metrics.peak_live_bytes as u128,
         CostMetric::NetworkBytes => metrics.network_bytes,
@@ -243,7 +252,12 @@ pub fn debug_visibility(ty: &SemanticType) -> DebugValueVisibility {
 pub struct DebugSummary {
     pub cpu_hotspots: Vec<Hotspot>,
     pub latency_hotspots: Vec<Hotspot>,
+    pub queue_hotspots: Vec<Hotspot>,
+    pub blocked_hotspots: Vec<Hotspot>,
+    pub io_wait_hotspots: Vec<Hotspot>,
     pub memory_hotspots: Vec<Hotspot>,
+    pub network_hotspots: Vec<Hotspot>,
+    pub storage_hotspots: Vec<Hotspot>,
     pub critical_path: CriticalPath,
 }
 
@@ -255,7 +269,12 @@ pub fn summarize_debug(
     Ok(DebugSummary {
         cpu_hotspots: report.rank_hotspots(CostMetric::CpuTime, top_n),
         latency_hotspots: report.rank_hotspots(CostMetric::P99Latency, top_n),
+        queue_hotspots: report.rank_hotspots(CostMetric::QueueTime, top_n),
+        blocked_hotspots: report.rank_hotspots(CostMetric::BlockedTime, top_n),
+        io_wait_hotspots: report.rank_hotspots(CostMetric::IoWaitTime, top_n),
         memory_hotspots: report.rank_hotspots(CostMetric::AllocatedBytes, top_n),
+        network_hotspots: report.rank_hotspots(CostMetric::NetworkBytes, top_n),
+        storage_hotspots: report.rank_hotspots(CostMetric::StorageBytes, top_n),
         critical_path: critical_path_p99(graph, report)?,
     })
 }
@@ -316,6 +335,35 @@ mod tests {
         let hotspots = report.rank_hotspots(CostMetric::CpuTime, 2);
         assert_eq!(hotspots[0].location.node, 2);
         assert_eq!(hotspots[0].share_ppm, 900_000);
+    }
+
+    #[test]
+    fn debug_summary_separates_cpu_queue_and_io_pressure() {
+        let graph = Graph {
+            name: "test".into(),
+            inputs: vec![],
+            outputs: vec![],
+            nodes: vec![node(1), node(2)],
+            edges: vec![],
+            authority: AuthorityMode::DefaultDeny,
+        };
+
+        let mut first = profile(1, 100, 900, 10);
+        first.metrics.queue_ns_total = 10;
+        first.metrics.io_wait_ns_total = 5;
+
+        let mut second = profile(2, 200, 100, 10);
+        second.metrics.queue_ns_total = 800;
+        second.metrics.io_wait_ns_total = 700;
+
+        let report = ProfileReport {
+            nodes: BTreeMap::from([(1, first), (2, second)]),
+        };
+
+        let summary = summarize_debug(&graph, &report, 1).unwrap();
+        assert_eq!(summary.cpu_hotspots[0].location.node, 1);
+        assert_eq!(summary.queue_hotspots[0].location.node, 2);
+        assert_eq!(summary.io_wait_hotspots[0].location.node, 2);
     }
 
     #[test]
