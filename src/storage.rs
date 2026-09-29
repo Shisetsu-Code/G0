@@ -128,6 +128,7 @@ pub struct ResourceSchema {
     pub name: String,
     pub tenant_isolation: TenantIsolation,
     pub fields: Vec<FieldSchema>,
+    pub field_policies: Vec<FieldPolicy>,
     pub relations: Vec<RelationSchema>,
     pub indexes: Vec<IndexIntent>,
     pub policies: PolicySet,
@@ -139,6 +140,7 @@ impl ResourceSchema {
             name: name.into(),
             tenant_isolation: TenantIsolation::CurrentScope,
             fields: Vec::new(),
+            field_policies: Vec::new(),
             relations: Vec::new(),
             indexes: Vec::new(),
             policies: PolicySet::default(),
@@ -153,6 +155,12 @@ impl ResourceSchema {
         self.fields.iter().find(|field| field.name == name)
     }
 
+    pub fn field_policy(&self, name: &str) -> Option<&FieldPolicy> {
+        self.field_policies
+            .iter()
+            .find(|policy| policy.field == name)
+    }
+
     fn is_global(&self) -> bool {
         self.tenant_isolation == TenantIsolation::Global
     }
@@ -162,6 +170,8 @@ impl ResourceSchema {
 pub enum StorageSchemaIssue {
     DuplicateResource(String),
     DuplicateField(String),
+    DuplicateFieldPolicy(String),
+    UnknownFieldPolicyTarget(String),
     DuplicateRelation(String),
     DuplicateMemberName(String),
     DuplicatePolicyAction(String),
