@@ -36,6 +36,7 @@ pub mod scheduler;
 pub mod security;
 pub mod storage;
 pub mod symbol;
+pub mod task_runtime;
 pub mod text;
 pub mod time;
 pub mod tuning;
