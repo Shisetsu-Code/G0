@@ -133,13 +133,19 @@ pub fn emit_x86_64(
                     trap_labels.push(trap);
                 }
             }
-            MachineOp::Call { target } => {
-                if !valid_symbol(target) {
-                    issues.push(X86CodegenIssue::InvalidCallTarget(
-                        target.clone(),
-                    ));
-                } else {
-                    out.push_str(&format!("    call {}\n", target));
+            MachineOp::Call {
+                target,
+                args,
+                output,
+            } => {
+                if let Err(issue) = emit_call(
+                    &mut out,
+                    target,
+                    args,
+                    *output,
+                    program.stack_bytes,
+                ) {
+                    issues.push(issue);
                 }
             }
         }
@@ -180,6 +186,90 @@ pub fn emit_x86_64(
     } else {
         Err(issues)
     }
+}
+
+fn emit_call(
+    out: &mut String,
+    target: &str,
+    args: &[MachineOperand],
+    output: Option<crate::machine_ir::MachineOutput>,
+    stack_bytes: u32,
+) -> Result<(), X86CodegenIssue> {
+    if !valid_symbol(target) {
+        return Err(X86CodegenIssue::InvalidCallTarget(target.to_owned()));
+    }
+    if args.len() > crate::abi::G0_SCALAR_ARG_LIMIT {
+        return Err(X86CodegenIssue::UnsupportedReturnArity(args.len()));
+    }
+    if stack_bytes < 128 {
+        return Err(X86CodegenIssue::UnsupportedStackWidth(0));
+    }
+
+    let base = stack_bytes - 128;
+    let registers = ["rdi", "rsi", "rcx", "r8", "r9", "r10"];
+
+    for (index, register) in registers.iter().enumerate() {
+        let address = scratch_address(base, (index as u32) * 8);
+        out.push_str(&format!(
+            "    mov QWORD PTR {}, {}\n",
+            address, register
+        ));
+    }
+
+    for (index, arg) in args.iter().copied().enumerate() {
+        load_operand_to_register(out, "rax", arg)?;
+        let address = scratch_address(base, 48 + (index as u32) * 8);
+        out.push_str(&format!(
+            "    mov QWORD PTR {}, rax\n",
+            address
+        ));
+    }
+
+    for (index, _) in args.iter().enumerate() {
+        let address = scratch_address(base, 48 + (index as u32) * 8);
+        out.push_str(&format!(
+            "    mov {}, QWORD PTR {}\n",
+            registers[index], address
+        ));
+    }
+
+    out.push_str(&format!("    call {}\n", target));
+
+    if output.is_some() {
+        let address = scratch_address(base, 96);
+        out.push_str(&format!(
+            "    mov QWORD PTR {}, rax\n",
+            address
+        ));
+    }
+
+    for (index, register) in registers.iter().enumerate() {
+        let address = scratch_address(base, (index as u32) * 8);
+        out.push_str(&format!(
+            "    mov {}, QWORD PTR {}\n",
+            register, address
+        ));
+    }
+
+    if let Some(output) = output {
+        let address = scratch_address(base, 96);
+        out.push_str(&format!(
+            "    mov rax, QWORD PTR {}\n",
+            address
+        ));
+        store_from_register(
+            out,
+            output.location,
+            "rax",
+            output.ty,
+        )?;
+    }
+
+    Ok(())
+}
+
+fn scratch_address(base: u32, offset: u32) -> String {
+    format!("[rbp-{}]", base.saturating_add(offset).saturating_add(8))
 }
 
 fn emit_move(
@@ -697,12 +787,51 @@ mod tests {
     }
 
     #[test]
+    fn call_stages_arguments_and_restores_work_registers() {
+        let program = MachineProgram {
+            operations: vec![MachineInstruction {
+                source_node: 7,
+                op: MachineOp::Call {
+                    target: "g0_g_776f726b6572".into(),
+                    args: vec![
+                        MachineOperand::Location {
+                            location: PhysicalLocation::Register(Gpr::Rdi),
+                            ty: MachineValueType::Integer(IntegerWidth::U64),
+                        },
+                        MachineOperand::Location {
+                            location: PhysicalLocation::Register(Gpr::Rsi),
+                            ty: MachineValueType::Integer(IntegerWidth::U64),
+                        },
+                    ],
+                    output: Some(MachineOutput {
+                        location: PhysicalLocation::Register(Gpr::Rcx),
+                        ty: MachineValueType::Integer(IntegerWidth::U64),
+                    }),
+                },
+            }],
+            stack_bytes: 128,
+            outputs: vec![MachineOutput {
+                location: PhysicalLocation::Register(Gpr::Rcx),
+                ty: MachineValueType::Integer(IntegerWidth::U64),
+            }],
+        };
+
+        let asm = emit_x86_64(&program).unwrap();
+        assert!(asm.contains("call g0_g_776f726b6572"));
+        assert!(asm.contains("mov QWORD PTR [rbp-8], rdi"));
+        assert!(asm.contains("mov rdi, QWORD PTR"));
+        assert!(asm.contains("mov rcx, QWORD PTR"));
+    }
+
+    #[test]
     fn unsafe_call_symbol_is_rejected() {
         let program = MachineProgram {
             operations: vec![MachineInstruction {
                 source_node: 1,
                 op: MachineOp::Call {
                     target: "foo; rm".into(),
+                    args: vec![],
+                    output: None,
                 },
             }],
             stack_bytes: 0,
