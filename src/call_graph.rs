@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::gir::{Graph, Operation};
+use crate::abi::{lower_signature, AbiIssue};
+use crate::gir::{Graph, Operation, SemanticType};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CallGraph {
@@ -15,6 +16,18 @@ pub enum CallGraphIssue {
         callee: String,
     },
     RecursiveCycle(Vec<String>),
+    InputSignatureMismatch {
+        caller: String,
+        callee: String,
+    },
+    OutputSignatureMismatch {
+        caller: String,
+        callee: String,
+    },
+    AbiUnsupported {
+        callee: String,
+        issues: Vec<AbiIssue>,
+    },
 }
 
 pub fn build_call_graph(
@@ -30,6 +43,9 @@ pub fn build_call_graph(
         }
     }
 
+    let by_name: BTreeMap<&str, &Graph> =
+        graphs.iter().map(|graph| (graph.name.as_str(), graph)).collect();
+
     let mut calls = BTreeMap::new();
     for graph in graphs {
         let mut callees = BTreeSet::new();
@@ -43,6 +59,40 @@ pub fn build_call_graph(
                         callee: callee.clone(),
                     });
                 }
+
+                if let Some(target) = by_name.get(callee.as_str()).copied() {
+                    let node_inputs: Vec<SemanticType> =
+                        node.inputs.iter().map(|port| port.ty.clone()).collect();
+                    let target_inputs: Vec<SemanticType> =
+                        target.inputs.iter().map(|port| port.ty.clone()).collect();
+                    if node_inputs != target_inputs {
+                        issues.push(CallGraphIssue::InputSignatureMismatch {
+                            caller: graph.name.clone(),
+                            callee: callee.clone(),
+                        });
+                    }
+
+                    let node_outputs: Vec<SemanticType> =
+                        node.outputs.iter().map(|port| port.ty.clone()).collect();
+                    let target_outputs: Vec<SemanticType> =
+                        target.outputs.iter().map(|port| port.ty.clone()).collect();
+                    if node_outputs != target_outputs {
+                        issues.push(CallGraphIssue::OutputSignatureMismatch {
+                            caller: graph.name.clone(),
+                            callee: callee.clone(),
+                        });
+                    }
+
+                    if let Err(abi_issues) =
+                        lower_signature(&target_inputs, &target_outputs)
+                    {
+                        issues.push(CallGraphIssue::AbiUnsupported {
+                            callee: callee.clone(),
+                            issues: abi_issues,
+                        });
+                    }
+                }
+
                 callees.insert(callee.clone());
             }
         }
@@ -185,6 +235,42 @@ mod tests {
             reachable_from(&call_graph, "main"),
             BTreeSet::from(["main".into(), "worker".into()])
         );
+    }
+
+    #[test]
+    fn local_call_signature_must_match_callee() {
+        use crate::gir::{IntegerType, Port, SemanticType};
+
+        let mut main = graph("main", None);
+        main.nodes.push(Node {
+            id: 1,
+            operation: Operation::Subgraph("worker".into()),
+            inputs: vec![Port {
+                id: 0,
+                name: "x".into(),
+                ty: SemanticType::Bool,
+            }],
+            outputs: vec![],
+            effects: BTreeSet::new(),
+            required_capabilities: BTreeSet::new(),
+        });
+
+        let mut worker = graph("worker", None);
+        worker.inputs.push(Port {
+            id: 0,
+            name: "x".into(),
+            ty: SemanticType::Integer(
+                IntegerType::new(0, 10).unwrap(),
+            ),
+        });
+
+        assert!(matches!(
+            build_call_graph(&[main, worker], &BTreeSet::new()),
+            Err(issues) if issues.iter().any(|issue| matches!(
+                issue,
+                CallGraphIssue::InputSignatureMismatch { .. }
+            ))
+        ));
     }
 
     #[test]
