@@ -3,6 +3,7 @@ use crate::gir_optimize::{
     optimize_gir, GirOptimizationIssue, GirOptimizationReport,
 };
 use crate::gir_validate::ValidationIssue;
+use crate::inline::{inline_entry, InlineIssue, InlineOrigin};
 use crate::invariants::{
     ledger_for_validated_graph, validate_preservation_with_retired_nodes,
     InvariantLedger, PreservationIssue,
@@ -90,6 +91,48 @@ pub fn compile_graph(
         invariants,
         source_map,
         optimization,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompiledProgram {
+    pub entry_graph: String,
+    pub flattened_graph: Graph,
+    pub origins: std::collections::BTreeMap<crate::gir::NodeId, InlineOrigin>,
+    pub compiled: CompiledGraph,
+}
+
+impl CompiledProgram {
+    pub fn origin(
+        &self,
+        node: crate::gir::NodeId,
+    ) -> Option<&InlineOrigin> {
+        self.origins.get(&node)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProgramPipelineIssue {
+    Inline(Vec<InlineIssue>),
+    Pipeline(PipelineIssue),
+}
+
+pub fn compile_program_entry(
+    graphs: &[Graph],
+    entry: &str,
+    external_subgraphs: &std::collections::BTreeSet<String>,
+    machine: MachineProfile,
+) -> Result<CompiledProgram, ProgramPipelineIssue> {
+    let inlined = inline_entry(graphs, entry, external_subgraphs)
+        .map_err(ProgramPipelineIssue::Inline)?;
+    let compiled = compile_graph(&inlined.graph, machine)
+        .map_err(ProgramPipelineIssue::Pipeline)?;
+
+    Ok(CompiledProgram {
+        entry_graph: entry.to_owned(),
+        flattened_graph: inlined.graph,
+        origins: inlined.origins,
+        compiled,
     })
 }
 
@@ -290,6 +333,133 @@ mod tests {
             edges,
             authority: AuthorityMode::DefaultDeny,
         }
+    }
+
+    #[test]
+    fn program_compiler_inlines_local_subgraph_and_preserves_origin() {
+        let worker = Graph {
+            name: "worker".into(),
+            inputs: vec![Port {
+                id: 0,
+                name: "x".into(),
+                ty: int(0, 100),
+            }],
+            outputs: vec![Port {
+                id: 0,
+                name: "y".into(),
+                ty: int(1, 101),
+            }],
+            nodes: vec![
+                Node {
+                    id: 1,
+                    operation: Operation::Const(Literal::Integer(1)),
+                    inputs: vec![],
+                    outputs: vec![Port {
+                        id: 0,
+                        name: "one".into(),
+                        ty: int(1, 1),
+                    }],
+                    effects: BTreeSet::new(),
+                    required_capabilities: BTreeSet::new(),
+                },
+                Node {
+                    id: 2,
+                    operation: Operation::Add,
+                    inputs: vec![
+                        Port {
+                            id: 0,
+                            name: "x".into(),
+                            ty: int(0, 100),
+                        },
+                        Port {
+                            id: 1,
+                            name: "one".into(),
+                            ty: int(1, 1),
+                        },
+                    ],
+                    outputs: vec![Port {
+                        id: 0,
+                        name: "y".into(),
+                        ty: int(1, 101),
+                    }],
+                    effects: BTreeSet::new(),
+                    required_capabilities: BTreeSet::new(),
+                },
+            ],
+            edges: vec![
+                Edge {
+                    from: SourceEndpoint::GraphInput(0),
+                    to: TargetEndpoint::NodeInput { node: 2, port: 0 },
+                },
+                Edge {
+                    from: SourceEndpoint::NodeOutput { node: 1, port: 0 },
+                    to: TargetEndpoint::NodeInput { node: 2, port: 1 },
+                },
+                Edge {
+                    from: SourceEndpoint::NodeOutput { node: 2, port: 0 },
+                    to: TargetEndpoint::GraphOutput(0),
+                },
+            ],
+            authority: AuthorityMode::DefaultDeny,
+        };
+
+        let main = Graph {
+            name: "main".into(),
+            inputs: vec![Port {
+                id: 0,
+                name: "x".into(),
+                ty: int(0, 100),
+            }],
+            outputs: vec![Port {
+                id: 0,
+                name: "y".into(),
+                ty: int(1, 101),
+            }],
+            nodes: vec![Node {
+                id: 10,
+                operation: Operation::Subgraph("worker".into()),
+                inputs: vec![Port {
+                    id: 0,
+                    name: "x".into(),
+                    ty: int(0, 100),
+                }],
+                outputs: vec![Port {
+                    id: 0,
+                    name: "y".into(),
+                    ty: int(1, 101),
+                }],
+                effects: BTreeSet::new(),
+                required_capabilities: BTreeSet::new(),
+            }],
+            edges: vec![
+                Edge {
+                    from: SourceEndpoint::GraphInput(0),
+                    to: TargetEndpoint::NodeInput { node: 10, port: 0 },
+                },
+                Edge {
+                    from: SourceEndpoint::NodeOutput { node: 10, port: 0 },
+                    to: TargetEndpoint::GraphOutput(0),
+                },
+            ],
+            authority: AuthorityMode::DefaultDeny,
+        };
+
+        let compiled = compile_program_entry(
+            &[main, worker],
+            "main",
+            &BTreeSet::new(),
+            MachineProfile::x86_64_v3(),
+        )
+        .unwrap();
+
+        assert!(compiled.flattened_graph.nodes.iter().all(|node| {
+            !matches!(node.operation, Operation::Subgraph(_))
+        }));
+        assert!(compiled
+            .origins
+            .values()
+            .any(|origin| origin.graph == "worker"));
+        assert!(compiled.compiled.assembly.contains("g0_machine_main"));
     }
 
     #[test]
