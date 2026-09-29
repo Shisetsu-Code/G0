@@ -4,6 +4,7 @@ use crate::auth::{
     AuthenticationProfile, AuthenticationProfileIssue, OneTimeCodeContract,
     OneTimeCodeIssue,
 };
+use crate::call_graph::{build_call_graph, CallGraphIssue};
 use crate::concurrency::{
     validate_concurrent_region, ConcurrencyIssue, ConcurrentRegion,
 };
@@ -96,6 +97,7 @@ pub struct ProgramContract {
     pub graphs: Vec<Graph>,
     /// None means a library. Executables name exactly one explicit entry graph.
     pub entry_graph: Option<String>,
+    pub external_subgraphs: std::collections::BTreeSet<String>,
     pub store: StoreSchema,
     pub concurrent_regions: Vec<ConcurrentRegion>,
     pub connections: Vec<ConnectionRequirement>,
@@ -138,6 +140,7 @@ pub struct PlatformContract {
 pub enum ProgramIssue {
     DuplicateGraphName(String),
     UnknownEntryGraph(String),
+    CallGraph(Vec<CallGraphIssue>),
     Graph {
         graph: String,
         issues: Vec<ValidationIssue>,
@@ -258,6 +261,12 @@ pub fn validate_program(
         && !graph_names.contains(entry.as_str())
     {
         issues.push(ProgramIssue::UnknownEntryGraph(entry.clone()));
+    }
+
+    if let Err(call_issues) =
+        build_call_graph(&program.graphs, &program.external_subgraphs)
+    {
+        issues.push(ProgramIssue::CallGraph(call_issues));
     }
 
     for graph in &program.graphs {
