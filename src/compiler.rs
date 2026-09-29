@@ -5,7 +5,11 @@ use crate::machine::{
     AllocationResult, MachineProfile, RegisterPressure,
 };
 use crate::mir::{lower_graph, LoweringIssue, MirProgram};
+use crate::machine_ir::{
+    lower_mir as lower_machine_ir, MachineLoweringIssue, MachineProgram,
+};
 use crate::mir_validate::{validate_mir, MirIssue};
+use crate::x86_codegen::{emit_x86_64, X86CodegenIssue};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompiledGraph {
@@ -13,6 +17,8 @@ pub struct CompiledGraph {
     pub mir: MirProgram,
     pub allocation: AllocationResult,
     pub pressure: RegisterPressure,
+    pub machine_ir: MachineProgram,
+    pub assembly: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +27,8 @@ pub enum PipelineIssue {
     Lowering(Vec<LoweringIssue>),
     Mir(Vec<MirIssue>),
     Allocation(AllocationIssue),
+    Machine(Vec<MachineLoweringIssue>),
+    Codegen(Vec<X86CodegenIssue>),
 }
 
 pub fn compile_graph(
@@ -36,12 +44,18 @@ pub fn compile_graph(
     let allocation =
         linear_scan_allocate(&mir, machine).map_err(PipelineIssue::Allocation)?;
     let pressure = register_pressure(&allocation);
+    let machine_ir =
+        lower_machine_ir(&mir, &allocation).map_err(PipelineIssue::Machine)?;
+    let assembly =
+        emit_x86_64(&machine_ir).map_err(PipelineIssue::Codegen)?;
 
     Ok(CompiledGraph {
         graph_name: graph.name.clone(),
         mir,
         allocation,
         pressure,
+        machine_ir,
+        assembly,
     })
 }
 
@@ -154,5 +168,7 @@ mod tests {
         assert_eq!(compiled.graph_name, "answer");
         assert_eq!(compiled.mir.instructions.len(), 3);
         assert!(!compiled.allocation.locations.is_empty());
+        assert!(!compiled.machine_ir.operations.is_empty());
+        assert!(compiled.assembly.contains("g0_machine_main"));
     }
 }
