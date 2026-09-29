@@ -17,6 +17,7 @@ pub enum X86CodegenIssue {
     InvalidCallTarget(String),
     UnsupportedReturnArity(usize),
     OperandWidthMismatch,
+    InvalidTruncateBits(u16),
 }
 
 pub fn emit_x86_64(
@@ -287,6 +288,24 @@ pub fn emit_x86_64_named(
                     issues.push(issue);
                 } else {
                     trap_labels.push(trap);
+                }
+            }
+            MachineOp::Truncate {
+                dst,
+                source,
+                output_width,
+                bits,
+                signed,
+            } => {
+                if let Err(issue) = emit_truncate(
+                    &mut out,
+                    *dst,
+                    *source,
+                    *output_width,
+                    *bits,
+                    *signed,
+                ) {
+                    issues.push(issue);
                 }
             }
             MachineOp::Call {
@@ -707,6 +726,59 @@ fn emit_result_width_guard(
         IntegerWidth::U64 | IntegerWidth::I64 => {}
         IntegerWidth::U128 | IntegerWidth::I128 => {}
     }
+}
+
+fn emit_truncate(
+    out: &mut String,
+    dst: PhysicalLocation,
+    source: MachineOperand,
+    output_width: IntegerWidth,
+    bits: u16,
+    signed: bool,
+) -> Result<(), X86CodegenIssue> {
+    if bits == 0 || bits > 64 {
+        return Err(X86CodegenIssue::InvalidTruncateBits(bits));
+    }
+    if matches!(
+        output_width,
+        IntegerWidth::U128 | IntegerWidth::I128
+    ) {
+        return Err(X86CodegenIssue::Unsupported128BitInteger);
+    }
+
+    let Some(source_width) = operand_integer_width(source) else {
+        return Err(X86CodegenIssue::OperandWidthMismatch);
+    };
+    if matches!(
+        source_width,
+        IntegerWidth::U128 | IntegerWidth::I128
+    ) {
+        return Err(X86CodegenIssue::Unsupported128BitInteger);
+    }
+
+    load_operand_to_register(out, "rax", source)?;
+
+    if bits < 64 {
+        let mask = (1_u128 << bits) - 1;
+        out.push_str(&format!(
+            "    mov r11, {}\n",
+            mask
+        ));
+        out.push_str("    and rax, r11\n");
+
+        if signed {
+            let shift = 64_u16 - bits;
+            out.push_str(&format!("    shl rax, {}\n", shift));
+            out.push_str(&format!("    sar rax, {}\n", shift));
+        }
+    }
+
+    store_from_register(
+        out,
+        dst,
+        "rax",
+        MachineValueType::Integer(output_width),
+    )
 }
 
 fn emit_checked_convert(
