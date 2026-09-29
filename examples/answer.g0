@@ -1,0 +1,11 @@
+# G0 Graph Assembly 0.1
+# Forward references are valid; textual order is not execution order.
+
+g0 0.1
+target x86_64-v3
+
+add %answer %left %right
+const %left i64 20
+const %right i64 22
+
+return %answer
