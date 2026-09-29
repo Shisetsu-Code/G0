@@ -84,10 +84,10 @@ pub fn verify_package_against_lock(
     }
 }
 
-pub fn dependency_requirement(
-    manifest: &PackageManifest,
+pub fn dependency_requirement<'a>(
+    manifest: &'a PackageManifest,
     dependency: &PackageId,
-) -> Option<&PackageRequirement> {
+) -> Option<&'a PackageRequirement> {
     manifest.dependencies.get(dependency)
 }
 
