@@ -5,6 +5,10 @@ use crate::crypto::{
     validate_crypto_profile, CryptoProfile, CryptoProfileIssue,
     CryptoRequirement,
 };
+use crate::data_format::{validate_schema, DataSchema, SchemaIssue};
+use crate::entropy::{
+    validate_randomness_use, EntropyIssue, RandomUse, RandomnessClass,
+};
 use crate::gir::Graph;
 use crate::gir_validate::{self, ValidationIssue};
 use crate::hardware::{
@@ -28,6 +32,7 @@ use crate::network::{
 use crate::ownership::{
     validate_ownership, OwnershipIssue, OwnershipPlan,
 };
+use crate::runtime::{validate_region_plan, RegionIssue, RegionPlan};
 use crate::security::{
     validate_password_contract, PasswordTuning, SecurityContractIssue,
     SecurityProfile,
@@ -39,6 +44,7 @@ use crate::text::{
     validate_text_boundary, validate_text_contract, TextBoundaryIssue,
     TextBoundaryRequirement, TextContract, TextContractIssue,
 };
+use crate::time::{validate_clock_use, ClockKind, TimeIssue, TimeUse};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MathUse {
@@ -66,6 +72,10 @@ pub struct ProgramContract {
     pub text_boundaries: Vec<TextBoundaryRequirement>,
     pub io_pipelines: Vec<(IoPipeline, IoValueKind)>,
     pub hardware: HardwareRequirement,
+    pub regions: Vec<RegionPlan>,
+    pub schemas: Vec<DataSchema>,
+    pub time_uses: Vec<(ClockKind, TimeUse)>,
+    pub randomness_uses: Vec<(RandomnessClass, RandomUse)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,6 +130,22 @@ pub enum ProgramIssue {
         issues: Vec<IoPipelineIssue>,
     },
     Hardware(Vec<HardwareIssue>),
+    Region {
+        plan: usize,
+        issues: Vec<RegionIssue>,
+    },
+    Schema {
+        schema: usize,
+        issues: Vec<SchemaIssue>,
+    },
+    Time {
+        usage: usize,
+        issue: TimeIssue,
+    },
+    Entropy {
+        usage: usize,
+        issue: EntropyIssue,
+    },
     Security(Vec<SecurityContractIssue>),
 }
 
@@ -241,6 +267,44 @@ pub fn validate_program(
         validate_hardware_profile(&platform.hardware, &program.hardware)
     {
         issues.push(ProgramIssue::Hardware(hardware_issues));
+    }
+
+    for (index, region) in program.regions.iter().enumerate() {
+        if let Err(region_issues) = validate_region_plan(region) {
+            issues.push(ProgramIssue::Region {
+                plan: index,
+                issues: region_issues,
+            });
+        }
+    }
+
+    for (index, schema) in program.schemas.iter().enumerate() {
+        if let Err(schema_issues) = validate_schema(schema) {
+            issues.push(ProgramIssue::Schema {
+                schema: index,
+                issues: schema_issues,
+            });
+        }
+    }
+
+    for (index, (clock, usage)) in program.time_uses.iter().enumerate() {
+        if let Err(issue) = validate_clock_use(*clock, *usage) {
+            issues.push(ProgramIssue::Time {
+                usage: index,
+                issue,
+            });
+        }
+    }
+
+    for (index, (class, usage)) in
+        program.randomness_uses.iter().enumerate()
+    {
+        if let Err(issue) = validate_randomness_use(*class, *usage) {
+            issues.push(ProgramIssue::Entropy {
+                usage: index,
+                issue,
+            });
+        }
     }
 
     if let Some(password_tuning) = program.password_tuning
@@ -557,6 +621,41 @@ mod tests {
                 .iter()
                 .any(|issue| matches!(issue, ProgramIssue::Hardware(_)))
         );
+    }
+
+    #[test]
+    fn ambient_semantics_are_compile_gates() {
+        use crate::runtime::{RegionKind, RegionSpec};
+
+        let program = ProgramContract {
+            regions: vec![RegionPlan {
+                regions: vec![RegionSpec {
+                    id: "secret".into(),
+                    parent: None,
+                    kind: RegionKind::Secret,
+                    max_bytes: Some(4096),
+                    zero_on_release: false,
+                }],
+                ..RegionPlan::default()
+            }],
+            time_uses: vec![(ClockKind::Wall, TimeUse::Timeout)],
+            randomness_uses: vec![(
+                RandomnessClass::Deterministic,
+                RandomUse::SessionKey,
+            )],
+            ..ProgramContract::default()
+        };
+
+        let issues = validate_program(&program, &platform()).unwrap_err();
+        assert!(issues.iter().any(|issue| {
+            matches!(issue, ProgramIssue::Region { .. })
+        }));
+        assert!(issues.iter().any(|issue| {
+            matches!(issue, ProgramIssue::Time { .. })
+        }));
+        assert!(issues.iter().any(|issue| {
+            matches!(issue, ProgramIssue::Entropy { .. })
+        }));
     }
 
     #[test]
