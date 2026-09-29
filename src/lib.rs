@@ -16,6 +16,7 @@ pub mod freshness;
 pub mod filesystem;
 pub mod gir;
 pub mod gir_validate;
+pub mod gir_optimize;
 pub mod graph;
 pub mod hardware;
 pub mod information_flow;
