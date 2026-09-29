@@ -46,6 +46,7 @@ use crate::policy_plan::{compile_policy, PolicyCompileIssue};
 use crate::query::{
     validate_query_with_protected_indexes, QueryIssue, QuerySpec,
 };
+use crate::roles::{validate_role_registry, RoleIssue, RoleRegistry};
 use crate::runtime::{validate_region_plan, RegionIssue, RegionPlan};
 use crate::scheduler::{
     validate_schedule, ScheduleGraph, ScheduleIssue, SchedulerProfile,
@@ -122,6 +123,7 @@ pub struct ProgramContract {
     pub migrations: Vec<MigrationPlan>,
     pub authentication: Vec<AuthenticationProfile>,
     pub one_time_codes: Vec<OneTimeCodeContract>,
+    pub roles: RoleRegistry,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -239,6 +241,7 @@ pub enum ProgramIssue {
         profile: usize,
         issues: Vec<OneTimeCodeIssue>,
     },
+    Roles(Vec<RoleIssue>),
     Security(Vec<SecurityContractIssue>),
 }
 
@@ -549,6 +552,10 @@ pub fn validate_program(
                 issues: otp_issues,
             });
         }
+    }
+
+    if let Err(role_issues) = validate_role_registry(&program.roles) {
+        issues.push(ProgramIssue::Roles(role_issues));
     }
 
     if let Some(password_tuning) = program.password_tuning
