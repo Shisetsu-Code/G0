@@ -38,8 +38,8 @@ pub fn canonicalize_graph(graph: &Graph) -> CanonicalGraphDocument {
     }
 }
 
-fn port_key(port: &Port) -> (u16, &str) {
-    (port.id, port.name.as_str())
+fn port_key(port: &Port) -> (u16, String) {
+    (port.id, port.name.clone())
 }
 
 fn edge_key(edge: &Edge) -> (u8, u32, u16, u8, u32, u16) {
@@ -85,7 +85,7 @@ mod tests {
 
     use super::*;
     use crate::gir::{
-        AuthorityMode, IntegerType, Literal, Operation, SemanticType,
+        AuthorityMode, IntegerType, Literal, Node, Operation, SemanticType,
     };
 
     fn node(id: u32, value: i128) -> Node {
