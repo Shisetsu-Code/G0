@@ -48,6 +48,7 @@ pub mod side_channel;
 pub mod source_map;
 pub mod storage;
 pub mod storage_crypto;
+pub mod storage_integrity;
 pub mod symbol;
 pub mod task_runtime;
 pub mod text;
