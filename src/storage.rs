@@ -1,6 +1,8 @@
 use std::collections::BTreeSet;
 
-use crate::authority::{Action, PolicySet};
+use crate::authority::{
+    authorize, Action, AuthorizationDecision, DenyReason, Principal, PolicySet, ResourceContext,
+};
 use crate::gir::SemanticType;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13,6 +15,25 @@ pub enum FieldProtection {
     Secret,
     /// Non-recoverable verifier semantics; the original value is never readable from storage.
     Credential,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EncryptionRequirement {
+    StoreAtRest,
+    FieldProtected,
+    SecretField,
+    VerifierOnly,
+}
+
+impl FieldProtection {
+    pub fn encryption_requirement(self) -> EncryptionRequirement {
+        match self {
+            Self::Public => EncryptionRequirement::StoreAtRest,
+            Self::Private => EncryptionRequirement::FieldProtected,
+            Self::Secret => EncryptionRequirement::SecretField,
+            Self::Credential => EncryptionRequirement::VerifierOnly,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +105,14 @@ impl ResourceSchema {
     pub fn action_is_explicitly_authorized(&self, action: &Action) -> bool {
         self.policies.rule_for(action).is_some()
     }
+
+    pub fn field(&self, name: &str) -> Option<&FieldSchema> {
+        self.fields.iter().find(|field| field.name == name)
+    }
+
+    fn is_global(&self) -> bool {
+        self.tenant_isolation == TenantIsolation::Global
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -141,16 +170,139 @@ pub fn validate_resource_schema(resource: &ResourceSchema) -> Result<(), Vec<Sto
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoreOperation {
+    Read { fields: Vec<String> },
+    Create { fields: Vec<String> },
+    Update { fields: Vec<String> },
+    Delete,
+    Enumerate,
+}
+
+impl StoreOperation {
+    fn action(&self) -> Action {
+        match self {
+            Self::Read { .. } => Action::read(),
+            Self::Create { .. } => Action::create(),
+            Self::Update { .. } => Action::update(),
+            Self::Delete => Action::delete(),
+            Self::Enumerate => Action::enumerate(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoreAccessIssue {
+    AuthorizationDenied(DenyReason),
+    UnknownField(String),
+    ImmutableField(String),
+    CredentialReadForbidden(String),
+    CredentialMutationRequiresVerifier(String),
+}
+
+pub fn authorize_store_operation(
+    schema: &ResourceSchema,
+    principal: &Principal,
+    resource: &ResourceContext,
+    operation: &StoreOperation,
+) -> Result<(), Vec<StoreAccessIssue>> {
+    let mut issues = Vec::new();
+
+    match authorize(
+        principal,
+        resource,
+        &schema.policies,
+        &operation.action(),
+        schema.is_global(),
+    ) {
+        AuthorizationDecision::Allow => {}
+        AuthorizationDecision::Deny(reason) => {
+            issues.push(StoreAccessIssue::AuthorizationDenied(reason));
+        }
+    }
+
+    match operation {
+        StoreOperation::Read { fields } => {
+            for name in fields {
+                match schema.field(name) {
+                    None => issues.push(StoreAccessIssue::UnknownField(name.clone())),
+                    Some(field) if field.protection == FieldProtection::Credential => {
+                        issues.push(StoreAccessIssue::CredentialReadForbidden(name.clone()));
+                    }
+                    Some(_) => {}
+                }
+            }
+        }
+        StoreOperation::Create { fields } => {
+            for name in fields {
+                if schema.field(name).is_none() {
+                    issues.push(StoreAccessIssue::UnknownField(name.clone()));
+                }
+            }
+        }
+        StoreOperation::Update { fields } => {
+            for name in fields {
+                match schema.field(name) {
+                    None => issues.push(StoreAccessIssue::UnknownField(name.clone())),
+                    Some(field) if field.protection == FieldProtection::Credential => {
+                        issues.push(StoreAccessIssue::CredentialMutationRequiresVerifier(
+                            name.clone(),
+                        ));
+                    }
+                    Some(field) if !field.mutable => {
+                        issues.push(StoreAccessIssue::ImmutableField(name.clone()));
+                    }
+                    Some(_) => {}
+                }
+            }
+        }
+        StoreOperation::Delete | StoreOperation::Enumerate => {}
+    }
+
+    if issues.is_empty() {
+        Ok(())
+    } else {
+        Err(issues)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gir::SemanticType;
+    use crate::authority::{
+        PolicyExpr, PolicyRule, PrincipalId, ResourceContext, ScopeExpr,
+    };
+    use crate::gir::{CapabilityClass, SemanticType};
+
+    fn message_schema() -> ResourceSchema {
+        let mut resource = ResourceSchema::new("Message");
+        resource.fields = vec![
+            FieldSchema {
+                name: "body".into(),
+                ty: SemanticType::Text,
+                protection: FieldProtection::Private,
+                mutable: true,
+            },
+            FieldSchema {
+                name: "created_at".into(),
+                ty: SemanticType::Integer(
+                    crate::gir::IntegerType::new(0, i64::MAX as i128).unwrap(),
+                ),
+                protection: FieldProtection::Public,
+                mutable: false,
+            },
+        ];
+        resource
+    }
 
     #[test]
     fn resources_default_to_scoped_isolation_and_deny() {
         let resource = ResourceSchema::new("Message");
-        assert_eq!(resource.tenant_isolation, TenantIsolation::CurrentScope);
-        assert!(!resource.action_is_explicitly_authorized(&Action::new("read")));
+        assert_eq!(
+            resource.tenant_isolation,
+            TenantIsolation::CurrentScope
+        );
+        assert!(!resource.action_is_explicitly_authorized(&Action::read()));
     }
 
     #[test]
@@ -184,5 +336,169 @@ mod tests {
         });
 
         assert!(validate_resource_schema(&resource).is_ok());
+    }
+
+    #[test]
+    fn private_fields_request_native_field_protection() {
+        assert_eq!(
+            FieldProtection::Private.encryption_requirement(),
+            EncryptionRequirement::FieldProtected
+        );
+        assert_eq!(
+            FieldProtection::Credential.encryption_requirement(),
+            EncryptionRequirement::VerifierOnly
+        );
+    }
+
+    #[test]
+    fn valid_identity_does_not_bypass_missing_resource_policy() {
+        let schema = message_schema();
+        let principal = Principal::new("alice", "tenant-a");
+        let mut message = ResourceContext::new("Message", "m1", "tenant-a");
+        message.owner = Some(principal.id.clone());
+
+        let issues = authorize_store_operation(
+            &schema,
+            &principal,
+            &message,
+            &StoreOperation::Read {
+                fields: vec!["body".into()],
+            },
+        )
+        .unwrap_err();
+
+        assert!(issues.iter().any(|issue| {
+            matches!(
+                issue,
+                StoreAccessIssue::AuthorizationDenied(DenyReason::NoPolicy)
+            )
+        }));
+    }
+
+    #[test]
+    fn owner_policy_does_not_cross_scope() {
+        let mut schema = message_schema();
+        schema.policies.rules.push(PolicyRule {
+            action: Action::read(),
+            allow_if: PolicyExpr::PrincipalOwnsResource,
+        });
+
+        let principal = Principal::new("alice", "tenant-a");
+        let mut message = ResourceContext::new("Message", "m1", "tenant-b");
+        message.owner = Some(principal.id.clone());
+
+        let issues = authorize_store_operation(
+            &schema,
+            &principal,
+            &message,
+            &StoreOperation::Read {
+                fields: vec!["body".into()],
+            },
+        )
+        .unwrap_err();
+
+        assert!(issues.iter().any(|issue| {
+            matches!(
+                issue,
+                StoreAccessIssue::AuthorizationDenied(DenyReason::ScopeMismatch)
+            )
+        }));
+    }
+
+    #[test]
+    fn credential_field_can_never_be_read_back() {
+        let mut schema = ResourceSchema::new("User");
+        schema.fields.push(FieldSchema {
+            name: "password".into(),
+            ty: SemanticType::Credential(Box::new(SemanticType::Text)),
+            protection: FieldProtection::Credential,
+            mutable: true,
+        });
+        schema.policies.rules.push(PolicyRule {
+            action: Action::read(),
+            allow_if: PolicyExpr::PrincipalOwnsResource,
+        });
+
+        let principal = Principal::new("alice", "tenant-a");
+        let mut user = ResourceContext::new("User", "alice", "tenant-a");
+        user.owner = Some(PrincipalId::new("alice"));
+
+        let issues = authorize_store_operation(
+            &schema,
+            &principal,
+            &user,
+            &StoreOperation::Read {
+                fields: vec!["password".into()],
+            },
+        )
+        .unwrap_err();
+
+        assert!(issues.iter().any(|issue| {
+            matches!(
+                issue,
+                StoreAccessIssue::CredentialReadForbidden(field)
+                if field == "password"
+            )
+        }));
+    }
+
+    #[test]
+    fn enumerate_requires_its_own_policy_not_read_policy() {
+        let mut schema = message_schema();
+        schema.policies.rules.push(PolicyRule {
+            action: Action::read(),
+            allow_if: PolicyExpr::PrincipalOwnsResource,
+        });
+
+        let principal = Principal::new("alice", "tenant-a");
+        let mut message = ResourceContext::new("Message", "m1", "tenant-a");
+        message.owner = Some(principal.id.clone());
+
+        let issues = authorize_store_operation(
+            &schema,
+            &principal,
+            &message,
+            &StoreOperation::Enumerate,
+        )
+        .unwrap_err();
+
+        assert!(issues.iter().any(|issue| {
+            matches!(
+                issue,
+                StoreAccessIssue::AuthorizationDenied(DenyReason::NoPolicy)
+            )
+        }));
+    }
+
+    #[test]
+    fn matching_resource_capability_can_authorize_store_read() {
+        let required = crate::authority::CapabilityGrant {
+            class: CapabilityClass::Resource,
+            action: Action::read(),
+            resource: crate::authority::ResourceKind::new("Message"),
+            scope: ScopeExpr::CurrentScope,
+        };
+
+        let mut schema = message_schema();
+        schema.policies.rules.push(PolicyRule {
+            action: Action::read(),
+            allow_if: PolicyExpr::Requires(required.clone()),
+        });
+
+        let mut principal = Principal::new("alice", "tenant-a");
+        principal.grants.insert(required);
+
+        let message = ResourceContext::new("Message", "m1", "tenant-a");
+        assert!(
+            authorize_store_operation(
+                &schema,
+                &principal,
+                &message,
+                &StoreOperation::Read {
+                    fields: vec!["body".into()],
+                },
+            )
+            .is_ok()
+        );
     }
 }
