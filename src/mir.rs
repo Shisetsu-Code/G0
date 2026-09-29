@@ -221,7 +221,11 @@ fn lower_type(ty: &SemanticType) -> Option<MirType> {
         | SemanticType::State(_)
         | SemanticType::Atomic(_)
         | SemanticType::Versioned(_) => Some(MirType::Pointer),
-        SemanticType::Array(_, _)
+        SemanticType::BigInteger
+        | SemanticType::Rational
+        | SemanticType::Decimal(_)
+        | SemanticType::BigFloat(_)
+        | SemanticType::Array(_, _)
         | SemanticType::Slice(_)
         | SemanticType::Vector(_, _)
         | SemanticType::Record(_)
