@@ -25,6 +25,9 @@ use crate::math::{
 use crate::memory::{
     validate_memory_plan, MemoryIssue, MemoryPlan,
 };
+use crate::migration::{
+    validate_migration, MigrationIssue, MigrationPlan,
+};
 use crate::network::{
     validate_network_profile, ConnectionRequirement, NetworkProfile,
     NetworkProfileIssue,
@@ -60,6 +63,9 @@ use crate::text::{
     TextBoundaryRequirement, TextContract, TextContractIssue,
 };
 use crate::time::{validate_clock_use, ClockKind, TimeIssue, TimeUse};
+use crate::transaction::{
+    validate_transaction, TransactionContract, TransactionIssue,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MathUse {
@@ -96,6 +102,8 @@ pub struct ProgramContract {
     pub protected_indexes: Vec<ProtectedIndexSpec>,
     pub task_plans: Vec<TaskPlan>,
     pub storage_crypto_bindings: Vec<ProtectedFieldBinding>,
+    pub transactions: Vec<TransactionContract>,
+    pub migrations: Vec<MigrationPlan>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -185,6 +193,14 @@ pub enum ProgramIssue {
         issues: Vec<TaskPlanIssue>,
     },
     StorageCrypto(Vec<StorageCryptoIssue>),
+    Transaction {
+        transaction: usize,
+        issues: Vec<TransactionIssue>,
+    },
+    Migration {
+        migration: usize,
+        issues: Vec<MigrationIssue>,
+    },
     Security(Vec<SecurityContractIssue>),
 }
 
@@ -414,6 +430,24 @@ pub fn validate_program(
     }
     if !storage_crypto_issues.is_empty() {
         issues.push(ProgramIssue::StorageCrypto(storage_crypto_issues));
+    }
+
+    for (index, transaction) in program.transactions.iter().enumerate() {
+        if let Err(transaction_issues) = validate_transaction(transaction) {
+            issues.push(ProgramIssue::Transaction {
+                transaction: index,
+                issues: transaction_issues,
+            });
+        }
+    }
+
+    for (index, migration) in program.migrations.iter().enumerate() {
+        if let Err(migration_issues) = validate_migration(migration) {
+            issues.push(ProgramIssue::Migration {
+                migration: index,
+                issues: migration_issues,
+            });
+        }
     }
 
     if let Some(password_tuning) = program.password_tuning
