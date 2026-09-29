@@ -127,6 +127,7 @@ pub enum StorageSchemaIssue {
     DuplicateMemberName(String),
     DuplicatePolicyAction(String),
     UnknownIndexField(String),
+    ProtectedFieldRequiresProtectedIndex(String),
     UnknownRelationTarget { relation: String, target: String },
     CredentialFieldMustUseCredentialType(String),
     SecretFieldMustUseSecretType(String),
@@ -181,6 +182,16 @@ pub fn validate_resource_schema(resource: &ResourceSchema) -> Result<(), Vec<Sto
         for field in &index.fields {
             if !field_names.contains(field.as_str()) {
                 issues.push(StorageSchemaIssue::UnknownIndexField(field.clone()));
+                continue;
+            }
+            if let Some(schema) = resource.field(field)
+                && schema.protection != FieldProtection::Public
+            {
+                issues.push(
+                    StorageSchemaIssue::ProtectedFieldRequiresProtectedIndex(
+                        field.clone(),
+                    ),
+                );
             }
         }
     }
