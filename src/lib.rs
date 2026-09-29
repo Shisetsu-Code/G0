@@ -43,6 +43,7 @@ pub mod scheduler;
 pub mod secure_index;
 pub mod security;
 pub mod side_channel;
+pub mod source_map;
 pub mod storage;
 pub mod storage_crypto;
 pub mod symbol;
