@@ -49,3 +49,14 @@ jobs:
           EOF
           cc target/native_call.s target/native_call_harness.c -o target/native_call
           ./target/native_call
+      - name: Compile and execute checked Div Rem
+        run: |
+          cargo run --release --example native_divrem > target/native_divrem.s
+          cat > target/native_divrem_harness.c <<'EOF'
+          long g0_machine_main(void);
+          int main(void) {
+              return g0_machine_main() == 16 ? 0 : 1;
+          }
+          EOF
+          cc target/native_divrem.s target/native_divrem_harness.c -o target/native_divrem
+          ./target/native_divrem
