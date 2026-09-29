@@ -87,8 +87,7 @@ pub fn compile_program(
         })?;
 
         assembly.push_str(&compiled.assembly);
-        assembly.push('
-');
+        assembly.push('\n');
         graphs.insert(graph.name.clone(), compiled);
     }
 
