@@ -7,6 +7,7 @@ pub mod gir_validate;
 pub mod graph;
 pub mod optimize;
 pub mod parser;
+pub mod security;
 pub mod storage;
 pub mod tuning;
 pub mod validate;
