@@ -220,7 +220,9 @@ fn validate_port_set(label: &str, ports: &[Port], report: &mut ValidationReport)
 
 fn resolve_source_type<'a>(graph: &'a Graph, source: &SourceEndpoint) -> Option<&'a SemanticType> {
     match source {
-        SourceEndpoint::GraphInput(port) => graph.inputs.iter().find(|p| p.id == *port).map(|p| &p.ty),
+        SourceEndpoint::GraphInput(port) => {
+            graph.inputs.iter().find(|p| p.id == *port).map(|p| &p.ty)
+        }
         SourceEndpoint::NodeOutput { node, port } => graph
             .nodes
             .iter()
@@ -232,7 +234,9 @@ fn resolve_source_type<'a>(graph: &'a Graph, source: &SourceEndpoint) -> Option<
 
 fn resolve_target_type<'a>(graph: &'a Graph, target: &TargetEndpoint) -> Option<&'a SemanticType> {
     match target {
-        TargetEndpoint::GraphOutput(port) => graph.outputs.iter().find(|p| p.id == *port).map(|p| &p.ty),
+        TargetEndpoint::GraphOutput(port) => {
+            graph.outputs.iter().find(|p| p.id == *port).map(|p| &p.ty)
+        }
         TargetEndpoint::NodeInput { node, port } => graph
             .nodes
             .iter()
@@ -325,13 +329,19 @@ fn require_pure(node: &Node, report: &mut ValidationReport) {
     if !node.effects.is_empty() {
         report.push(
             ValidationCode::PureNodeHasEffects,
-            format!("pure node {} {:?} declares effects", node.id, node.operation),
+            format!(
+                "pure node {} {:?} declares effects",
+                node.id, node.operation
+            ),
         );
     }
     if !node.required_capabilities.is_empty() {
         report.push(
             ValidationCode::PureNodeHasCapabilities,
-            format!("pure node {} {:?} requests capabilities", node.id, node.operation),
+            format!(
+                "pure node {} {:?} requests capabilities",
+                node.id, node.operation
+            ),
         );
     }
 }
@@ -360,7 +370,10 @@ fn validate_integer_arithmetic(node: &Node, report: &mut ValidationReport) {
     ) else {
         report.push(
             ValidationCode::OperationShape,
-            format!("node {} {:?} accepts and returns semantic Integer values only", node.id, node.operation),
+            format!(
+                "node {} {:?} accepts and returns semantic Integer values only",
+                node.id, node.operation
+            ),
         );
         return;
     };
@@ -449,7 +462,11 @@ fn validate_effect_capabilities(node: &Node, report: &mut ValidationReport) {
         let Some(class) = capability_class_for_effect(*effect) else {
             continue;
         };
-        if !node.required_capabilities.iter().any(|cap| cap.class == class) {
+        if !node
+            .required_capabilities
+            .iter()
+            .any(|cap| cap.class == class)
+        {
             report.push(
                 ValidationCode::EffectWithoutCapability,
                 format!(
@@ -471,13 +488,23 @@ fn require_execution(
     if !node.effects.contains(&effect) {
         report.push(
             ValidationCode::ExecutionMissingEffect,
-            format!("node {} performs {label} but does not declare {:?} effect", node.id, effect),
+            format!(
+                "node {} performs {label} but does not declare {:?} effect",
+                node.id, effect
+            ),
         );
     }
-    if !node.required_capabilities.iter().any(|cap| cap.class == class) {
+    if !node
+        .required_capabilities
+        .iter()
+        .any(|cap| cap.class == class)
+    {
         report.push(
             ValidationCode::ExecutionMissingCapability,
-            format!("node {} performs {label} without explicit {:?} capability", node.id, class),
+            format!(
+                "node {} performs {label} without explicit {:?} capability",
+                node.id, class
+            ),
         );
     }
 }
@@ -539,12 +566,7 @@ mod tests {
         }
     }
 
-    fn pure_node(
-        id: u32,
-        operation: Operation,
-        inputs: Vec<Port>,
-        outputs: Vec<Port>,
-    ) -> Node {
+    fn pure_node(id: u32, operation: Operation, inputs: Vec<Port>, outputs: Vec<Port>) -> Node {
         Node {
             id,
             operation,
@@ -558,18 +580,12 @@ mod tests {
     #[test]
     fn validates_typed_graph_with_graph_boundaries() {
         let mut graph = Graph::new("add");
-        graph.inputs = vec![
-            port(0, "a", integer(0, 10)),
-            port(1, "b", integer(0, 20)),
-        ];
+        graph.inputs = vec![port(0, "a", integer(0, 10)), port(1, "b", integer(0, 20))];
         graph.outputs = vec![port(0, "sum", integer(0, 30))];
         graph.nodes = vec![pure_node(
             10,
             Operation::Add,
-            vec![
-                port(0, "a", integer(0, 10)),
-                port(1, "b", integer(0, 20)),
-            ],
+            vec![port(0, "a", integer(0, 10)), port(1, "b", integer(0, 20))],
             vec![port(0, "sum", integer(0, 30))],
         )];
         graph.edges = vec![
@@ -601,7 +617,12 @@ mod tests {
         }];
 
         let report = validate(&graph).unwrap_err();
-        assert!(report.issues.iter().any(|i| i.code == ValidationCode::TypeMismatch));
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|i| i.code == ValidationCode::TypeMismatch)
+        );
     }
 
     #[test]
@@ -624,10 +645,7 @@ mod tests {
             pure_node(
                 3,
                 Operation::Add,
-                vec![
-                    port(0, "a", integer(10, 10)),
-                    port(1, "b", integer(10, 10)),
-                ],
+                vec![port(0, "a", integer(10, 10)), port(1, "b", integer(10, 10))],
                 vec![port(0, "sum", integer(0, 10))],
             ),
         ];
@@ -647,7 +665,12 @@ mod tests {
         ];
 
         let report = validate(&graph).unwrap_err();
-        assert!(report.issues.iter().any(|i| i.code == ValidationCode::ArithmeticRange));
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|i| i.code == ValidationCode::ArithmeticRange)
+        );
     }
 
     #[test]
@@ -674,8 +697,18 @@ mod tests {
         }];
 
         let report = validate(&graph).unwrap_err();
-        assert!(report.issues.iter().any(|i| i.code == ValidationCode::ImportHasEffects));
-        assert!(report.issues.iter().any(|i| i.code == ValidationCode::ImportHasCapabilities));
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|i| i.code == ValidationCode::ImportHasEffects)
+        );
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|i| i.code == ValidationCode::ImportHasCapabilities)
+        );
     }
 
     #[test]
@@ -692,8 +725,18 @@ mod tests {
         )];
 
         let report = validate(&graph).unwrap_err();
-        assert!(report.issues.iter().any(|i| i.code == ValidationCode::ExecutionMissingEffect));
-        assert!(report.issues.iter().any(|i| i.code == ValidationCode::ExecutionMissingCapability));
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|i| i.code == ValidationCode::ExecutionMissingEffect)
+        );
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|i| i.code == ValidationCode::ExecutionMissingCapability)
+        );
     }
 
     #[test]
@@ -712,6 +755,11 @@ mod tests {
         }];
 
         let report = validate(&graph).unwrap_err();
-        assert!(report.issues.iter().any(|i| i.code == ValidationCode::EffectWithoutCapability));
+        assert!(
+            report
+                .issues
+                .iter()
+                .any(|i| i.code == ValidationCode::EffectWithoutCapability)
+        );
     }
 }

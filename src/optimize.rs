@@ -18,15 +18,13 @@ pub fn constant_fold(graph: &mut Graph) {
             }
         }
 
-        if !changed { break; }
+        if !changed {
+            break;
+        }
     }
 }
 
-fn bin_const(
-    a: &Op,
-    b: &Op,
-    op: fn(i64, i64) -> Option<i64>,
-) -> Option<i64> {
+fn bin_const(a: &Op, b: &Op, op: fn(i64, i64) -> Option<i64>) -> Option<i64> {
     match (a, b) {
         (Op::Const(a), Op::Const(b)) => op(*a, *b),
         _ => None,
@@ -41,7 +39,10 @@ mod tests {
 
     #[test]
     fn folds_answer_to_42() {
-        let mut graph = parser::parse("g0 0.1\nconst %a i64 20\nconst %b i64 22\nadd %sum %a %b\nreturn %sum\n").unwrap();
+        let mut graph = parser::parse(
+            "g0 0.1\nconst %a i64 20\nconst %b i64 22\nadd %sum %a %b\nreturn %sum\n",
+        )
+        .unwrap();
         constant_fold(&mut graph);
         assert_eq!(graph.nodes[graph.output].op, Op::Const(42));
     }

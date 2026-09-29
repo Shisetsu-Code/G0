@@ -1,7 +1,9 @@
 use std::{env, fs, path::PathBuf, process::ExitCode};
 
 fn usage() {
-    eprintln!("g0c 0.1.0\n\nUSAGE:\n    g0c check <input.g0>\n    g0c compile <input.g0> [-o output.s]");
+    eprintln!(
+        "g0c 0.1.0\n\nUSAGE:\n    g0c check <input.g0>\n    g0c compile <input.g0> [-o output.s]"
+    );
 }
 
 fn main() -> ExitCode {

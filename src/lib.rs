@@ -1,7 +1,7 @@
 pub mod backend;
-pub mod graph;
 pub mod gir;
 pub mod gir_validate;
+pub mod graph;
 pub mod optimize;
 pub mod parser;
 pub mod validate;
@@ -28,15 +28,21 @@ impl std::fmt::Display for CompileError {
 impl std::error::Error for CompileError {}
 
 impl From<parser::ParseError> for CompileError {
-    fn from(value: parser::ParseError) -> Self { Self::Parse(value) }
+    fn from(value: parser::ParseError) -> Self {
+        Self::Parse(value)
+    }
 }
 
 impl From<validate::ValidationError> for CompileError {
-    fn from(value: validate::ValidationError) -> Self { Self::Validate(value) }
+    fn from(value: validate::ValidationError) -> Self {
+        Self::Validate(value)
+    }
 }
 
 impl From<std::io::Error> for CompileError {
-    fn from(value: std::io::Error) -> Self { Self::Io(value) }
+    fn from(value: std::io::Error) -> Self {
+        Self::Io(value)
+    }
 }
 
 pub fn compile_source(source: &str) -> Result<String, CompileError> {

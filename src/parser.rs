@@ -34,12 +34,18 @@ struct RawNode {
 }
 
 fn err(line: usize, message: impl Into<String>) -> ParseError {
-    ParseError { line, message: message.into() }
+    ParseError {
+        line,
+        message: message.into(),
+    }
 }
 
 fn value_name(token: &str, line: usize) -> Result<String, ParseError> {
     let Some(name) = token.strip_prefix('%') else {
-        return Err(err(line, format!("expected value reference beginning with %, got '{token}'")));
+        return Err(err(
+            line,
+            format!("expected value reference beginning with %, got '{token}'"),
+        ));
     };
     if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
         return Err(err(line, format!("invalid value name '{token}'")));
@@ -57,7 +63,9 @@ pub fn parse(source: &str) -> Result<Graph, ParseError> {
     for (index, original) in source.lines().enumerate() {
         let line_no = index + 1;
         let line = original.split('#').next().unwrap_or("").trim();
-        if line.is_empty() { continue; }
+        if line.is_empty() {
+            continue;
+        }
 
         let parts: Vec<&str> = line.split_whitespace().collect();
         match parts.as_slice() {
@@ -72,8 +80,15 @@ pub fn parse(source: &str) -> Result<Graph, ParseError> {
                 if !declared.insert(name.clone()) {
                     return Err(err(line_no, format!("duplicate value %{name}")));
                 }
-                let value = value.parse::<i64>().map_err(|_| err(line_no, "invalid i64 constant"))?;
-                raw_nodes.push(RawNode { line: line_no, name, ty: Type::I64, op: RawOp::Const(value) });
+                let value = value
+                    .parse::<i64>()
+                    .map_err(|_| err(line_no, "invalid i64 constant"))?;
+                raw_nodes.push(RawNode {
+                    line: line_no,
+                    name,
+                    ty: Type::I64,
+                    op: RawOp::Const(value),
+                });
             }
             ["add", out, a, b] | ["sub", out, a, b] | ["mul", out, a, b] => {
                 let name = value_name(out, line_no)?;
@@ -88,7 +103,12 @@ pub fn parse(source: &str) -> Result<Graph, ParseError> {
                     "mul" => RawOp::Mul(a, b),
                     _ => unreachable!(),
                 };
-                raw_nodes.push(RawNode { line: line_no, name, ty: Type::I64, op });
+                raw_nodes.push(RawNode {
+                    line: line_no,
+                    name,
+                    ty: Type::I64,
+                    op,
+                });
             }
             ["return", value] => {
                 if output.is_some() {
@@ -96,21 +116,34 @@ pub fn parse(source: &str) -> Result<Graph, ParseError> {
                 }
                 output = Some((line_no, value_name(value, line_no)?));
             }
-            _ => return Err(err(line_no, format!("unknown or malformed instruction: '{line}'"))),
+            _ => {
+                return Err(err(
+                    line_no,
+                    format!("unknown or malformed instruction: '{line}'"),
+                ));
+            }
         }
     }
 
     let version = version.ok_or_else(|| err(1, "missing 'g0 <version>' declaration"))?;
     if version != "0.1" {
-        return Err(err(1, format!("unsupported graph format version '{version}'")));
+        return Err(err(
+            1,
+            format!("unsupported graph format version '{version}'"),
+        ));
     }
 
-    let names: BTreeMap<String, NodeId> = raw_nodes.iter().enumerate()
+    let names: BTreeMap<String, NodeId> = raw_nodes
+        .iter()
+        .enumerate()
         .map(|(id, n)| (n.name.clone(), id))
         .collect();
 
     let resolve = |name: &str, line: usize| -> Result<NodeId, ParseError> {
-        names.get(name).copied().ok_or_else(|| err(line, format!("unknown value %{name}")))
+        names
+            .get(name)
+            .copied()
+            .ok_or_else(|| err(line, format!("unknown value %{name}")))
     };
 
     let mut nodes = Vec::with_capacity(raw_nodes.len());
@@ -121,13 +154,24 @@ pub fn parse(source: &str) -> Result<Graph, ParseError> {
             RawOp::Sub(a, b) => Op::Sub(resolve(&a, raw.line)?, resolve(&b, raw.line)?),
             RawOp::Mul(a, b) => Op::Mul(resolve(&a, raw.line)?, resolve(&b, raw.line)?),
         };
-        nodes.push(Node { name: raw.name, ty: raw.ty, op });
+        nodes.push(Node {
+            name: raw.name,
+            ty: raw.ty,
+            op,
+        });
     }
 
-    let (line, output_name) = output.ok_or_else(|| err(source.lines().count().max(1), "missing return"))?;
+    let (line, output_name) =
+        output.ok_or_else(|| err(source.lines().count().max(1), "missing return"))?;
     let output = resolve(&output_name, line)?;
 
-    Ok(Graph { version, target, nodes, output, names })
+    Ok(Graph {
+        version,
+        target,
+        nodes,
+        output,
+        names,
+    })
 }
 
 #[cfg(test)]

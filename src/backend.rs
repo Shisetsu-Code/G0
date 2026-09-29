@@ -103,10 +103,9 @@ mod tests {
 
     #[test]
     fn backend_respects_graph_dependencies_not_text_order() {
-        let graph = parser::parse(
-            "g0 0.1\nadd %sum %a %b\nconst %a i64 7\nconst %b i64 5\nreturn %sum\n",
-        )
-        .unwrap();
+        let graph =
+            parser::parse("g0 0.1\nadd %sum %a %b\nconst %a i64 7\nconst %b i64 5\nreturn %sum\n")
+                .unwrap();
 
         let asm = super::x86_64::emit(&graph);
 

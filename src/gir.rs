@@ -46,7 +46,10 @@ impl IntegerType {
         if max > i128::MAX as u128 {
             return Err("bootstrap GIR cannot yet represent unsigned ranges above i128::MAX");
         }
-        Ok(Self { min: 0, max: max as i128 })
+        Ok(Self {
+            min: 0,
+            max: max as i128,
+        })
     }
 
     pub fn contains(&self, other: &Self) -> bool {
