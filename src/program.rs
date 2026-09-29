@@ -54,6 +54,9 @@ use crate::security::{
     validate_password_contract, PasswordTuning, SecurityContractIssue,
     SecurityProfile,
 };
+use crate::side_channel::{
+    validate_side_channels, SideChannelIssue,
+};
 use crate::storage::{
     validate_store_schema, StorageSchemaIssue, StoreSchema,
 };
@@ -132,6 +135,10 @@ pub enum ProgramIssue {
     Graph {
         graph: String,
         issues: Vec<ValidationIssue>,
+    },
+    SideChannel {
+        graph: String,
+        issues: Vec<SideChannelIssue>,
     },
     Store(Vec<StorageSchemaIssue>),
     Concurrency {
@@ -232,6 +239,12 @@ pub fn validate_program(
             issues.push(ProgramIssue::Graph {
                 graph: graph.name.clone(),
                 issues: report.issues,
+            });
+        }
+        if let Err(side_channel_issues) = validate_side_channels(graph) {
+            issues.push(ProgramIssue::SideChannel {
+                graph: graph.name.clone(),
+                issues: side_channel_issues,
             });
         }
     }
