@@ -90,6 +90,13 @@ pub enum MachineOp {
         dst: PhysicalLocation,
         value: MachineOperand,
     },
+    ConvertChecked {
+        dst: PhysicalLocation,
+        source: MachineOperand,
+        output_width: IntegerWidth,
+        min: i128,
+        max: i128,
+    },
     Call {
         target: String,
         args: Vec<MachineOperand>,
@@ -554,6 +561,52 @@ pub fn lower_mir(
                             location: value_location,
                             ty: MachineValueType::Bool,
                         },
+                    },
+                });
+            }
+            MirOp::ConvertChecked { min, max } => {
+                if instruction.inputs.len() != 1
+                    || instruction.outputs.len() != 1
+                {
+                    issues.push(MachineLoweringIssue::WrongShape);
+                    continue;
+                }
+
+                let input = instruction.inputs[0];
+                let output = instruction.outputs[0];
+                let Some(source_location) = location(allocation, input)
+                else {
+                    issues.push(MachineLoweringIssue::MissingLocation(input));
+                    continue;
+                };
+                let Some(dst) = location(allocation, output) else {
+                    issues.push(MachineLoweringIssue::MissingLocation(output));
+                    continue;
+                };
+                let Some(source_width) = integer_width(mir, input) else {
+                    issues.push(
+                        MachineLoweringIssue::UnsupportedArithmeticType(input),
+                    );
+                    continue;
+                };
+                let Some(output_width) = integer_width(mir, output) else {
+                    issues.push(
+                        MachineLoweringIssue::UnsupportedArithmeticType(output),
+                    );
+                    continue;
+                };
+
+                operations.push(MachineInstruction {
+                    source_node: instruction.source_node,
+                    op: MachineOp::ConvertChecked {
+                        dst,
+                        source: MachineOperand::Location {
+                            location: source_location,
+                            ty: MachineValueType::Integer(source_width),
+                        },
+                        output_width,
+                        min: *min,
+                        max: *max,
                     },
                 });
             }
