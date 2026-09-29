@@ -109,6 +109,20 @@ impl FieldPolicy {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagedFieldSource {
+    CurrentPrincipal,
+    CurrentScope,
+    Generated,
+    StoreClock,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedField {
+    pub field: String,
+    pub source: ManagedFieldSource,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelationSchema {
     pub name: String,
@@ -129,6 +143,7 @@ pub struct ResourceSchema {
     pub tenant_isolation: TenantIsolation,
     pub fields: Vec<FieldSchema>,
     pub field_policies: Vec<FieldPolicy>,
+    pub managed_fields: Vec<ManagedField>,
     pub relations: Vec<RelationSchema>,
     pub indexes: Vec<IndexIntent>,
     pub policies: PolicySet,
@@ -141,6 +156,7 @@ impl ResourceSchema {
             tenant_isolation: TenantIsolation::CurrentScope,
             fields: Vec::new(),
             field_policies: Vec::new(),
+            managed_fields: Vec::new(),
             relations: Vec::new(),
             indexes: Vec::new(),
             policies: PolicySet::default(),
@@ -161,6 +177,12 @@ impl ResourceSchema {
             .find(|policy| policy.field == name)
     }
 
+    pub fn managed_field(&self, name: &str) -> Option<&ManagedField> {
+        self.managed_fields
+            .iter()
+            .find(|binding| binding.field == name)
+    }
+
     fn is_global(&self) -> bool {
         self.tenant_isolation == TenantIsolation::Global
     }
@@ -172,6 +194,10 @@ pub enum StorageSchemaIssue {
     DuplicateField(String),
     DuplicateFieldPolicy(String),
     UnknownFieldPolicyTarget(String),
+    DuplicateManagedField(String),
+    UnknownManagedFieldTarget(String),
+    ManagedFieldMustBeImmutable(String),
+    ManagedFieldTypeMismatch(String),
     DuplicateRelation(String),
     DuplicateMemberName(String),
     DuplicatePolicyAction(String),
