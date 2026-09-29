@@ -139,6 +139,7 @@ mod tests {
 
     use super::*;
     use crate::compiler::PhysicalCostSignal;
+    use crate::gir_optimize::GirOptimizationReport;
     use crate::invariants::InvariantLedger;
     use crate::machine::{AllocationResult, RegisterPressure};
     use crate::machine_ir::MachineProgram;
@@ -162,6 +163,7 @@ mod tests {
             assembly: String::new(),
             invariants: InvariantLedger::default(),
             source_map: SourceMap::default(),
+            optimization: GirOptimizationReport::default(),
         };
 
         assert_eq!(
