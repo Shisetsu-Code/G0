@@ -10,6 +10,7 @@ pub mod build_lock;
 pub mod call_graph;
 pub mod concurrency;
 pub mod compiler;
+pub mod control;
 pub mod crypto;
 pub mod data_format;
 pub mod diagnostics;
