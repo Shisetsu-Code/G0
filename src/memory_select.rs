@@ -1,10 +1,11 @@
 use std::collections::BTreeMap;
 
+use crate::gir::ParameterPolicy;
 use crate::hardware::{preferred_vector_bits, HardwareProfile};
 use crate::memory::{
     validate_memory_plan, validate_physical_selection, AllocationIntent,
-    LayoutKind, LifetimeClass, MemoryDomain, MemoryPlan, ParameterPolicy,
-    PhysicalAllocation, PhysicalMemoryPlan, PhysicalSelectionIssue,
+    LayoutKind, LifetimeClass, MemoryDomain, MemoryPlan, PhysicalAllocation,
+    PhysicalMemoryPlan, PhysicalSelectionIssue,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
