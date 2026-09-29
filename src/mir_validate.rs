@@ -236,6 +236,7 @@ mod tests {
                 inputs: vec![0, 1],
                 outputs: vec![2],
             }],
+            outputs: vec![],
         };
 
         assert!(validate_mir(&program)
