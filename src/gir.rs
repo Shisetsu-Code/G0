@@ -258,6 +258,7 @@ pub enum Operation {
     Or,
     Xor,
     Not,
+    ConvertChecked,
     Select {
         when_true: String,
         when_false: String,
