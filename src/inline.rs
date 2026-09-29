@@ -249,14 +249,13 @@ fn inline_one(
             .outputs
             .iter()
             .find(|port| port.name == callee_output.name)
+            && let Some(targets) = outgoing.get(&call_port.id)
         {
-            if let Some(targets) = outgoing.get(&call_port.id) {
-                for target in targets {
-                    new_edges.push(Edge {
-                        from: source.clone(),
-                        to: target.clone(),
-                    });
-                }
+            for target in targets {
+                new_edges.push(Edge {
+                    from: source.clone(),
+                    to: target.clone(),
+                });
             }
         }
     }
