@@ -1,6 +1,7 @@
 pub mod authority;
 pub mod backend;
 pub mod concurrency;
+pub mod crypto;
 pub mod effects;
 pub mod freshness;
 pub mod gir;
