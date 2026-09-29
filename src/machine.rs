@@ -141,15 +141,15 @@ pub fn linear_scan_allocate(
             }
         });
 
-        if scalar_register_eligible(program.values[&value].ty) {
-            if let Some(register) = free.pop_first() {
-                result
-                    .locations
-                    .insert(value, PhysicalLocation::Register(register));
-                active.push((value, interval, register));
-                active.sort_by_key(|(_, active_interval, _)| active_interval.end);
-                continue;
-            }
+        if scalar_register_eligible(program.values[&value].ty)
+            && let Some(register) = free.pop_first()
+        {
+            result
+                .locations
+                .insert(value, PhysicalLocation::Register(register));
+            active.push((value, interval, register));
+            active.sort_by_key(|(_, active_interval, _)| active_interval.end);
+            continue;
         }
 
         let bytes = type_size_bytes(program.values[&value].ty);
