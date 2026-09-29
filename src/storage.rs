@@ -248,6 +248,45 @@ pub fn validate_resource_schema(resource: &ResourceSchema) -> Result<(), Vec<Sto
         }
     }
 
+    let mut managed_field_names = BTreeSet::new();
+    for binding in &resource.managed_fields {
+        if !managed_field_names.insert(binding.field.as_str()) {
+            issues.push(StorageSchemaIssue::DuplicateManagedField(
+                binding.field.clone(),
+            ));
+        }
+
+        let Some(field) = resource.field(&binding.field) else {
+            issues.push(StorageSchemaIssue::UnknownManagedFieldTarget(
+                binding.field.clone(),
+            ));
+            continue;
+        };
+
+        if field.mutable {
+            issues.push(StorageSchemaIssue::ManagedFieldMustBeImmutable(
+                binding.field.clone(),
+            ));
+        }
+
+        let type_ok = match binding.source {
+            ManagedFieldSource::CurrentPrincipal
+            | ManagedFieldSource::CurrentScope => {
+                field.ty == SemanticType::Text
+            }
+            ManagedFieldSource::StoreClock => {
+                matches!(field.ty, SemanticType::Integer(_))
+            }
+            ManagedFieldSource::Generated => true,
+        };
+
+        if !type_ok {
+            issues.push(StorageSchemaIssue::ManagedFieldTypeMismatch(
+                binding.field.clone(),
+            ));
+        }
+    }
+
     for relation in &resource.relations {
         if !relation_names.insert(relation.name.as_str()) {
             issues.push(StorageSchemaIssue::DuplicateRelation(relation.name.clone()));
@@ -362,6 +401,7 @@ pub enum StoreAccessIssue {
     ImmutableField(String),
     CredentialReadForbidden(String),
     CredentialMutationRequiresVerifier(String),
+    ManagedFieldCannotBeSupplied(String),
     FieldPolicyDenied {
         field: String,
         reason: DenyReason,
