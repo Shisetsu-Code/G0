@@ -27,16 +27,36 @@ pub enum MirIssue {
     },
     UnknownProgramOutput(ValueId),
     ProgramOutputNotDefined(ValueId),
+    UnknownProgramInput(ValueId),
+    DuplicateProgramInput(ValueId),
+    UseBeforeDefinition {
+        instruction: usize,
+        value: ValueId,
+    },
 }
 
 pub fn validate_mir(program: &MirProgram) -> Result<(), Vec<MirIssue>> {
     let mut issues = Vec::new();
     let mut defined = BTreeSet::<ValueId>::new();
 
+    for input in &program.inputs {
+        if !program.values.contains_key(input) {
+            issues.push(MirIssue::UnknownProgramInput(*input));
+        }
+        if !defined.insert(*input) {
+            issues.push(MirIssue::DuplicateProgramInput(*input));
+        }
+    }
+
     for (index, instruction) in program.instructions.iter().enumerate() {
         for input in &instruction.inputs {
             if !program.values.contains_key(input) {
                 issues.push(MirIssue::UnknownInput(*input));
+            } else if !defined.contains(input) {
+                issues.push(MirIssue::UseBeforeDefinition {
+                    instruction: index,
+                    value: *input,
+                });
             }
         }
 
