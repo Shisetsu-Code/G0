@@ -238,13 +238,15 @@ mod tests {
 
     #[test]
     fn only_reachable_graphs_are_emitted() {
-        let mut program = ProgramContract::default();
-        program.entry_graph = Some("main".into());
-        program.graphs = vec![
-            main_graph(),
-            worker(),
-            Graph::new("dead_library_graph"),
-        ];
+        let program = ProgramContract {
+            entry_graph: Some("main".into()),
+            graphs: vec![
+                main_graph(),
+                worker(),
+                Graph::new("dead_library_graph"),
+            ],
+            ..ProgramContract::default()
+        };
 
         let platform = PlatformContract::bootstrap_x86_64_v3();
         let compiled = compile_program(
