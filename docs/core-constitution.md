@@ -31,6 +31,13 @@ This document defines the principles that the compiler, runtime and standard pla
 23. **Builds and selected optimization profiles are reproducible and lockable.**
 24. **The safe path must also be the shortest path for humans and code-generating models.**
 25. **Compatibility before 1.0 is subordinate to removing bad abstractions.**
+26. **Core has one semantic text model.** Text is valid Unicode, canonically normalized, and encoded as UTF-8 at boundaries; arbitrary binary data is Bytes.
+27. **Text is not byte-indexed.** User-facing text boundaries are grapheme-based; raw byte operations require Bytes.
+28. **Mathematical precision is a contract.** Exactness, determinism, rounding and tolerated error are explicit semantic requirements, not backend accidents.
+29. **Impossible exactness is rejected.** Transcendental results use declared precision/error contracts rather than pretending finite representation is exact.
+30. **Profiling is graph-native.** Runtime cost, memory, I/O and latency are attributable to graph nodes and critical paths.
+31. **Debugging cannot weaken information-flow rules.** Secret and credential values stay redacted even in tracing/profiling.
+32. **Ownership follows graph topology.** Move/borrow validity is proven from dependencies; unordered conflicting ownership uses are invalid.
 
 ## 2. Three classes of design property
 
