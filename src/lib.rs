@@ -9,6 +9,7 @@ pub mod effects;
 pub mod entropy;
 pub mod evolution;
 pub mod freshness;
+pub mod filesystem;
 pub mod gir;
 pub mod gir_validate;
 pub mod graph;
