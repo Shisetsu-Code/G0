@@ -27,6 +27,7 @@ pub mod math;
 pub mod machine;
 pub mod machine_ir;
 pub mod memory;
+pub mod memory_select;
 pub mod mir;
 pub mod mir_validate;
 pub mod migration;
