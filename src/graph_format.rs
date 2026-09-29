@@ -1,5 +1,5 @@
 use crate::gir::{
-    Edge, Graph, Node, Port, SourceEndpoint, TargetEndpoint,
+    Edge, Graph, Port, SourceEndpoint, TargetEndpoint,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
