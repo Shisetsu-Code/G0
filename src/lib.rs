@@ -37,6 +37,7 @@ pub mod mir;
 pub mod mir_validate;
 pub mod migration;
 pub mod network;
+pub mod network_runtime;
 pub mod optimize;
 pub mod optimization_gate;
 pub mod optimizer_feedback;
