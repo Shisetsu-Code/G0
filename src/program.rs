@@ -26,7 +26,8 @@ use crate::storage::{
     validate_store_schema, StorageSchemaIssue, StoreSchema,
 };
 use crate::text::{
-    validate_text_contract, TextContract, TextContractIssue,
+    validate_text_boundary, validate_text_contract, TextBoundaryIssue,
+    TextBoundaryRequirement, TextContract, TextContractIssue,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -51,6 +52,7 @@ pub struct ProgramContract {
     pub math: Vec<MathUse>,
     pub ownership: Vec<GraphOwnership>,
     pub password_tuning: Option<PasswordTuning>,
+    pub text_boundaries: Vec<TextBoundaryRequirement>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,6 +93,10 @@ pub enum ProgramIssue {
     },
     OwnershipUnknownGraph(String),
     Text(Vec<TextContractIssue>),
+    TextBoundary {
+        boundary: usize,
+        issue: TextBoundaryIssue,
+    },
     Security(Vec<SecurityContractIssue>),
 }
 
@@ -179,6 +185,15 @@ pub fn validate_program(
         issues.push(ProgramIssue::Text(text_issues));
     }
 
+    for (index, boundary) in program.text_boundaries.iter().enumerate() {
+        if let Err(issue) = validate_text_boundary(&platform.text, boundary) {
+            issues.push(ProgramIssue::TextBoundary {
+                boundary: index,
+                issue,
+            });
+        }
+    }
+
     if let Some(password_tuning) = program.password_tuning
         && let Err(security_issues) =
             validate_password_contract(&platform.security, password_tuning)
@@ -205,7 +220,7 @@ mod tests {
     use crate::gir::ParameterPolicy;
     use crate::math::{MathMode, RoundingMode};
     use crate::network::ConnectionFeature;
-    use crate::text::TextContract;
+    use crate::text::{CoreTextCodec, TextCodec, TextContract};
     use crate::storage::{Cardinality, DeleteRule, RelationSchema, ResourceSchema};
 
     fn platform() -> PlatformContract {
@@ -370,6 +385,28 @@ mod tests {
                 .iter()
                 .any(|issue| matches!(issue, ProgramIssue::Text(_)))
         );
+    }
+
+    #[test]
+    fn text_codec_is_selected_per_boundary_without_changing_text_type() {
+        let mut platform = platform();
+        platform.text.enable_core_codec(CoreTextCodec::Utf16Le);
+
+        let program = ProgramContract {
+            text_boundaries: vec![
+                TextBoundaryRequirement {
+                    name: "api".into(),
+                    codec: TextCodec::Core(CoreTextCodec::Utf8),
+                },
+                TextBoundaryRequirement {
+                    name: "legacy-file".into(),
+                    codec: TextCodec::Core(CoreTextCodec::Utf16Le),
+                },
+            ],
+            ..ProgramContract::default()
+        };
+
+        assert!(validate_program(&program, &platform).is_ok());
     }
 
     #[test]
