@@ -337,9 +337,9 @@ fn validate_operation(node: &Node, report: &mut ValidationReport) {
                 report,
             );
         }
-        Operation::Select
-        | Operation::Match
-        | Operation::Loop
+        Operation::Select { .. }
+        | Operation::Match { .. }
+        | Operation::Loop { .. }
         | Operation::Subgraph(_)
         | Operation::Instantiate(_) => {}
     }
