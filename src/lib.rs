@@ -1,6 +1,7 @@
 pub mod artifact;
 pub mod authority;
 pub mod backend;
+pub mod build_lock;
 pub mod concurrency;
 pub mod compiler;
 pub mod crypto;
