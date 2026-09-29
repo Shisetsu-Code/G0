@@ -44,6 +44,7 @@ pub mod task_runtime;
 pub mod text;
 pub mod time;
 pub mod tuning;
+pub mod transaction;
 pub mod validate;
 pub mod x86_codegen;
 
