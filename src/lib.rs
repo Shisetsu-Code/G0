@@ -34,6 +34,7 @@ pub mod profiling;
 pub mod query;
 pub mod runtime;
 pub mod scheduler;
+pub mod secure_index;
 pub mod security;
 pub mod storage;
 pub mod symbol;
