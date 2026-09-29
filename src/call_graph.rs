@@ -50,9 +50,10 @@ pub fn build_call_graph(
     for graph in graphs {
         let mut callees = BTreeSet::new();
         for node in &graph.nodes {
-            if let Operation::Subgraph(callee) = &node.operation {
-                if !local.contains(callee)
-                    && !external_subgraphs.contains(callee)
+            let referenced = referenced_graphs(&node.operation);
+            for callee in referenced {
+                if !local.contains(&callee)
+                    && !external_subgraphs.contains(&callee)
                 {
                     issues.push(CallGraphIssue::UnknownCallee {
                         caller: graph.name.clone(),
@@ -60,40 +61,42 @@ pub fn build_call_graph(
                     });
                 }
 
-                let node_inputs: Vec<SemanticType> =
-                    node.inputs.iter().map(|port| port.ty.clone()).collect();
-                let node_outputs: Vec<SemanticType> =
-                    node.outputs.iter().map(|port| port.ty.clone()).collect();
+                if matches!(node.operation, Operation::Subgraph(_)) {
+                    let node_inputs: Vec<SemanticType> =
+                        node.inputs.iter().map(|port| port.ty.clone()).collect();
+                    let node_outputs: Vec<SemanticType> =
+                        node.outputs.iter().map(|port| port.ty.clone()).collect();
 
-                if let Some(target) = by_name.get(callee.as_str()).copied() {
-                    let target_inputs: Vec<SemanticType> =
-                        target.inputs.iter().map(|port| port.ty.clone()).collect();
-                    if node_inputs != target_inputs {
-                        issues.push(CallGraphIssue::InputSignatureMismatch {
-                            caller: graph.name.clone(),
+                    if let Some(target) = by_name.get(callee.as_str()).copied() {
+                        let target_inputs: Vec<SemanticType> =
+                            target.inputs.iter().map(|port| port.ty.clone()).collect();
+                        if node_inputs != target_inputs {
+                            issues.push(CallGraphIssue::InputSignatureMismatch {
+                                caller: graph.name.clone(),
+                                callee: callee.clone(),
+                            });
+                        }
+
+                        let target_outputs: Vec<SemanticType> =
+                            target.outputs.iter().map(|port| port.ty.clone()).collect();
+                        if node_outputs != target_outputs {
+                            issues.push(CallGraphIssue::OutputSignatureMismatch {
+                                caller: graph.name.clone(),
+                                callee: callee.clone(),
+                            });
+                        }
+                    } else if external_subgraphs.contains(&callee)
+                        && let Err(abi_issues) =
+                            lower_signature(&node_inputs, &node_outputs)
+                    {
+                        issues.push(CallGraphIssue::AbiUnsupported {
                             callee: callee.clone(),
+                            issues: abi_issues,
                         });
                     }
-
-                    let target_outputs: Vec<SemanticType> =
-                        target.outputs.iter().map(|port| port.ty.clone()).collect();
-                    if node_outputs != target_outputs {
-                        issues.push(CallGraphIssue::OutputSignatureMismatch {
-                            caller: graph.name.clone(),
-                            callee: callee.clone(),
-                        });
-                    }
-                } else if external_subgraphs.contains(callee)
-                    && let Err(abi_issues) =
-                        lower_signature(&node_inputs, &node_outputs)
-                {
-                    issues.push(CallGraphIssue::AbiUnsupported {
-                        callee: callee.clone(),
-                        issues: abi_issues,
-                    });
                 }
 
-                callees.insert(callee.clone());
+                callees.insert(callee);
             }
         }
         calls.insert(graph.name.clone(), callees);
@@ -107,6 +110,28 @@ pub fn build_call_graph(
         Ok(graph)
     } else {
         Err(issues)
+    }
+}
+
+fn referenced_graphs(operation: &Operation) -> Vec<String> {
+    match operation {
+        Operation::Subgraph(name) => vec![name.clone()],
+        Operation::Select {
+            when_true,
+            when_false,
+        } => vec![when_true.clone(), when_false.clone()],
+        Operation::Match { arms, default } => {
+            let mut result: Vec<String> =
+                arms.iter().map(|arm| arm.graph.clone()).collect();
+            result.push(default.clone());
+            result
+        }
+        Operation::Loop {
+            condition,
+            body,
+            ..
+        } => vec![condition.clone(), body.clone()],
+        _ => Vec::new(),
     }
 }
 
@@ -271,6 +296,37 @@ mod tests {
                 CallGraphIssue::InputSignatureMismatch { .. }
             ))
         ));
+    }
+
+    #[test]
+    fn structured_control_graphs_are_reachable() {
+        let mut main = graph("main", None);
+        main.nodes.push(Node {
+            id: 1,
+            operation: Operation::Select {
+                when_true: "yes".into(),
+                when_false: "no".into(),
+            },
+            inputs: vec![],
+            outputs: vec![],
+            effects: BTreeSet::new(),
+            required_capabilities: BTreeSet::new(),
+        });
+
+        let call_graph = build_call_graph(
+            &[main, graph("yes", None), graph("no", None)],
+            &BTreeSet::new(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            reachable_from(&call_graph, "main"),
+            BTreeSet::from([
+                "main".into(),
+                "no".into(),
+                "yes".into(),
+            ])
+        );
     }
 
     #[test]
