@@ -298,6 +298,25 @@ fn validate_operation(node: &Node, report: &mut ValidationReport) {
             require_pure(node, report);
             validate_integer_arithmetic(node, report);
         }
+        Operation::Eq
+        | Operation::Lt
+        | Operation::Le
+        | Operation::Gt
+        | Operation::Ge => {
+            require_shape(node, 2, 1, report);
+            require_pure(node, report);
+            validate_integer_comparison(node, report);
+        }
+        Operation::And | Operation::Or | Operation::Xor => {
+            require_shape(node, 2, 1, report);
+            require_pure(node, report);
+            validate_boolean_operation(node, 2, report);
+        }
+        Operation::Not => {
+            require_shape(node, 1, 1, report);
+            require_pure(node, report);
+            validate_boolean_operation(node, 1, report);
+        }
         Operation::Import(_) => {
             if !node.effects.is_empty() {
                 report.push(
@@ -392,6 +411,56 @@ fn literal_fits(literal: &Literal, ty: &SemanticType) -> bool {
         (Literal::Text(_), SemanticType::Text) => true,
         (Literal::Bytes(_), SemanticType::Bytes) => true,
         _ => false,
+    }
+}
+
+fn validate_integer_comparison(
+    node: &Node,
+    report: &mut ValidationReport,
+) {
+    if node.inputs.len() != 2 || node.outputs.len() != 1 {
+        return;
+    }
+
+    let valid_inputs = matches!(
+        (&node.inputs[0].ty, &node.inputs[1].ty),
+        (SemanticType::Integer(left), SemanticType::Integer(right))
+            if left == right
+    );
+    let valid_output = node.outputs[0].ty == SemanticType::Bool;
+
+    if !valid_inputs || !valid_output {
+        report.push(
+            ValidationCode::OperationShape,
+            format!(
+                "node {} {:?} requires two identical semantic Integer inputs and one Bool output",
+                node.id, node.operation
+            ),
+        );
+    }
+}
+
+fn validate_boolean_operation(
+    node: &Node,
+    expected_inputs: usize,
+    report: &mut ValidationReport,
+) {
+    if node.inputs.len() != expected_inputs || node.outputs.len() != 1 {
+        return;
+    }
+
+    let inputs_are_bool =
+        node.inputs.iter().all(|port| port.ty == SemanticType::Bool);
+    let output_is_bool = node.outputs[0].ty == SemanticType::Bool;
+
+    if !inputs_are_bool || !output_is_bool {
+        report.push(
+            ValidationCode::OperationShape,
+            format!(
+                "node {} {:?} accepts Bool inputs and returns Bool only",
+                node.id, node.operation
+            ),
+        );
     }
 }
 
