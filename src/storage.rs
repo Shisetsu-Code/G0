@@ -720,6 +720,140 @@ mod tests {
         resource
     }
 
+    fn managed_document_schema() -> ResourceSchema {
+        let mut schema = ResourceSchema::new("Document");
+        schema.fields = vec![
+            FieldSchema {
+                name: "body".into(),
+                ty: SemanticType::Text,
+                protection: FieldProtection::Private,
+                mutable: true,
+            },
+            FieldSchema {
+                name: "owner_id".into(),
+                ty: SemanticType::Text,
+                protection: FieldProtection::Private,
+                mutable: false,
+            },
+            FieldSchema {
+                name: "tenant_id".into(),
+                ty: SemanticType::Text,
+                protection: FieldProtection::Private,
+                mutable: false,
+            },
+            FieldSchema {
+                name: "created_at".into(),
+                ty: SemanticType::Integer(
+                    crate::gir::IntegerType::new(
+                        0,
+                        i64::MAX as i128,
+                    )
+                    .unwrap(),
+                ),
+                protection: FieldProtection::Public,
+                mutable: false,
+            },
+        ];
+        schema.managed_fields = vec![
+            ManagedField {
+                field: "owner_id".into(),
+                source: ManagedFieldSource::CurrentPrincipal,
+            },
+            ManagedField {
+                field: "tenant_id".into(),
+                source: ManagedFieldSource::CurrentScope,
+            },
+            ManagedField {
+                field: "created_at".into(),
+                source: ManagedFieldSource::StoreClock,
+            },
+        ];
+        schema
+    }
+
+    #[test]
+    fn create_plan_injects_principal_scope_and_clock() {
+        let schema = managed_document_schema();
+        assert!(validate_resource_schema(&schema).is_ok());
+
+        let plan = build_create_assignment_plan(
+            &schema,
+            &["body".into()],
+        )
+        .unwrap();
+
+        assert_eq!(
+            plan,
+            vec![
+                CreateAssignment {
+                    field: "body".into(),
+                    source: CreateAssignmentSource::Client,
+                },
+                CreateAssignment {
+                    field: "created_at".into(),
+                    source: CreateAssignmentSource::StoreClock,
+                },
+                CreateAssignment {
+                    field: "owner_id".into(),
+                    source: CreateAssignmentSource::CurrentPrincipal,
+                },
+                CreateAssignment {
+                    field: "tenant_id".into(),
+                    source: CreateAssignmentSource::CurrentScope,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn client_cannot_spoof_store_managed_owner() {
+        let mut schema = managed_document_schema();
+        schema.policies.rules.push(PolicyRule {
+            action: Action::create(),
+            allow_if: PolicyExpr::Public,
+        });
+        schema.policies.rules.push(PolicyRule {
+            action: Action::update(),
+            allow_if: PolicyExpr::Public,
+        });
+
+        let principal = Principal::new("alice", "tenant-a");
+        let resource =
+            ResourceContext::new("Document", "new", "tenant-a");
+
+        assert_eq!(
+            authorize_store_operation(
+                &schema,
+                &principal,
+                &resource,
+                &StoreOperation::Create {
+                    fields: vec!["owner_id".into()],
+                },
+            ),
+            Err(vec![
+                StoreAccessIssue::ManagedFieldCannotBeSupplied(
+                    "owner_id".into(),
+                ),
+            ])
+        );
+
+        assert_eq!(
+            authorize_store_operation(
+                &schema,
+                &principal,
+                &resource,
+                &StoreOperation::Update {
+                    fields: vec!["tenant_id".into()],
+                },
+            ),
+            Err(vec![
+                StoreAccessIssue::ManagedFieldCannotBeSupplied(
+                    "tenant_id".into(),
+                ),
+            ])
+        );
+    }
+
     #[test]
     fn field_policy_can_restrict_row_authorized_update() {
         let mut schema = message_schema();
