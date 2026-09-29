@@ -33,7 +33,7 @@ pub struct MachineProfile {
 impl MachineProfile {
     pub fn x86_64_v3() -> Self {
         Self {
-            gpr_count: 7,
+            gpr_count: 6,
             stack_alignment: 16,
             cache_line_bytes: 64,
             vector_bits: 256,
@@ -103,10 +103,9 @@ pub fn linear_scan_allocate(
     }
 
     let intervals = compute_live_intervals(program)?;
-    // RAX is reserved for result/scratch and R11 for a second scratch.
+    // RAX/RDX/R11 are reserved for checked arithmetic and backend scratch.
     let register_pool = [
         Gpr::Rcx,
-        Gpr::Rdx,
         Gpr::Rsi,
         Gpr::Rdi,
         Gpr::R8,
@@ -173,8 +172,6 @@ fn scalar_register_eligible(ty: MirType) -> bool {
         ty,
         MirType::Bool
             | MirType::Integer(_)
-            | MirType::Float32
-            | MirType::Float64
             | MirType::Pointer
             | MirType::TextHandle
     )
