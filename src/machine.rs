@@ -293,6 +293,7 @@ mod tests {
                     outputs: vec![3],
                 },
             ],
+            outputs: vec![],
         };
 
         let allocation = linear_scan_allocate(
@@ -333,6 +334,7 @@ mod tests {
                     outputs: vec![2],
                 },
             ],
+            outputs: vec![],
         };
 
         let allocation = linear_scan_allocate(
