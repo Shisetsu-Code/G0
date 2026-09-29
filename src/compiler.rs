@@ -5,6 +5,7 @@ use crate::machine::{
     AllocationResult, MachineProfile, RegisterPressure,
 };
 use crate::mir::{lower_graph, LoweringIssue, MirProgram};
+use crate::mir_validate::{validate_mir, MirIssue};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompiledGraph {
@@ -18,6 +19,7 @@ pub struct CompiledGraph {
 pub enum PipelineIssue {
     Gir(Vec<ValidationIssue>),
     Lowering(Vec<LoweringIssue>),
+    Mir(Vec<MirIssue>),
     Allocation(AllocationIssue),
 }
 
@@ -30,6 +32,7 @@ pub fn compile_graph(
     }
 
     let mir = lower_graph(graph).map_err(PipelineIssue::Lowering)?;
+    validate_mir(&mir).map_err(PipelineIssue::Mir)?;
     let allocation =
         linear_scan_allocate(&mir, machine).map_err(PipelineIssue::Allocation)?;
     let pressure = register_pressure(&allocation);
