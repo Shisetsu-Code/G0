@@ -353,7 +353,7 @@ mod tests {
     }
 
     #[test]
-    fn secrets_are_never_value-visible_in_debugger() {
+    fn secrets_are_never_value_visible_in_debugger() {
         let secret = SemanticType::Secret(Box::new(SemanticType::Text));
         let credential =
             SemanticType::Credential(Box::new(SemanticType::Text));
