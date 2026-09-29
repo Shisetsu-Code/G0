@@ -1,6 +1,7 @@
 use crate::machine::{Gpr, PhysicalLocation};
 use crate::machine_ir::{
-    MachineOp, MachineOperand, MachineProgram, MachineValueType,
+    MachineOp, MachineOperand, MachineOutput, MachineProgram,
+    MachineValueType,
 };
 use crate::memory::IntegerWidth;
 
@@ -546,6 +547,7 @@ mod tests {
                     op: MachineOp::Move {
                         dst: PhysicalLocation::Register(Gpr::Rcx),
                         src: MachineOperand::Immediate(20),
+                        ty: MachineValueType::Integer(IntegerWidth::U8),
                     },
                 },
                 MachineInstruction {
@@ -553,24 +555,32 @@ mod tests {
                     op: MachineOp::Move {
                         dst: PhysicalLocation::Register(Gpr::Rdx),
                         src: MachineOperand::Immediate(22),
+                        ty: MachineValueType::Integer(IntegerWidth::U8),
                     },
                 },
                 MachineInstruction {
                     source_node: 3,
                     op: MachineOp::AddChecked {
                         dst: PhysicalLocation::Register(Gpr::R8),
-                        left: MachineOperand::Location(
-                            PhysicalLocation::Register(Gpr::Rcx),
-                        ),
-                        right: MachineOperand::Location(
-                            PhysicalLocation::Register(Gpr::Rdx),
-                        ),
+                        left: MachineOperand::Location {
+                            location: PhysicalLocation::Register(Gpr::Rcx),
+                            ty: MachineValueType::Integer(IntegerWidth::U8),
+                        },
+                        right: MachineOperand::Location {
+                            location: PhysicalLocation::Register(Gpr::Rdx),
+                            ty: MachineValueType::Integer(IntegerWidth::U8),
+                        },
+                        left_width: IntegerWidth::U8,
+                        right_width: IntegerWidth::U8,
                         width: IntegerWidth::U8,
                     },
                 },
             ],
             stack_bytes: 0,
-            outputs: vec![PhysicalLocation::Register(Gpr::R8)],
+            outputs: vec![MachineOutput {
+                location: PhysicalLocation::Register(Gpr::R8),
+                ty: MachineValueType::Integer(IntegerWidth::U8),
+            }],
         };
 
         let asm = emit_x86_64(&program).unwrap();
@@ -609,6 +619,7 @@ mod tests {
                         bytes: 16,
                     },
                     src: MachineOperand::Immediate(1),
+                    ty: MachineValueType::Integer(IntegerWidth::U128),
                 },
             }],
             stack_bytes: 16,
@@ -617,7 +628,7 @@ mod tests {
 
         assert_eq!(
             emit_x86_64(&program),
-            Err(vec![X86CodegenIssue::UnsupportedStackWidth(16)])
+            Err(vec![X86CodegenIssue::Unsupported128BitInteger])
         );
     }
 }
