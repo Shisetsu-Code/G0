@@ -37,6 +37,9 @@ use crate::runtime::{validate_region_plan, RegionIssue, RegionPlan};
 use crate::scheduler::{
     validate_schedule, ScheduleGraph, ScheduleIssue, SchedulerProfile,
 };
+use crate::secure_index::{
+    validate_protected_index, ProtectedIndexIssue, ProtectedIndexSpec,
+};
 use crate::security::{
     validate_password_contract, PasswordTuning, SecurityContractIssue,
     SecurityProfile,
@@ -82,6 +85,7 @@ pub struct ProgramContract {
     pub randomness_uses: Vec<(RandomnessClass, RandomUse)>,
     pub schedules: Vec<ScheduleGraph>,
     pub queries: Vec<QuerySpec>,
+    pub protected_indexes: Vec<ProtectedIndexSpec>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -160,6 +164,10 @@ pub enum ProgramIssue {
     Query {
         query: usize,
         issues: Vec<QueryIssue>,
+    },
+    ProtectedIndex {
+        index: usize,
+        issues: Vec<ProtectedIndexIssue>,
     },
     Security(Vec<SecurityContractIssue>),
 }
@@ -338,6 +346,21 @@ pub fn validate_program(
             issues.push(ProgramIssue::Query {
                 query: index,
                 issues: query_issues,
+            });
+        }
+    }
+
+    for (index, protected_index) in
+        program.protected_indexes.iter().enumerate()
+    {
+        if let Err(index_issues) = validate_protected_index(
+            &program.store,
+            protected_index,
+            platform.crypto.security_bits,
+        ) {
+            issues.push(ProgramIssue::ProtectedIndex {
+                index,
+                issues: index_issues,
             });
         }
     }
