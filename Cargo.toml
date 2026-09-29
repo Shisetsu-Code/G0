@@ -1,0 +1,20 @@
+[package]
+name = "g0c"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Bootstrap compiler for the G0 graph programming language"
+
+[lib]
+name = "g0"
+path = "src/lib.rs"
+
+[[bin]]
+name = "g0c"
+path = "src/main.rs"
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
