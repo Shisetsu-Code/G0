@@ -67,6 +67,72 @@ pub fn emit_x86_64_named(
                     issues.push(issue);
                 }
             }
+            MachineOp::DivChecked {
+                dst,
+                left,
+                right,
+                left_width,
+                right_width,
+                result_width,
+                compute_width,
+                signed,
+            } => {
+                let trap =
+                    format!(".L{}_trap_{}", symbol, trap_index);
+                trap_index += 1;
+                if let Err(issue) = emit_checked_divrem(
+                    &mut out,
+                    *dst,
+                    *left,
+                    *right,
+                    DivisionWidths {
+                        left: *left_width,
+                        right: *right_width,
+                        result: *result_width,
+                        compute: *compute_width,
+                    },
+                    *signed,
+                    false,
+                    &trap,
+                ) {
+                    issues.push(issue);
+                } else {
+                    trap_labels.push(trap);
+                }
+            }
+            MachineOp::RemChecked {
+                dst,
+                left,
+                right,
+                left_width,
+                right_width,
+                result_width,
+                compute_width,
+                signed,
+            } => {
+                let trap =
+                    format!(".L{}_trap_{}", symbol, trap_index);
+                trap_index += 1;
+                if let Err(issue) = emit_checked_divrem(
+                    &mut out,
+                    *dst,
+                    *left,
+                    *right,
+                    DivisionWidths {
+                        left: *left_width,
+                        right: *right_width,
+                        result: *result_width,
+                        compute: *compute_width,
+                    },
+                    *signed,
+                    true,
+                    &trap,
+                ) {
+                    issues.push(issue);
+                } else {
+                    trap_labels.push(trap);
+                }
+            }
             MachineOp::Compare {
                 dst,
                 left,
@@ -481,6 +547,133 @@ fn emit_call(
 
 fn scratch_address(base: u32, offset: u32) -> String {
     format!("[rbp-{}]", base.saturating_add(offset).saturating_add(8))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DivisionWidths {
+    left: IntegerWidth,
+    right: IntegerWidth,
+    result: IntegerWidth,
+    compute: IntegerWidth,
+}
+
+fn emit_checked_divrem(
+    out: &mut String,
+    dst: PhysicalLocation,
+    left: MachineOperand,
+    right: MachineOperand,
+    widths: DivisionWidths,
+    signed: bool,
+    remainder: bool,
+    trap: &str,
+) -> Result<(), X86CodegenIssue> {
+    if operand_integer_width(left) != Some(widths.left)
+        || operand_integer_width(right) != Some(widths.right)
+    {
+        return Err(X86CodegenIssue::OperandWidthMismatch);
+    }
+    if matches!(
+        widths.compute,
+        IntegerWidth::U128 | IntegerWidth::I128
+    ) || matches!(
+        widths.result,
+        IntegerWidth::U128 | IntegerWidth::I128
+    ) {
+        return Err(X86CodegenIssue::Unsupported128BitInteger);
+    }
+
+    load_operand_to_register(out, "rax", left)?;
+    load_operand_to_register(out, "r11", right)?;
+    out.push_str("    test r11, r11\n");
+    out.push_str(&format!("    je {}\n", trap));
+
+    if signed {
+        if widths.compute == IntegerWidth::I64 {
+            let normal = format!("{}_div_normal", trap);
+            if remainder {
+                let done = format!("{}_rem_done", trap);
+                out.push_str("    mov rdx, -9223372036854775808\n");
+                out.push_str("    cmp rax, rdx\n");
+                out.push_str(&format!("    jne {}\n", normal));
+                out.push_str("    cmp r11, -1\n");
+                out.push_str(&format!("    jne {}\n", normal));
+                out.push_str("    xor rax, rax\n");
+                out.push_str(&format!("    jmp {}\n", done));
+                out.push_str(&format!("{}:\n", normal));
+                out.push_str("    cqo\n");
+                out.push_str("    idiv r11\n");
+                out.push_str("    mov rax, rdx\n");
+                out.push_str(&format!("{}:\n", done));
+            } else {
+                out.push_str("    mov rdx, -9223372036854775808\n");
+                out.push_str("    cmp rax, rdx\n");
+                out.push_str(&format!("    jne {}\n", normal));
+                out.push_str("    cmp r11, -1\n");
+                out.push_str(&format!("    je {}\n", trap));
+                out.push_str(&format!("{}:\n", normal));
+                out.push_str("    cqo\n");
+                out.push_str("    idiv r11\n");
+            }
+        } else {
+            out.push_str("    cqo\n");
+            out.push_str("    idiv r11\n");
+            if remainder {
+                out.push_str("    mov rax, rdx\n");
+            }
+        }
+    } else {
+        out.push_str("    xor rdx, rdx\n");
+        out.push_str("    div r11\n");
+        if remainder {
+            out.push_str("    mov rax, rdx\n");
+        }
+    }
+
+    emit_result_width_guard(out, widths.result, trap);
+    store_from_register(
+        out,
+        dst,
+        "rax",
+        MachineValueType::Integer(widths.result),
+    )
+}
+
+fn emit_result_width_guard(
+    out: &mut String,
+    width: IntegerWidth,
+    trap: &str,
+) {
+    match width {
+        IntegerWidth::U8 => {
+            out.push_str("    cmp rax, 255\n");
+            out.push_str(&format!("    ja {}\n", trap));
+        }
+        IntegerWidth::U16 => {
+            out.push_str("    cmp rax, 65535\n");
+            out.push_str(&format!("    ja {}\n", trap));
+        }
+        IntegerWidth::U32 => {
+            out.push_str("    mov r11, 4294967295\n");
+            out.push_str("    cmp rax, r11\n");
+            out.push_str(&format!("    ja {}\n", trap));
+        }
+        IntegerWidth::I8 => {
+            emit_signed_bounds(out, -128, 127, trap);
+        }
+        IntegerWidth::I16 => {
+            emit_signed_bounds(out, -32768, 32767, trap);
+        }
+        IntegerWidth::I32 => {
+            emit_signed_bounds(
+                out,
+                i32::MIN as i64,
+                i32::MAX as i64,
+                trap,
+            );
+        }
+        IntegerWidth::U64 | IntegerWidth::I64 => {}
+        IntegerWidth::U128 | IntegerWidth::I128 => {}
+    }
 }
 
 fn emit_compare(
