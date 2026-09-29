@@ -25,6 +25,8 @@ pub enum MirIssue {
     ArithmeticMustBeChecked {
         instruction: usize,
     },
+    UnknownProgramOutput(ValueId),
+    ProgramOutputNotDefined(ValueId),
 }
 
 pub fn validate_mir(program: &MirProgram) -> Result<(), Vec<MirIssue>> {
@@ -48,6 +50,14 @@ pub fn validate_mir(program: &MirProgram) -> Result<(), Vec<MirIssue>> {
         }
 
         validate_instruction(program, index, instruction, &mut issues);
+    }
+
+    for output in &program.outputs {
+        if !program.values.contains_key(output) {
+            issues.push(MirIssue::UnknownProgramOutput(*output));
+        } else if !defined.contains(output) {
+            issues.push(MirIssue::ProgramOutputNotDefined(*output));
+        }
     }
 
     if issues.is_empty() {
@@ -218,6 +228,23 @@ mod tests {
         };
 
         assert!(validate_mir(&program).is_ok());
+    }
+
+    #[test]
+    fn program_output_must_be_defined() {
+        let program = MirProgram {
+            values: BTreeMap::from([value(
+                0,
+                MirType::Integer(IntegerWidth::U8),
+            )]),
+            instructions: vec![],
+            outputs: vec![0],
+        };
+
+        assert_eq!(
+            validate_mir(&program),
+            Err(vec![MirIssue::ProgramOutputNotDefined(0)])
+        );
     }
 
     #[test]
