@@ -6,6 +6,7 @@ pub mod compiler;
 pub mod crypto;
 pub mod data_format;
 pub mod effects;
+pub mod entropy;
 pub mod evolution;
 pub mod freshness;
 pub mod gir;
