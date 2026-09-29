@@ -237,6 +237,8 @@ fn put_operation(
         Operation::Add => put_u8(out, 1),
         Operation::Sub => put_u8(out, 2),
         Operation::Mul => put_u8(out, 3),
+        Operation::Div => put_u8(out, 26),
+        Operation::Rem => put_u8(out, 27),
         Operation::Eq => put_u8(out, 17),
         Operation::Lt => put_u8(out, 18),
         Operation::Le => put_u8(out, 19),
