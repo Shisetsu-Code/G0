@@ -42,6 +42,7 @@ pub mod optimize;
 pub mod optimization_gate;
 pub mod optimizer_feedback;
 pub mod ownership;
+pub mod outbox;
 pub mod package;
 pub mod parser;
 pub mod performance_gate;
