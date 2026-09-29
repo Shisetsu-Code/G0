@@ -53,6 +53,26 @@ pub enum MachineOp {
         right_width: IntegerWidth,
         width: IntegerWidth,
     },
+    DivChecked {
+        dst: PhysicalLocation,
+        left: MachineOperand,
+        right: MachineOperand,
+        left_width: IntegerWidth,
+        right_width: IntegerWidth,
+        result_width: IntegerWidth,
+        compute_width: IntegerWidth,
+        signed: bool,
+    },
+    RemChecked {
+        dst: PhysicalLocation,
+        left: MachineOperand,
+        right: MachineOperand,
+        left_width: IntegerWidth,
+        right_width: IntegerWidth,
+        result_width: IntegerWidth,
+        compute_width: IntegerWidth,
+        signed: bool,
+    },
     Compare {
         dst: PhysicalLocation,
         left: MachineOperand,
@@ -264,6 +284,121 @@ pub fn lower_mir(
                     },
                     _ => unreachable!(),
                 };
+                operations.push(MachineInstruction {
+                    source_node: instruction.source_node,
+                    op,
+                });
+            }
+            MirOp::Div {
+                mode,
+                signed,
+                compute_width,
+            }
+            | MirOp::Rem {
+                mode,
+                signed,
+                compute_width,
+            } => {
+                if *mode != ArithmeticMode::Checked {
+                    issues.push(MachineLoweringIssue::NonCheckedArithmetic);
+                    continue;
+                }
+                if instruction.inputs.len() != 2
+                    || instruction.outputs.len() != 1
+                {
+                    issues.push(MachineLoweringIssue::WrongShape);
+                    continue;
+                }
+
+                let Some(left_location) =
+                    location(allocation, instruction.inputs[0])
+                else {
+                    issues.push(MachineLoweringIssue::MissingLocation(
+                        instruction.inputs[0],
+                    ));
+                    continue;
+                };
+                let Some(right_location) =
+                    location(allocation, instruction.inputs[1])
+                else {
+                    issues.push(MachineLoweringIssue::MissingLocation(
+                        instruction.inputs[1],
+                    ));
+                    continue;
+                };
+                let Some(dst) =
+                    location(allocation, instruction.outputs[0])
+                else {
+                    issues.push(MachineLoweringIssue::MissingLocation(
+                        instruction.outputs[0],
+                    ));
+                    continue;
+                };
+
+                let Some(left_width) =
+                    integer_width(mir, instruction.inputs[0])
+                else {
+                    issues.push(
+                        MachineLoweringIssue::UnsupportedArithmeticType(
+                            instruction.inputs[0],
+                        ),
+                    );
+                    continue;
+                };
+                let Some(right_width) =
+                    integer_width(mir, instruction.inputs[1])
+                else {
+                    issues.push(
+                        MachineLoweringIssue::UnsupportedArithmeticType(
+                            instruction.inputs[1],
+                        ),
+                    );
+                    continue;
+                };
+                let Some(result_width) =
+                    integer_width(mir, instruction.outputs[0])
+                else {
+                    issues.push(
+                        MachineLoweringIssue::UnsupportedArithmeticType(
+                            instruction.outputs[0],
+                        ),
+                    );
+                    continue;
+                };
+
+                let left = MachineOperand::Location {
+                    location: left_location,
+                    ty: MachineValueType::Integer(left_width),
+                };
+                let right = MachineOperand::Location {
+                    location: right_location,
+                    ty: MachineValueType::Integer(right_width),
+                };
+
+                let op = match instruction.op {
+                    MirOp::Div { .. } => MachineOp::DivChecked {
+                        dst,
+                        left,
+                        right,
+                        left_width,
+                        right_width,
+                        result_width,
+                        compute_width: *compute_width,
+                        signed: *signed,
+                    },
+                    MirOp::Rem { .. } => MachineOp::RemChecked {
+                        dst,
+                        left,
+                        right,
+                        left_width,
+                        right_width,
+                        result_width,
+                        compute_width: *compute_width,
+                        signed: *signed,
+                    },
+                    _ => unreachable!(),
+                };
+
                 operations.push(MachineInstruction {
                     source_node: instruction.source_node,
                     op,
