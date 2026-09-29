@@ -1,6 +1,7 @@
 pub mod accelerator;
 pub mod artifact;
 pub mod auth;
+pub mod audit;
 pub mod authority;
 pub mod backend;
 pub mod benchmark;
