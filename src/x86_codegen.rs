@@ -3,6 +3,7 @@ use crate::machine_ir::{
     MachineOp, MachineOperand, MachineProgram, MachineValueType,
 };
 use crate::memory::IntegerWidth;
+use crate::mir::{BoolBinaryKind, CompareKind};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum X86CodegenIssue {
@@ -63,6 +64,47 @@ pub fn emit_x86_64_named(
         match &instruction.op {
             MachineOp::Move { dst, src, ty } => {
                 if let Err(issue) = emit_move(&mut out, *dst, *src, *ty) {
+                    issues.push(issue);
+                }
+            }
+            MachineOp::Compare {
+                dst,
+                left,
+                right,
+                kind,
+                signed,
+            } => {
+                if let Err(issue) = emit_compare(
+                    &mut out,
+                    *dst,
+                    *left,
+                    *right,
+                    *kind,
+                    *signed,
+                ) {
+                    issues.push(issue);
+                }
+            }
+            MachineOp::BoolBinary {
+                dst,
+                left,
+                right,
+                kind,
+            } => {
+                if let Err(issue) = emit_bool_binary(
+                    &mut out,
+                    *dst,
+                    *left,
+                    *right,
+                    *kind,
+                ) {
+                    issues.push(issue);
+                }
+            }
+            MachineOp::BoolNot { dst, value } => {
+                if let Err(issue) =
+                    emit_bool_not(&mut out, *dst, *value)
+                {
                     issues.push(issue);
                 }
             }
@@ -439,6 +481,62 @@ fn emit_call(
 
 fn scratch_address(base: u32, offset: u32) -> String {
     format!("[rbp-{}]", base.saturating_add(offset).saturating_add(8))
+}
+
+fn emit_compare(
+    out: &mut String,
+    dst: PhysicalLocation,
+    left: MachineOperand,
+    right: MachineOperand,
+    kind: CompareKind,
+    signed: bool,
+) -> Result<(), X86CodegenIssue> {
+    load_operand_to_register(out, "rax", left)?;
+    load_operand_to_register(out, "r11", right)?;
+    out.push_str("    cmp rax, r11\n");
+
+    let instruction = match (kind, signed) {
+        (CompareKind::Eq, _) => "sete",
+        (CompareKind::Lt, true) => "setl",
+        (CompareKind::Le, true) => "setle",
+        (CompareKind::Gt, true) => "setg",
+        (CompareKind::Ge, true) => "setge",
+        (CompareKind::Lt, false) => "setb",
+        (CompareKind::Le, false) => "setbe",
+        (CompareKind::Gt, false) => "seta",
+        (CompareKind::Ge, false) => "setae",
+    };
+    out.push_str(&format!("    {} al\n", instruction));
+    out.push_str("    movzx rax, al\n");
+    store_from_register(out, dst, "rax", MachineValueType::Bool)
+}
+
+fn emit_bool_binary(
+    out: &mut String,
+    dst: PhysicalLocation,
+    left: MachineOperand,
+    right: MachineOperand,
+    kind: BoolBinaryKind,
+) -> Result<(), X86CodegenIssue> {
+    load_operand_to_register(out, "rax", left)?;
+    load_operand_to_register(out, "r11", right)?;
+    let mnemonic = match kind {
+        BoolBinaryKind::And => "and",
+        BoolBinaryKind::Or => "or",
+        BoolBinaryKind::Xor => "xor",
+    };
+    out.push_str(&format!("    {} rax, r11\n", mnemonic));
+    store_from_register(out, dst, "rax", MachineValueType::Bool)
+}
+
+fn emit_bool_not(
+    out: &mut String,
+    dst: PhysicalLocation,
+    value: MachineOperand,
+) -> Result<(), X86CodegenIssue> {
+    load_operand_to_register(out, "rax", value)?;
+    out.push_str("    xor rax, 1\n");
+    store_from_register(out, dst, "rax", MachineValueType::Bool)
 }
 
 fn emit_move(
