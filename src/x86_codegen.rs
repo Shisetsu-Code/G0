@@ -217,6 +217,89 @@ pub fn emit_x86_64_named(
                 }
                 out.push_str(&format!("{}:\n", join_label));
             }
+            MachineOp::LoopCall {
+                condition,
+                body,
+                state,
+                output,
+                max_iterations,
+            } => {
+                let loop_id = control_index;
+                control_index += 1;
+                let head = format!(".L{}_loop_{}_head", symbol, loop_id);
+                let exit = format!(".L{}_loop_{}_exit", symbol, loop_id);
+                let bound_trap =
+                    format!(".L{}_loop_{}_bound", symbol, loop_id);
+
+                if let Err(issue) =
+                    emit_move(&mut out, output.location, *state, output.ty)
+                {
+                    issues.push(issue);
+                    continue;
+                }
+
+                if program.stack_bytes < 128 {
+                    issues.push(X86CodegenIssue::UnsupportedStackWidth(0));
+                    continue;
+                }
+                let base = program.stack_bytes - 128;
+                let counter = scratch_address(base, 104);
+                out.push_str(&format!(
+                    "    mov r11, {}\n",
+                    max_iterations
+                ));
+                out.push_str(&format!(
+                    "    mov QWORD PTR {}, r11\n",
+                    counter
+                ));
+
+                out.push_str(&format!("{}:\n", head));
+                let state_arg = [MachineOperand::Location {
+                    location: output.location,
+                    ty: output.ty,
+                }];
+                if let Err(issue) = emit_call(
+                    &mut out,
+                    condition,
+                    &state_arg,
+                    None,
+                    program.stack_bytes,
+                ) {
+                    issues.push(issue);
+                    continue;
+                }
+                out.push_str("    test rax, rax\n");
+                out.push_str(&format!("    jz {}\n", exit));
+                out.push_str(&format!(
+                    "    cmp QWORD PTR {}, 0\n",
+                    counter
+                ));
+                out.push_str(&format!("    je {}\n", bound_trap));
+
+                if let Err(issue) = emit_call(
+                    &mut out,
+                    body,
+                    &state_arg,
+                    Some(*output),
+                    program.stack_bytes,
+                ) {
+                    issues.push(issue);
+                    continue;
+                }
+                out.push_str(&format!(
+                    "    dec QWORD PTR {}\n",
+                    counter
+                ));
+                out.push_str(&format!("    jmp {}\n", head));
+                out.push_str(&format!("{}:\n", exit));
+                out.push_str(&format!("    jmp .L{}_loop_{}_done\n", symbol, loop_id));
+                out.push_str(&format!("{}:\n", bound_trap));
+                out.push_str("    ud2\n");
+                out.push_str(&format!(
+                    ".L{}_loop_{}_done:\n",
+                    symbol, loop_id
+                ));
+            }
         }
     }
 
