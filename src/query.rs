@@ -199,6 +199,7 @@ mod tests {
     use super::*;
     use crate::authority::{PolicyExpr, PolicyRule};
     use crate::gir::SemanticType;
+    use crate::secure_index::{ProtectedIndexMode, ProtectedIndexSpec};
     use crate::storage::{
         FieldProtection, FieldSchema, ResourceSchema, StoreSchema,
     };
@@ -250,6 +251,51 @@ mod tests {
         assert!(matches!(
             choose_access_path(store.resource("Message").unwrap(), &query),
             AccessPath::Index { .. }
+        ));
+    }
+
+    #[test]
+    fn private_equality_query_uses_protected_index_without_scan() {
+        let mut store = schema();
+        let resource = &mut store.resources[0];
+        resource
+            .field("author")
+            .expect("field exists");
+        resource.fields[1].protection = FieldProtection::Private;
+        resource.indexes.clear();
+
+        let protected_indexes = vec![ProtectedIndexSpec {
+            resource: "Message".into(),
+            field: "author".into(),
+            mode: ProtectedIndexMode::EqualityBlindIndex,
+            token_bits: 192,
+        }];
+
+        let query = QuerySpec {
+            resource: "Message".into(),
+            predicates: vec![Predicate::Equal {
+                field: "author".into(),
+            }],
+            projection: vec!["id".into()],
+            limit: Some(100),
+            allow_enumeration: false,
+        };
+
+        assert!(
+            validate_query_with_protected_indexes(
+                &store,
+                &query,
+                &protected_indexes,
+            )
+            .is_ok()
+        );
+        assert!(matches!(
+            choose_access_path_with_protected(
+                store.resource("Message").unwrap(),
+                &query,
+                &protected_indexes,
+            ),
+            AccessPath::ProtectedEqualityIndex { .. }
         ));
     }
 
