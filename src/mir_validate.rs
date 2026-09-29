@@ -139,6 +139,31 @@ fn validate_instruction(
                 issues.push(MirIssue::TypeMismatch { instruction: index });
             }
         }
+        MirOp::SelectCall { .. } => {
+            if instruction.inputs.is_empty() {
+                issues.push(MirIssue::WrongInputCount {
+                    instruction: index,
+                    expected: 1,
+                    actual: 0,
+                });
+            } else if program
+                .values
+                .get(&instruction.inputs[0])
+                .map(|value| value.ty)
+                != Some(MirType::Bool)
+            {
+                issues.push(MirIssue::TypeMismatch {
+                    instruction: index,
+                });
+            }
+            if instruction.outputs.len() > 1 {
+                issues.push(MirIssue::WrongOutputCount {
+                    instruction: index,
+                    expected: 1,
+                    actual: instruction.outputs.len(),
+                });
+            }
+        }
         MirOp::Load | MirOp::Store | MirOp::Call { .. } => {}
     }
 }
