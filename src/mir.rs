@@ -67,6 +67,7 @@ pub struct MirInstruction {
 pub struct MirProgram {
     pub values: BTreeMap<ValueId, MirValue>,
     pub instructions: Vec<MirInstruction>,
+    pub outputs: Vec<ValueId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -195,6 +196,37 @@ pub fn lower_graph(graph: &Graph) -> Result<MirProgram, Vec<LoweringIssue>> {
                 inputs,
                 outputs,
             });
+        }
+    }
+
+    for graph_output in &graph.outputs {
+        let value = graph.edges.iter().find_map(|edge| {
+            match (&edge.from, &edge.to) {
+                (
+                    SourceEndpoint::NodeOutput {
+                        node,
+                        port,
+                    },
+                    TargetEndpoint::GraphOutput(output_port),
+                ) if *output_port == graph_output.id => {
+                    output_values.get(&(*node, *port)).copied()
+                }
+                (
+                    SourceEndpoint::GraphInput(input_port),
+                    TargetEndpoint::GraphOutput(output_port),
+                ) if *output_port == graph_output.id => {
+                    graph_inputs.get(input_port).copied()
+                }
+                _ => None,
+            }
+        });
+
+        match value {
+            Some(value) => program.outputs.push(value),
+            None => issues.push(LoweringIssue::MissingInputValue {
+                node: 0,
+                port: graph_output.id,
+            }),
         }
     }
 
