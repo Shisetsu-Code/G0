@@ -321,6 +321,11 @@ fn validate_operation(node: &Node, report: &mut ValidationReport) {
             require_pure(node, report);
             validate_boolean_operation(node, 1, report);
         }
+        Operation::ConvertChecked => {
+            require_shape(node, 1, 1, report);
+            require_pure(node, report);
+            validate_checked_conversion(node, report);
+        }
         Operation::Import(_) => {
             if !node.effects.is_empty() {
                 report.push(
@@ -415,6 +420,27 @@ fn literal_fits(literal: &Literal, ty: &SemanticType) -> bool {
         (Literal::Text(_), SemanticType::Text) => true,
         (Literal::Bytes(_), SemanticType::Bytes) => true,
         _ => false,
+    }
+}
+
+fn validate_checked_conversion(
+    node: &Node,
+    report: &mut ValidationReport,
+) {
+    if node.inputs.len() != 1 || node.outputs.len() != 1 {
+        return;
+    }
+
+    if !matches!(node.inputs[0].ty, SemanticType::Integer(_))
+        || !matches!(node.outputs[0].ty, SemanticType::Integer(_))
+    {
+        report.push(
+            ValidationCode::OperationShape,
+            format!(
+                "node {} ConvertChecked accepts and returns semantic Integer values only",
+                node.id
+            ),
+        );
     }
 }
 
