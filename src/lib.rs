@@ -24,6 +24,7 @@ pub mod ingress;
 pub mod invariants;
 pub mod io;
 pub mod math;
+pub mod math_lowering;
 pub mod machine;
 pub mod machine_ir;
 pub mod memory;
