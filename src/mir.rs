@@ -20,6 +20,22 @@ pub enum MirType {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompareKind {
+    Eq,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoolBinaryKind {
+    And,
+    Or,
+    Xor,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArithmeticMode {
     Checked,
     Saturating,
@@ -39,6 +55,15 @@ pub enum MirOp {
     Mul {
         mode: ArithmeticMode,
     },
+    Compare {
+        kind: CompareKind,
+        width: IntegerWidth,
+        signed: bool,
+    },
+    BoolBinary {
+        kind: BoolBinaryKind,
+    },
+    BoolNot,
     Load,
     Store,
     Move,
@@ -168,6 +193,43 @@ pub fn lower_graph(graph: &Graph) -> Result<MirProgram, Vec<LoweringIssue>> {
             Operation::Mul => Some(MirOp::Mul {
                 mode: ArithmeticMode::Checked,
             }),
+            Operation::Eq
+            | Operation::Lt
+            | Operation::Le
+            | Operation::Gt
+            | Operation::Ge => {
+                let Some(SemanticType::Integer(range)) =
+                    node.inputs.first().map(|port| &port.ty)
+                else {
+                    issues.push(LoweringIssue::UnsupportedType {
+                        node: node.id,
+                    });
+                    continue;
+                };
+                let kind = match node.operation {
+                    Operation::Eq => CompareKind::Eq,
+                    Operation::Lt => CompareKind::Lt,
+                    Operation::Le => CompareKind::Le,
+                    Operation::Gt => CompareKind::Gt,
+                    Operation::Ge => CompareKind::Ge,
+                    _ => unreachable!(),
+                };
+                Some(MirOp::Compare {
+                    kind,
+                    width: choose_integer_width(range),
+                    signed: range.min < 0,
+                })
+            }
+            Operation::And | Operation::Or | Operation::Xor => {
+                let kind = match node.operation {
+                    Operation::And => BoolBinaryKind::And,
+                    Operation::Or => BoolBinaryKind::Or,
+                    Operation::Xor => BoolBinaryKind::Xor,
+                    _ => unreachable!(),
+                };
+                Some(MirOp::BoolBinary { kind })
+            }
+            Operation::Not => Some(MirOp::BoolNot),
             Operation::Subgraph(target) => Some(MirOp::Call {
                 target: target.clone(),
             }),
