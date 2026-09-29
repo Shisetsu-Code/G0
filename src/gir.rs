@@ -259,6 +259,10 @@ pub enum Operation {
     Xor,
     Not,
     ConvertChecked,
+    Truncate {
+        bits: u16,
+        signed: bool,
+    },
     Select {
         when_true: String,
         when_false: String,
