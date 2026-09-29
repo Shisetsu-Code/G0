@@ -560,6 +560,113 @@ mod tests {
     }
 
     #[test]
+    fn field_policy_can_restrict_row_authorized_update() {
+        let mut schema = message_schema();
+        schema.policies.rules.push(PolicyRule {
+            action: Action::update(),
+            allow_if: PolicyExpr::Public,
+        });
+        schema.field_policies.push(FieldPolicy {
+            field: "body".into(),
+            read: FieldAccessRule::Inherit,
+            create: FieldAccessRule::Inherit,
+            update: FieldAccessRule::Deny,
+        });
+
+        let principal = Principal::new("alice", "tenant-a");
+        let resource =
+            ResourceContext::new("Message", "m1", "tenant-a");
+
+        assert_eq!(
+            authorize_store_operation(
+                &schema,
+                &principal,
+                &resource,
+                &StoreOperation::Update {
+                    fields: vec!["body".into()],
+                },
+            ),
+            Err(vec![StoreAccessIssue::FieldPolicyDenied {
+                field: "body".into(),
+                reason: DenyReason::PolicyUnsatisfied,
+            }])
+        );
+    }
+
+    #[test]
+    fn field_policy_can_require_owner_beyond_row_read_policy() {
+        let mut schema = message_schema();
+        schema.policies.rules.push(PolicyRule {
+            action: Action::read(),
+            allow_if: PolicyExpr::Public,
+        });
+        schema.field_policies.push(FieldPolicy {
+            field: "body".into(),
+            read: FieldAccessRule::Require(
+                PolicyExpr::PrincipalOwnsResource,
+            ),
+            create: FieldAccessRule::Inherit,
+            update: FieldAccessRule::Inherit,
+        });
+
+        let alice = Principal::new("alice", "tenant-a");
+        let mallory = Principal::new("mallory", "tenant-a");
+        let mut resource =
+            ResourceContext::new("Message", "m1", "tenant-a");
+        resource.owner = Some(alice.id.clone());
+
+        let operation = StoreOperation::Read {
+            fields: vec!["body".into()],
+        };
+
+        assert!(
+            authorize_store_operation(
+                &schema,
+                &alice,
+                &resource,
+                &operation,
+            )
+            .is_ok()
+        );
+        assert!(matches!(
+            authorize_store_operation(
+                &schema,
+                &mallory,
+                &resource,
+                &operation,
+            ),
+            Err(issues) if issues.iter().any(|issue| matches!(
+                issue,
+                StoreAccessIssue::FieldPolicyDenied {
+                    field,
+                    reason: DenyReason::PolicyUnsatisfied,
+                } if field == "body"
+            ))
+        ));
+    }
+
+    #[test]
+    fn field_policy_targets_must_exist_and_be_unique() {
+        let mut schema = message_schema();
+        schema.field_policies = vec![
+            FieldPolicy::inherit("missing"),
+            FieldPolicy::inherit("missing"),
+        ];
+
+        let issues = validate_resource_schema(&schema).unwrap_err();
+        assert!(issues.contains(
+            &StorageSchemaIssue::UnknownFieldPolicyTarget(
+                "missing".into(),
+            )
+        ));
+        assert!(issues.contains(
+            &StorageSchemaIssue::DuplicateFieldPolicy(
+                "missing".into(),
+            )
+        ));
+    }
+
+    #[test]
     fn resources_default_to_scoped_isolation_and_deny() {
         let resource = ResourceSchema::new("Message");
         assert_eq!(resource.tenant_isolation, TenantIsolation::CurrentScope);
