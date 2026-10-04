@@ -531,17 +531,20 @@ fn g0_control_compiler_selfhosts_through_two_native_generation_stages() {
 typedef struct NativeResult NativeResult;
 typedef struct NativeContext NativeContext;
 typedef struct {uint64_t max_steps,max_value_bytes,max_call_depth;} NativeLimits;
+typedef struct {uint64_t steps,logical_bytes,value_handles,pack_handles,builder_slots;} NativeMetrics;
 extern uint64_t g0_compiled_entry_with_inputs(NativeContext*,const uint64_t*,uint64_t);
 extern NativeResult*g0_native_invoke(const unsigned char*,size_t,const unsigned char*,size_t,uint64_t(*)(NativeContext*,const uint64_t*,uint64_t),const NativeLimits*);
 extern int32_t g0_runtime_status(const NativeResult*);
 extern int32_t g0_runtime_failure_kind(const NativeResult*);
+extern int32_t g0_runtime_metrics(const NativeResult*,NativeMetrics*);
 extern const unsigned char*g0_runtime_bytes(const NativeResult*,size_t*);
 extern void g0_runtime_free(NativeResult*);
 int main(int argc,char**argv){
  if(argc!=2)return 1;FILE*f=fopen(argv[1],"rb");if(!f)return 2;
  unsigned char*b=malloc(4194305);if(!b){fclose(f);return 3;}size_t n=fread(b,1,4194305,f);int bad=ferror(f);fclose(f);if(bad||n>4194304){free(b);return 4;}
- const NativeLimits limits={64000000,UINT64_C(32)*1024*1024*1024,128};
+ const NativeLimits limits={256000000,UINT64_C(32)*1024*1024*1024,128};
  NativeResult*r=g0_native_invoke(b,n,b,n,g0_compiled_entry_with_inputs,&limits);free(b);
+ NativeMetrics metrics={0};if(!g0_runtime_metrics(r,&metrics))fprintf(stderr,"native compiler metrics steps=%llu logical_bytes=%llu value_handles=%llu pack_handles=%llu builder_slots=%llu\n",(unsigned long long)metrics.steps,(unsigned long long)metrics.logical_bytes,(unsigned long long)metrics.value_handles,(unsigned long long)metrics.pack_handles,(unsigned long long)metrics.builder_slots);
  if(g0_runtime_status(r)){fprintf(stderr,"native compiler failure kind %d\n",g0_runtime_failure_kind(r));g0_runtime_free(r);return 5;}size_t size=0;const unsigned char*out=g0_runtime_bytes(r,&size);if(!out||size<6||memcmp(out,".text\n",6)){g0_runtime_free(r);return 6;}bad=fwrite(out,1,size,stdout)!=size;g0_runtime_free(r);return bad?7:0;
 }
 "#;
@@ -550,6 +553,7 @@ int main(int argc,char**argv){
         .arg(dir.join("compiler.g0p"))
         .output()
         .unwrap();
+    eprint!("{}", String::from_utf8_lossy(&generated.stderr));
     assert!(
         generated.status.success(),
         "bootstrap exit {:?}: {}",
@@ -570,6 +574,7 @@ int main(int argc,char**argv){
         .arg(dir.join("compiler.g0p"))
         .output()
         .unwrap();
+    eprint!("{}", String::from_utf8_lossy(&generated.stderr));
     assert!(
         generated.status.success(),
         "stage-one exit {:?}: {}",

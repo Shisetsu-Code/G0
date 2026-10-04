@@ -37,7 +37,7 @@ pub struct NativeLimits {
 impl NativeLimits {
     pub fn execution_limits(self) -> Result<crate::execution::ExecutionLimits, NativeRuntimeError> {
         if self.max_steps == 0
-            || self.max_steps > 64_000_000
+            || self.max_steps > 256_000_000
             || self.max_value_bytes == 0
             || self.max_value_bytes > 32 * 1024 * 1024 * 1024
             || !(1..=128).contains(&self.max_call_depth)
@@ -104,8 +104,45 @@ pub fn execute_embedded_with_limits(
         .map_err(NativeRuntimeError::Runtime)
 }
 
+/// Native execution counters at completion or failure. Logical bytes are
+/// cumulative budget charges (including metadata), not resident memory or RSS.
+/// Handle counts describe retained arena entries; builder slots include finished
+/// builders. Stack frames and allocator spare capacity are not measured here.
+#[repr(C)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct NativeMetrics {
+    pub steps: u64,
+    pub logical_bytes: u64,
+    pub value_handles: u64,
+    pub pack_handles: u64,
+    pub builder_slots: u64,
+}
+
 pub struct NativeResult {
     pub(crate) output: Result<Vec<Value>, NativeRuntimeError>,
+    pub(crate) metrics: Option<NativeMetrics>,
+}
+
+/// Copy a native context's final counters. Returns 0 when available, or 1 for
+/// null pointers, pre-context failures, or interpreter entries. An unavailable
+/// query leaves the destination unchanged.
+///
+/// # Safety
+/// A nonnull result must be live and returned by this runtime. A nonnull output
+/// must point to writable, aligned NativeMetrics storage, disjoint from result.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn g0_runtime_metrics(
+    result: *const NativeResult,
+    output: *mut NativeMetrics,
+) -> i32 {
+    if output.is_null() {
+        return 1;
+    }
+    let Some(metrics) = (unsafe { result.as_ref() }).and_then(|result| result.metrics) else {
+        return 1;
+    };
+    unsafe { output.write(metrics) };
+    0
 }
 
 /// Bounded diagnostic codes: 0 success, 1 steps, 2 memory, 3 call depth,
@@ -172,7 +209,10 @@ pub unsafe extern "C" fn g0_runtime_entry_with_limits(
         .and_then(|limits| limits.execution_limits());
     match limits {
         Ok(limits) => unsafe { runtime_entry(program, program_len, input, input_len, limits) },
-        Err(error) => Box::into_raw(Box::new(NativeResult { output: Err(error) })),
+        Err(error) => Box::into_raw(Box::new(NativeResult {
+            output: Err(error),
+            metrics: None,
+        })),
     }
 }
 unsafe fn runtime_entry(
@@ -201,7 +241,10 @@ unsafe fn runtime_entry(
         };
         execute_embedded_with_limits(program, input, limits)
     };
-    Box::into_raw(Box::new(NativeResult { output }))
+    Box::into_raw(Box::new(NativeResult {
+        output,
+        metrics: None,
+    }))
 }
 /// # Safety
 /// `result` must be null or a live handle returned by `g0_runtime_entry`.

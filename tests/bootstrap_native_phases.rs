@@ -99,10 +99,12 @@ const DRIVER: &str = r#"
 typedef struct NativeResult NativeResult;
 typedef struct NativeContext NativeContext;
 typedef struct {uint64_t max_steps,max_value_bytes,max_call_depth;} NativeLimits;
+typedef struct {uint64_t steps,logical_bytes,value_handles,pack_handles,builder_slots;} NativeMetrics;
 extern uint64_t g0_compiled_entry_with_inputs(NativeContext*,const uint64_t*,uint64_t);
 extern NativeResult*g0_native_invoke(const unsigned char*,size_t,const unsigned char*,size_t,uint64_t(*)(NativeContext*,const uint64_t*,uint64_t),const NativeLimits*);
 extern int32_t g0_runtime_status(const NativeResult*);
 extern int32_t g0_runtime_failure_kind(const NativeResult*);
+extern int32_t g0_runtime_metrics(const NativeResult*,NativeMetrics*);
 extern const unsigned char*g0_runtime_bytes(const NativeResult*,size_t*);
 extern void g0_runtime_free(NativeResult*);
 static unsigned char*read(const char*path,size_t*n){
@@ -115,9 +117,10 @@ int main(int argc,char**argv){
  if(argc!=5)return 1;size_t pn=0,in=0;
  unsigned char*p=read(argv[1],&pn),*input=read(argv[2],&in);
  if(!p||!input){free(p);free(input);return 2;}
- const NativeLimits limits={64000000,UINT64_C(32)*1024*1024*1024,128};
+ const NativeLimits limits={256000000,UINT64_C(32)*1024*1024*1024,128};
  NativeResult*r=g0_native_invoke(p,pn,input,in,g0_compiled_entry_with_inputs,&limits);
  free(p);free(input);
+ NativeMetrics metrics={0};if(!g0_runtime_metrics(r,&metrics))fprintf(stderr,"phase %s metrics steps=%llu logical_bytes=%llu value_handles=%llu pack_handles=%llu builder_slots=%llu\n",argv[3],(unsigned long long)metrics.steps,(unsigned long long)metrics.logical_bytes,(unsigned long long)metrics.value_handles,(unsigned long long)metrics.pack_handles,(unsigned long long)metrics.builder_slots);
  if(g0_runtime_status(r)){fprintf(stderr,"phase %s failure kind %d\n",argv[3],g0_runtime_failure_kind(r));g0_runtime_free(r);return 3;}
  size_t size=0;const unsigned char*out=g0_runtime_bytes(r,&size);
  int good=out&&(strcmp(argv[4],"bool")==0 ? size==4&&!memcmp(out,"true",4) : size>=6&&!memcmp(out,".text\n",6));
@@ -190,6 +193,7 @@ fn run_native_phases() {
             start.elapsed(),
             source.len()
         );
+        eprint!("{}", String::from_utf8_lossy(&output.stderr));
         if !output.status.success() {
             failures.push(format!(
                 "{phase}: exit {:?}: {}",

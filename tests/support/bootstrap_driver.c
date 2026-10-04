@@ -6,9 +6,11 @@
 typedef struct NativeResult NativeResult;
 extern NativeResult *g0_compiled_entry(const unsigned char *, size_t);
 typedef struct { uint64_t max_steps, max_value_bytes, max_call_depth; } NativeLimits;
+typedef struct { uint64_t steps, logical_bytes, value_handles, pack_handles, builder_slots; } NativeMetrics;
 extern NativeResult *g0_compiled_entry_with_limits(const unsigned char *, size_t, const NativeLimits *);
 extern int32_t g0_runtime_status(const NativeResult *);
 extern int32_t g0_runtime_failure_kind(const NativeResult *);
+extern int32_t g0_runtime_metrics(const NativeResult *, NativeMetrics *);
 extern const unsigned char *g0_runtime_bytes(const NativeResult *, size_t *);
 extern void g0_runtime_free(NativeResult *);
 
@@ -22,9 +24,16 @@ int main(int argc, char **argv) {
     int failed = ferror(file);
     fclose(file);
     if (failed || length > 4194304) { free(input); return 5; }
-    const NativeLimits limits = { 64000000, UINT64_C(32) * 1024 * 1024 * 1024, 128 };
+    const NativeLimits limits = { 256000000, UINT64_C(32) * 1024 * 1024 * 1024, 128 };
     NativeResult *result = g0_compiled_entry_with_limits(input, length, &limits);
     free(input);
+    NativeMetrics metrics = {0};
+    if (!g0_runtime_metrics(result, &metrics)) {
+        fprintf(stderr, "G0 compiler metrics steps=%llu logical_bytes=%llu value_handles=%llu pack_handles=%llu builder_slots=%llu\n",
+            (unsigned long long)metrics.steps, (unsigned long long)metrics.logical_bytes,
+            (unsigned long long)metrics.value_handles, (unsigned long long)metrics.pack_handles,
+            (unsigned long long)metrics.builder_slots);
+    }
     if (g0_runtime_status(result)) {
         fprintf(stderr, "G0 compiler runtime failure kind: %d\n", g0_runtime_failure_kind(result));
         g0_runtime_free(result);

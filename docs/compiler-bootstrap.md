@@ -99,7 +99,10 @@ of the Rust bootstrap host.
 
 Compiler hosting accepts at most four MiB of source or compiler document. Rust
 bootstrap hosting uses 32 million steps; linked compiler drivers explicitly
-reserve up to 64 million steps. Both reserve thirty-two GiB of cumulative logical allocation
+reserve up to 256 million steps. The full compile-direct definition measured
+209,834,144 steps in the diagnostic interpreter, motivating this explicit
+reservation; native generation and its allocation must also pass the linked
+tests. Both reserve thirty-two GiB of cumulative logical allocation
 and call depth 128. Logical accounting includes repeated graph metadata and
 forwarded shared values; it is not an estimate of resident memory.
 
@@ -155,6 +158,12 @@ the exact two's-complement value. Callers must provide valid byte ranges and res
 limit, 2 allocation limit, 3 call depth, 4 cancellation, 5 input/interface/host
 limits, 6 other program/runtime failures, and 7 null handle. It exposes no values
 or graph names. Compiler drivers report these codes on stderr.
+`g0_runtime_metrics(result, output)` copies a five-`uint64_t` native snapshot:
+steps, logical bytes, value handles, pack handles and retained builder slots.
+It returns zero when available and one for null pointers, pre-context failures
+or interpreter entries; an unavailable query preserves the output storage.
+Snapshots remain available after native quota failures. Counts describe budget
+charges and retained arena entries, not process RSS or allocator capacity.
 Compilation never executes source effects or turns declarations into grants.
 Invalid input, exhausted budgets and unsupported native domains produce errors;
 CLI output replacement occurs only after successful compilation.

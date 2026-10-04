@@ -26,6 +26,7 @@ pub unsafe extern "C" fn g0_native_invoke(
     entry: Option<NativeEntry>,
     limits: *const NativeLimits,
 ) -> *mut NativeResult {
+    let mut metrics = None;
     let result = (|| {
         if program_len > crate::bootstrap_compiler::MAX_SOURCE_BYTES || input_len > 8 * 1024 * 1024
         {
@@ -92,9 +93,11 @@ pub unsafe extern "C" fn g0_native_invoke(
         let handles = args
             .into_iter()
             .map(|value| context.insert_value(value))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(NativeRuntimeError::Runtime)?;
+            .collect::<Result<Vec<_>, _>>();
+        metrics = Some(context.metrics());
+        let handles = handles.map_err(NativeRuntimeError::Runtime)?;
         let handle = unsafe { entry(&mut context, handles.as_ptr(), handles.len() as u64) };
+        metrics = Some(context.metrics());
         if let Some(error) = context.error {
             return Err(NativeRuntimeError::Runtime(error));
         }
@@ -104,5 +107,8 @@ pub unsafe extern "C" fn g0_native_invoke(
         }
         Ok(vec![value.clone()])
     })();
-    Box::into_raw(Box::new(NativeResult { output: result }))
+    Box::into_raw(Box::new(NativeResult {
+        output: result,
+        metrics,
+    }))
 }

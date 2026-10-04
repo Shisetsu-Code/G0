@@ -215,3 +215,23 @@ is 2,050,623 bytes, SHA-256
 Full local and native checks for this frozen definition are pending. An
 intermediate local all-target run encountered an intentionally failing test
 executable replaced by concurrent TDD work; it is not counted as verification.
+
+Frozen 0.11 completed all four isolated Linux native phases in CI 37213831379:
+reader, names, references and emitter. Full native stage zero still exhausted
+64 million steps. Its exact compile-direct definition (2,050,630 bytes) also
+completed a diagnostic interpreter run in 209,834,144 steps and
+3,550,563,057,868 cumulative logical bytes with 512 million steps/eight TiB
+diagnostic limits. This logical accounting is not native retention or RSS.
+The next explicit compiler reservation will be measured at 256 million steps,
+keeping the ordinary one-million-step/64-MiB defaults unchanged. Native usage
+counters are being added so the memory reservation can be verified directly.
+The frozen local suite found a stale integer128 review expecting GIR 0.11
+rejection; the corrected four-case suite accepts 0.10/0.11 and rejects 0.9/0.12.
+The full suite must be repeated after the current metrics/budget changes.
+
+The metrics/budget checkpoint passes the fresh complete Windows suite: 567 tests
+in 68 suites, 104.44 seconds of test execution with development/test opt-level 2.
+Fresh all-target Clippy with warnings denied is clean. Independent read-only
+review found no metrics ABI, snapshot, quota/default or stdout contamination
+issues. Native stage-zero/one comparison at 256 million steps and 32 GiB is
+still pending; the ordinary one-million-step/64-MiB defaults are unchanged.

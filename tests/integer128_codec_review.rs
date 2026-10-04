@@ -105,10 +105,12 @@ fn all_lengths_and_protected_or_nonbytes_inputs_fail_closed() {
         Value::Text("0123456789abcdef".into()),
         Value::Array(vec![Value::Integer(0); 16].into()),
     ] {
-        assert!(Executor::new(&p, ExecutionLimits::default())
-            .unwrap()
-            .run_graph("decode-review", vec![input.clone()])
-            .is_err());
+        assert!(
+            Executor::new(&p, ExecutionLimits::default())
+                .unwrap()
+                .run_graph("decode-review", vec![input.clone()])
+                .is_err()
+        );
         let mut native = NativeContext::new(p.clone(), ExecutionLimits::default()).unwrap();
         let handle = native.insert_value(input).unwrap();
         assert_eq!(native.primitive(0, 0, &[handle]), 0);
@@ -211,7 +213,12 @@ fn the_opcode_contract_requires_plain_bytes_full_i128_and_purity() {
     assert!(NativeContext::new(capabilities, ExecutionLimits::default()).is_err());
 
     let bytes = g0::graph_binary::encode_graph(&p.graphs[0]).unwrap();
-    for minor in [0, 11] {
+    for minor in [10, 11] {
+        let mut supported = bytes.clone();
+        supported[6..8].copy_from_slice(&(minor as u16).to_le_bytes());
+        assert!(g0::graph_binary_decode::decode_graph(&supported).is_ok());
+    }
+    for minor in [0, 9, 12] {
         let mut unsupported = bytes.clone();
         unsupported[6..8].copy_from_slice(&(minor as u16).to_le_bytes());
         assert!(g0::graph_binary_decode::decode_graph(&unsupported).is_err());

@@ -97,6 +97,16 @@ impl NativeContext {
     pub fn cancellation(&self) -> Cancellation {
         self.cancelled.clone()
     }
+    /// Snapshot existing counters without allocating or changing quota charges.
+    pub fn metrics(&self) -> crate::native_runtime::NativeMetrics {
+        crate::native_runtime::NativeMetrics {
+            steps: self.steps,
+            logical_bytes: self.bytes,
+            value_handles: self.values.len() as u64,
+            pack_handles: self.packs.len() as u64,
+            builder_slots: self.builders.len() as u64,
+        }
+    }
     /// Add a host-supplied immutable input under the same resident-value budget.
     pub fn insert_value(&mut self, value: Value) -> Result<u64, RuntimeError> {
         // This arena owns immutable values, not live resources or linear handles.
