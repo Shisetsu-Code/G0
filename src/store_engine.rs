@@ -12,19 +12,18 @@ use crate::{
     value_codec::{CodecError, CodecLimits, decode_value, encode_value},
 };
 use ring::{
-    aead,
+    aead, hkdf,
     rand::{SecureRandom, SystemRandom},
 };
 use std::{
+    cell::Cell,
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::{Arc, atomic::AtomicU64},
 };
+use zeroize::Zeroizing;
 
 const MAX_BYTES: usize = 64 * 1024 * 1024;
 const MAX_ROWS: usize = 100_000;
@@ -107,6 +106,7 @@ pub struct Transaction {
     epoch: u64,
     snapshot: Arc<Snapshot>,
     writes: BTreeMap<Key, Option<Row>>,
+    credential_work: Cell<u32>,
 }
 
 impl Transaction {
@@ -120,24 +120,48 @@ pub struct StoredValue {
     pub version: u64,
 }
 
+/// Durable monotonic anchor kept outside the snapshot's rollback domain.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoreCheckpoint {
+    pub generation: u64,
+    pub digest: [u8; 32],
+}
+#[derive(Clone, Copy, Debug)]
+pub struct WitnessError;
+/// One instance is namespaced to one store. Implementations must supply
+/// durable, atomic CAS and resist rollback independently of store files.
+/// A local file in the same backup/restore domain is not a trusted witness.
+pub trait RollbackWitness: Send + Sync {
+    fn load(&self) -> Result<Option<StoreCheckpoint>, WitnessError>;
+    fn compare_exchange(
+        &self,
+        expected: Option<&StoreCheckpoint>,
+        next: &StoreCheckpoint,
+    ) -> Result<(), WitnessError>;
+}
+
 pub struct NativeStore {
     root: PathBuf,
     _lock: File,
     schema: StoreSchema,
     registry: Vec<DataSchema>,
     cipher: aead::LessSafeKey,
+    field_keys: hkdf::Prk,
     snapshot: Arc<Snapshot>,
     instance: u64,
     epoch: u64,
     recovery: bool,
+    checkpoint: StoreCheckpoint,
+    witness: Option<Arc<dyn RollbackWitness>>,
 }
 impl NativeStore {
     pub fn open(
         permit: StorePermit,
         schema: StoreSchema,
         registry: Vec<DataSchema>,
-        mut key: [u8; 32],
+        key: [u8; 32],
     ) -> Result<Self, StoreError> {
+        let key = Zeroizing::new(key);
         validate_store_schema(&schema).map_err(|_| StoreError::InvalidSchema)?;
         let mut names = BTreeSet::new();
         for s in &registry {
@@ -160,23 +184,27 @@ impl NativeStore {
             }
             // Profiles not implemented by this engine are rejected rather than
             // silently turning off field protection or referential integrity.
-            if resource
-                .fields
-                .iter()
-                .any(|f| f.protection != FieldProtection::Public)
-                || resource.managed_fields.iter().any(|m| {
-                    matches!(
-                        m.source,
-                        ManagedFieldSource::Generated | ManagedFieldSource::StoreClock
-                    )
-                })
-            {
+            if resource.managed_fields.iter().any(|m| {
+                matches!(
+                    m.source,
+                    ManagedFieldSource::Generated | ManagedFieldSource::StoreClock
+                )
+            }) {
                 return Err(StoreError::UnsupportedProfile);
             }
-            crate::value_codec::validate_public_type(
-                &SemanticType::Record(resource.name.clone()),
-                &registry,
-            )?;
+            for field in &resource.fields {
+                let ty = match (&field.protection, &field.ty) {
+                    (FieldProtection::Credential, SemanticType::Credential(inner))
+                        if matches!(inner.as_ref(), SemanticType::Text | SemanticType::Bytes) =>
+                    {
+                        continue;
+                    }
+                    (FieldProtection::Credential, _) => return Err(StoreError::UnsupportedProfile),
+                    (FieldProtection::Secret, SemanticType::Secret(inner)) => inner,
+                    (_, ty) => ty,
+                };
+                crate::value_codec::validate_public_type(ty, &registry)?;
+            }
         }
         let mut options = OpenOptions::new();
         options.read(true).write(true).create(true).truncate(false);
@@ -187,27 +215,27 @@ impl NativeStore {
         }
         let lock = options.open(permit.root.join("store.lock"))?;
         lock.try_lock().map_err(|_| StoreError::Busy)?;
-        let cipher =
-            aead::UnboundKey::new(&aead::AES_256_GCM, &key).map_err(|_| StoreError::Integrity);
-        for byte in &mut key {
-            unsafe {
-                std::ptr::write_volatile(byte, 0);
-            }
-        }
-        std::sync::atomic::compiler_fence(Ordering::SeqCst);
+        let cipher = aead::UnboundKey::new(&aead::AES_256_GCM, key.as_ref())
+            .map_err(|_| StoreError::Integrity);
+        let field_keys =
+            hkdf::Salt::new(hkdf::HKDF_SHA256, b"g0.store.fields.v1").extract(key.as_ref());
         let cipher = aead::LessSafeKey::new(cipher?);
         let instance =
             crate::runtime_resources::fresh_identity(&INSTANCE).ok_or(StoreError::Limit)?;
+        let checkpoint = Self::genesis(&permit.root);
         let mut store = Self {
             root: permit.root,
             _lock: lock,
             schema,
             registry,
             cipher,
+            field_keys,
             snapshot: Arc::new(Snapshot::default()),
             instance,
             epoch: 0,
             recovery: false,
+            checkpoint,
+            witness: None,
         };
         let path = store.root.join("snapshot.g0s");
         match File::open(&path) {
@@ -217,11 +245,48 @@ impl NativeStore {
                 if bytes.len() > MAX_BYTES {
                     return Err(StoreError::Limit);
                 }
+                let digest = ring::digest::digest(&ring::digest::SHA256, &bytes)
+                    .as_ref()
+                    .try_into()
+                    .unwrap();
                 store.snapshot = Arc::new(store.decode_snapshot(bytes)?);
+                store.checkpoint = StoreCheckpoint {
+                    generation: store.snapshot.generation,
+                    digest,
+                };
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e.into()),
         }
+        Ok(store)
+    }
+    fn genesis(root: &Path) -> StoreCheckpoint {
+        let mut input = b"g0.store.genesis.v1\0".to_vec();
+        input.extend_from_slice(root.to_string_lossy().as_bytes());
+        StoreCheckpoint {
+            generation: 0,
+            digest: ring::digest::digest(&ring::digest::SHA256, &input)
+                .as_ref()
+                .try_into()
+                .unwrap(),
+        }
+    }
+    pub fn open_with_witness(
+        permit: StorePermit,
+        schema: StoreSchema,
+        registry: Vec<DataSchema>,
+        key: [u8; 32],
+        witness: Arc<dyn RollbackWitness>,
+    ) -> Result<Self, StoreError> {
+        let mut store = Self::open(permit, schema, registry, key)?;
+        match witness.load().map_err(|_| StoreError::RecoveryRequired)? {
+            Some(expected) if expected == store.checkpoint => {}
+            None if store.checkpoint == Self::genesis(&store.root) => witness
+                .compare_exchange(None, &store.checkpoint)
+                .map_err(|_| StoreError::RecoveryRequired)?,
+            _ => return Err(StoreError::RecoveryRequired),
+        }
+        store.witness = Some(witness);
         Ok(store)
     }
     pub fn begin(&self, principal: Principal) -> Transaction {
@@ -231,6 +296,7 @@ impl NativeStore {
             epoch: self.epoch,
             snapshot: self.snapshot.clone(),
             writes: BTreeMap::new(),
+            credential_work: Cell::new(0),
         }
     }
     pub fn advance_security_epoch(&mut self) {
@@ -249,6 +315,14 @@ impl NativeStore {
         if tx.principal.id.0.is_empty() || tx.principal.scope.0.is_empty() {
             return Err(StoreError::Denied);
         }
+        Ok(())
+    }
+    fn charge_credential(&self, tx: &Transaction) -> Result<(), StoreError> {
+        let used = tx.credential_work.get();
+        if used >= 16 {
+            return Err(StoreError::Limit);
+        }
+        tx.credential_work.set(used + 1);
         Ok(())
     }
     fn key(&self, principal: &Principal, kind: &str, id: &str) -> Result<Key, StoreError> {
@@ -399,7 +473,7 @@ impl NativeStore {
         if !value.fits(&SemanticType::Record(schema), &self.registry) {
             return Err(StoreError::TypeMismatch);
         }
-        let row = Row {
+        let mut row = Row {
             context,
             value,
             relations: BTreeMap::new(),
@@ -417,6 +491,90 @@ impl NativeStore {
         if tx.writes.len() >= MAX_ROWS {
             return Err(StoreError::Limit);
         }
+        // Originals are replaced only after resource and field authorization.
+        let Value::Record { fields, .. } = &mut row.value else {
+            unreachable!()
+        };
+        for field in &resource.fields {
+            if field.protection == FieldProtection::Credential
+                && let Some(value) = Arc::make_mut(fields).get_mut(&field.name)
+            {
+                self.charge_credential(tx)?;
+                *value = Value::CredentialVerifier(crate::credential::Verifier::create(value)?);
+            }
+        }
+        if tx.writes.len() >= MAX_ROWS {
+            return Err(StoreError::Limit);
+        }
+        tx.writes.insert(key, Some(row));
+        Ok(())
+    }
+    pub fn verify_credential(
+        &self,
+        tx: &Transaction,
+        kind: &str,
+        id: &str,
+        field: &str,
+        candidate: &Value,
+    ) -> Result<bool, StoreError> {
+        self.check(tx)?;
+        let key = self.key(&tx.principal, kind, id)?;
+        let row = self.visible(tx, &key).ok_or(StoreError::NotFound)?;
+        self.authorize(
+            &tx.principal,
+            row,
+            StoreOperation::VerifyCredential {
+                field: field.into(),
+            },
+        )?;
+        let Value::Record { fields, .. } = &row.value else {
+            return Err(StoreError::Integrity);
+        };
+        let Value::CredentialVerifier(verifier) = fields.get(field).ok_or(StoreError::NotFound)?
+        else {
+            return Err(StoreError::Integrity);
+        };
+        self.charge_credential(tx)?;
+        verifier.verify(candidate)
+    }
+    pub fn set_credential(
+        &self,
+        tx: &mut Transaction,
+        kind: &str,
+        id: &str,
+        field: &str,
+        candidate: &Value,
+    ) -> Result<(), StoreError> {
+        self.check(tx)?;
+        let key = self.key(&tx.principal, kind, id)?;
+        let original = self.visible(tx, &key).ok_or(StoreError::NotFound)?;
+        self.authorize(
+            &tx.principal,
+            original,
+            StoreOperation::SetCredential {
+                field: field.into(),
+            },
+        )?;
+        let ty = &self
+            .schema
+            .resource(kind)
+            .and_then(|r| r.field(field))
+            .ok_or(StoreError::InvalidSchema)?
+            .ty;
+        if !candidate.fits(ty, &self.registry) {
+            return Err(StoreError::TypeMismatch);
+        }
+        if tx.writes.len() >= MAX_ROWS && !tx.writes.contains_key(&key) {
+            return Err(StoreError::Limit);
+        }
+        self.charge_credential(tx)?;
+        let verifier = crate::credential::Verifier::create(candidate)?;
+        let mut row = original.clone();
+        let Value::Record { fields, .. } = &mut row.value else {
+            return Err(StoreError::Integrity);
+        };
+        Arc::make_mut(fields).insert(field.into(), Value::CredentialVerifier(verifier));
+        row.version = tx.prospective_version().ok_or(StoreError::Limit)?;
         tx.writes.insert(key, Some(row));
         Ok(())
     }
@@ -734,8 +892,26 @@ impl NativeStore {
         self.check_indexes(&next)?;
         self.check_relations(&next)?;
         let bytes = self.encode_snapshot(&next)?;
+        let checkpoint = StoreCheckpoint {
+            generation: next.generation,
+            digest: ring::digest::digest(&ring::digest::SHA256, &bytes)
+                .as_ref()
+                .try_into()
+                .unwrap(),
+        };
         match atomic_snapshot(&self.root, &bytes) {
-            Ok(()) => self.snapshot = Arc::new(next),
+            Ok(()) => {
+                if let Some(witness) = &self.witness
+                    && witness
+                        .compare_exchange(Some(&self.checkpoint), &checkpoint)
+                        .is_err()
+                {
+                    self.recovery = true;
+                    return Err(StoreError::CommitUncertain);
+                }
+                self.snapshot = Arc::new(next);
+                self.checkpoint = checkpoint;
+            }
             Err(StoreError::CommitUncertain) => {
                 self.recovery = true;
                 return Err(StoreError::CommitUncertain);
@@ -768,8 +944,191 @@ impl NativeStore {
         }
         Ok(())
     }
+    fn field_context(&self, key: &Key, name: &str) -> Result<Vec<u8>, StoreError> {
+        let schema = self
+            .registry
+            .iter()
+            .find(|s| s.name == key.1)
+            .ok_or(StoreError::InvalidSchema)?;
+        let field = schema
+            .fields
+            .iter()
+            .find(|f| f.name == name)
+            .ok_or(StoreError::InvalidSchema)?;
+        let protection = self
+            .schema
+            .resource(&key.1)
+            .and_then(|r| r.field(name))
+            .ok_or(StoreError::InvalidSchema)?
+            .protection;
+        let mut context = Writer(Zeroizing::new(Vec::new()));
+        context.string("g0.store.field.v1")?;
+        for text in [
+            self.root.to_string_lossy().as_ref(),
+            &key.0,
+            &key.1,
+            &key.2,
+            name,
+        ] {
+            context.string(text)?;
+        }
+        context.put(&schema.version.to_le_bytes())?;
+        context.put(&field.tag.to_le_bytes())?;
+        let ty = crate::graph_binary::encode_semantic_type(&field.ty)
+            .map_err(|_| StoreError::InvalidSchema)?;
+        context.blob(&ty)?;
+        context.put(&[match protection {
+            FieldProtection::Public => 0,
+            FieldProtection::Private => 1,
+            FieldProtection::Secret => 2,
+            FieldProtection::Credential => 3,
+        }])?;
+        Ok(std::mem::take(&mut *context.0))
+    }
+    fn field_cipher(&self, context: &[u8]) -> Result<aead::LessSafeKey, StoreError> {
+        let info = [context];
+        let material = self
+            .field_keys
+            .expand(&info, &aead::AES_256_GCM)
+            .map_err(|_| StoreError::Integrity)?;
+        let mut key = Zeroizing::new([0u8; 32]);
+        material
+            .fill(key.as_mut())
+            .map_err(|_| StoreError::Integrity)?;
+        Ok(aead::LessSafeKey::new(
+            aead::UnboundKey::new(&aead::AES_256_GCM, key.as_ref())
+                .map_err(|_| StoreError::Integrity)?,
+        ))
+    }
+    fn encode_fields(
+        &self,
+        writer: &mut Writer,
+        key: &Key,
+        value: &Value,
+    ) -> Result<(), StoreError> {
+        let Value::Record { fields, .. } = value else {
+            return Err(StoreError::Integrity);
+        };
+        let resource = self
+            .schema
+            .resource(&key.1)
+            .ok_or(StoreError::InvalidSchema)?;
+        writer.count(fields.len())?;
+        for (name, value) in fields.iter() {
+            let field = resource.field(name).ok_or(StoreError::InvalidSchema)?;
+            writer.string(name)?;
+            if field.protection == FieldProtection::Credential {
+                let Value::CredentialVerifier(verifier) = value else {
+                    return Err(StoreError::Integrity);
+                };
+                writer.blob(&verifier.encode())?;
+                continue;
+            }
+            let (value, ty) = match (value, &field.ty, field.protection) {
+                (Value::Secret(value), SemanticType::Secret(ty), FieldProtection::Secret) => {
+                    (value.as_ref(), ty.as_ref())
+                }
+                (_, _, FieldProtection::Secret | FieldProtection::Credential) => {
+                    return Err(StoreError::TypeMismatch);
+                }
+                (value, ty, _) => (value, ty),
+            };
+            let mut bytes = Zeroizing::new(encode_value(
+                value,
+                ty,
+                &self.registry,
+                CodecLimits {
+                    max_bytes: MAX_BYTES.saturating_sub(writer.0.len() + 64),
+                    ..Default::default()
+                },
+            )?);
+            if field.protection != FieldProtection::Public {
+                let context = self.field_context(key, name)?;
+                let cipher = self.field_cipher(&context)?;
+                let mut nonce = [0u8; 12];
+                SystemRandom::new()
+                    .fill(&mut nonce)
+                    .map_err(|_| StoreError::Entropy)?;
+                cipher
+                    .seal_in_place_append_tag(
+                        aead::Nonce::assume_unique_for_key(nonce),
+                        aead::Aad::from(context),
+                        &mut *bytes,
+                    )
+                    .map_err(|_| StoreError::Integrity)?;
+                writer.put(&nonce)?;
+            }
+            writer.blob(&bytes)?;
+        }
+        Ok(())
+    }
+    fn decode_fields(&self, reader: &mut Reader<'_>, key: &Key) -> Result<Value, StoreError> {
+        let resource = self
+            .schema
+            .resource(&key.1)
+            .ok_or(StoreError::InvalidSchema)?;
+        let count = reader.count()?;
+        if count > resource.fields.len() || count > reader.0.len() / 8 {
+            return Err(StoreError::Integrity);
+        }
+        let mut fields = BTreeMap::new();
+        let mut previous: Option<String> = None;
+        for _ in 0..count {
+            let name = reader.string()?;
+            if previous.as_ref().is_some_and(|p| p >= &name) {
+                return Err(StoreError::Integrity);
+            }
+            previous = Some(name.clone());
+            let field = resource.field(&name).ok_or(StoreError::InvalidSchema)?;
+            if field.protection == FieldProtection::Credential {
+                let verifier = crate::credential::Verifier::decode(reader.blob()?)?;
+                fields.insert(name, Value::CredentialVerifier(verifier));
+                continue;
+            }
+            let ty = match (&field.ty, field.protection) {
+                (SemanticType::Secret(ty), FieldProtection::Secret) => ty.as_ref(),
+                (_, FieldProtection::Credential) => return Err(StoreError::UnsupportedProfile),
+                (ty, _) => ty,
+            };
+            let value = if field.protection == FieldProtection::Public {
+                decode_value(reader.blob()?, ty, &self.registry, CodecLimits::default())?
+            } else {
+                let nonce = reader
+                    .take(12)?
+                    .try_into()
+                    .map_err(|_| StoreError::Integrity)?;
+                let mut bytes = Zeroizing::new(reader.blob()?.to_vec());
+                let context = self.field_context(key, &name)?;
+                let plaintext = self
+                    .field_cipher(&context)?
+                    .open_in_place(
+                        aead::Nonce::assume_unique_for_key(nonce),
+                        aead::Aad::from(context),
+                        &mut bytes,
+                    )
+                    .map_err(|_| StoreError::Integrity)?;
+                decode_value(plaintext, ty, &self.registry, CodecLimits::default())?
+            };
+            fields.insert(
+                name,
+                if field.protection == FieldProtection::Secret {
+                    Value::Secret(Arc::new(value))
+                } else {
+                    value
+                },
+            );
+        }
+        let value = Value::Record {
+            schema: key.1.clone(),
+            fields: Arc::new(fields),
+        };
+        if !value.fits(&SemanticType::Record(key.1.clone()), &self.registry) {
+            return Err(StoreError::Integrity);
+        }
+        Ok(value)
+    }
     fn encode_snapshot(&self, snapshot: &Snapshot) -> Result<Vec<u8>, StoreError> {
-        let mut writer = Writer(Vec::new());
+        let mut writer = Writer(Zeroizing::new(Vec::new()));
         writer.put(&snapshot.generation.to_le_bytes())?;
         writer.count(snapshot.rows.len())?;
         for ((scope, kind, id), row) in &snapshot.rows {
@@ -778,16 +1137,11 @@ impl NativeStore {
             writer.string(id)?;
             writer.put(&row.version.to_le_bytes())?;
             writer.string(row.context.owner.as_ref().map_or("", |p| p.0.as_str()))?;
-            let bytes = encode_value(
+            self.encode_fields(
+                &mut writer,
+                &(scope.clone(), kind.clone(), id.clone()),
                 &row.value,
-                &SemanticType::Record(kind.clone()),
-                &self.registry,
-                CodecLimits {
-                    max_bytes: MAX_BYTES.saturating_sub(writer.0.len() + 64),
-                    ..Default::default()
-                },
             )?;
-            writer.blob(&bytes)?;
             writer.count(row.relations.len())?;
             for (name, targets) in &row.relations {
                 writer.string(name)?;
@@ -807,11 +1161,11 @@ impl NativeStore {
         self.cipher
             .seal_in_place_append_tag(
                 aead::Nonce::assume_unique_for_key(nonce),
-                aead::Aad::from(self.aad(2)),
-                &mut bytes,
+                aead::Aad::from(self.aad(3)),
+                &mut *bytes,
             )
             .map_err(|_| StoreError::Integrity)?;
-        let mut framed = b"G0S\0\0\0\x02\0".to_vec();
+        let mut framed = b"G0S\0\0\0\x03\0".to_vec();
         framed.extend_from_slice(&nonce);
         framed.extend_from_slice(&bytes);
         Ok(framed)
@@ -819,16 +1173,19 @@ impl NativeStore {
     fn aad(&self, version: u8) -> Vec<u8> {
         let mut aad = if version == 1 {
             b"g0.store.snapshot.v1\0".to_vec()
-        } else {
+        } else if version == 2 {
             b"g0.store.snapshot.v2\0".to_vec()
+        } else {
+            b"g0.store.snapshot.v3\0".to_vec()
         };
         aad.extend_from_slice(self.root.to_string_lossy().as_bytes());
         aad
     }
-    fn decode_snapshot(&self, mut bytes: Vec<u8>) -> Result<Snapshot, StoreError> {
+    fn decode_snapshot(&self, bytes: Vec<u8>) -> Result<Snapshot, StoreError> {
+        let mut bytes = Zeroizing::new(bytes);
         if bytes.len() < 36
             || &bytes[..6] != b"G0S\0\0\0"
-            || !(1..=2).contains(&bytes[6])
+            || !(1..=3).contains(&bytes[6])
             || bytes[7] != 0
         {
             return Err(StoreError::Integrity);
@@ -877,12 +1234,16 @@ impl NativeStore {
             {
                 return Err(StoreError::Integrity);
             }
-            let value = decode_value(
-                reader.blob()?,
-                &SemanticType::Record(kind.clone()),
-                &self.registry,
-                CodecLimits::default(),
-            )?;
+            let value = if format_version >= 3 {
+                self.decode_fields(&mut reader, &key)?
+            } else {
+                decode_value(
+                    reader.blob()?,
+                    &SemanticType::Record(kind.clone()),
+                    &self.registry,
+                    CodecLimits::default(),
+                )?
+            };
             let mut relations = BTreeMap::new();
             if format_version >= 2 {
                 let count = reader.count()?;
@@ -950,7 +1311,7 @@ fn store_key(key: &crate::storage_integrity::EntityKey) -> Key {
     (key.scope.clone(), key.resource.clone(), key.id.clone())
 }
 
-struct Writer(Vec<u8>);
+struct Writer(Zeroizing<Vec<u8>>);
 impl Writer {
     fn put(&mut self, bytes: &[u8]) -> Result<(), StoreError> {
         if self

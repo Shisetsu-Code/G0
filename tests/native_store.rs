@@ -97,6 +97,413 @@ fn open(temp: &Temp) -> NativeStore {
 }
 
 #[test]
+fn external_witness_rejects_rollback_deletion_and_unacknowledged_commits() {
+    use g0::store_engine::{RollbackWitness, StoreCheckpoint, WitnessError};
+    #[derive(Default)]
+    struct Witness(std::sync::Mutex<(Option<StoreCheckpoint>, bool)>);
+    impl RollbackWitness for Witness {
+        fn load(&self) -> Result<Option<StoreCheckpoint>, WitnessError> {
+            Ok(self.0.lock().unwrap().0.clone())
+        }
+        fn compare_exchange(
+            &self,
+            expected: Option<&StoreCheckpoint>,
+            next: &StoreCheckpoint,
+        ) -> Result<(), WitnessError> {
+            let mut state = self.0.lock().unwrap();
+            if state.1 || state.0.as_ref() != expected {
+                return Err(WitnessError);
+            }
+            state.0 = Some(next.clone());
+            Ok(())
+        }
+    }
+    let temp = Temp::new();
+    let witness = Arc::new(Witness::default());
+    let (schema, registry) = schema();
+    let open = || {
+        NativeStore::open_with_witness(
+            temp.permit(),
+            schema.clone(),
+            registry.clone(),
+            [42; 32],
+            witness.clone(),
+        )
+    };
+    let alice = Principal::new("alice", "tenant-a");
+    let mut store = open().unwrap();
+    let mut tx = store.begin(alice.clone());
+    store.create(&mut tx, "m1", value("first")).unwrap();
+    store.commit(tx).unwrap();
+    let first = std::fs::read(temp.0.join("snapshot.g0s")).unwrap();
+    let mut tx = store.begin(alice.clone());
+    store
+        .update(
+            &mut tx,
+            "Message",
+            "m1",
+            BTreeMap::from([("body".into(), Value::Text("second".into()))]),
+        )
+        .unwrap();
+    store.commit(tx).unwrap();
+    let second = std::fs::read(temp.0.join("snapshot.g0s")).unwrap();
+    drop(store);
+    std::fs::write(temp.0.join("snapshot.g0s"), first).unwrap();
+    assert!(matches!(open(), Err(StoreError::RecoveryRequired)));
+    std::fs::remove_file(temp.0.join("snapshot.g0s")).unwrap();
+    assert!(matches!(open(), Err(StoreError::RecoveryRequired)));
+    std::fs::write(temp.0.join("snapshot.g0s"), second).unwrap();
+    let mut store = open().unwrap();
+    let mut tx = store.begin(alice.clone());
+    store
+        .update(
+            &mut tx,
+            "Message",
+            "m1",
+            BTreeMap::from([("body".into(), Value::Text("uncertain".into()))]),
+        )
+        .unwrap();
+    witness.0.lock().unwrap().1 = true;
+    assert!(matches!(store.commit(tx), Err(StoreError::CommitUncertain)));
+    assert!(matches!(
+        store.read(&store.begin(alice), "Message", "m1"),
+        Err(StoreError::RecoveryRequired)
+    ));
+    drop(store);
+    witness.0.lock().unwrap().1 = false;
+    assert!(matches!(open(), Err(StoreError::RecoveryRequired)));
+}
+fn inspect_snapshot(temp: &Temp) -> Vec<u8> {
+    let mut bytes = std::fs::read(temp.0.join("snapshot.g0s")).unwrap();
+    let cipher = ring::aead::LessSafeKey::new(
+        ring::aead::UnboundKey::new(&ring::aead::AES_256_GCM, &[42; 32]).unwrap(),
+    );
+    let mut aad = b"g0.store.snapshot.v3\0".to_vec();
+    aad.extend_from_slice(temp.0.canonicalize().unwrap().to_string_lossy().as_bytes());
+    let nonce = bytes[8..20].try_into().unwrap();
+    cipher
+        .open_in_place(
+            ring::aead::Nonce::assume_unique_for_key(nonce),
+            ring::aead::Aad::from(aad),
+            &mut bytes[20..],
+        )
+        .unwrap()
+        .to_vec()
+}
+fn replace_snapshot(temp: &Temp, mut plaintext: Vec<u8>) {
+    let cipher = ring::aead::LessSafeKey::new(
+        ring::aead::UnboundKey::new(&ring::aead::AES_256_GCM, &[42; 32]).unwrap(),
+    );
+    let mut aad = b"g0.store.snapshot.v3\0".to_vec();
+    aad.extend_from_slice(temp.0.canonicalize().unwrap().to_string_lossy().as_bytes());
+    let nonce = [19; 12];
+    cipher
+        .seal_in_place_append_tag(
+            ring::aead::Nonce::assume_unique_for_key(nonce),
+            ring::aead::Aad::from(aad),
+            &mut plaintext,
+        )
+        .unwrap();
+    let mut bytes = b"G0S\0\0\0\x03\0".to_vec();
+    bytes.extend_from_slice(&nonce);
+    bytes.extend_from_slice(&plaintext);
+    std::fs::write(temp.0.join("snapshot.g0s"), bytes).unwrap();
+}
+
+#[test]
+fn private_and_secret_fields_are_persistent_and_policy_checked() {
+    for secret in [false, true] {
+        let temp = Temp::new();
+        let (mut schema, mut registry) = schema();
+        let ty = if secret {
+            SemanticType::Secret(Box::new(SemanticType::Text))
+        } else {
+            SemanticType::Text
+        };
+        schema.resources[0].fields[0].ty = ty.clone();
+        schema.resources[0].fields[0].protection = if secret {
+            FieldProtection::Secret
+        } else {
+            FieldProtection::Private
+        };
+        registry[0].fields[0].ty = ty;
+        let protected = Value::Record {
+            schema: "Message".into(),
+            fields: Arc::new(BTreeMap::from([(
+                "body".into(),
+                if secret {
+                    Value::Secret(Arc::new(Value::Text("protected marker".into())))
+                } else {
+                    Value::Text("protected marker".into())
+                },
+            )])),
+        };
+        let alice = Principal::new("alice", "tenant-a");
+        let mut store =
+            NativeStore::open(temp.permit(), schema.clone(), registry.clone(), [42; 32]).unwrap();
+        let mut tx = store.begin(alice.clone());
+        store.create(&mut tx, "m1", protected.clone()).unwrap();
+        store.commit(tx).unwrap();
+        drop(store);
+        let plaintext = inspect_snapshot(&temp);
+        assert!(
+            !plaintext
+                .windows(b"protected marker".len())
+                .any(|v| v == b"protected marker")
+        );
+        let store =
+            NativeStore::open(temp.permit(), schema.clone(), registry.clone(), [42; 32]).unwrap();
+        assert_eq!(
+            store
+                .read(&store.begin(alice), "Message", "m1")
+                .unwrap()
+                .value,
+            protected
+        );
+        assert!(matches!(
+            store.read(
+                &store.begin(Principal::new("bob", "tenant-a")),
+                "Message",
+                "m1"
+            ),
+            Err(StoreError::Denied)
+        ));
+        drop(store);
+        let mut tampered = plaintext;
+        let id = tampered
+            .windows(6)
+            .position(|v| v == b"\x02\0\0\0m1")
+            .unwrap()
+            + 4;
+        tampered[id + 1] = b'2';
+        replace_snapshot(&temp, tampered);
+        assert!(matches!(
+            NativeStore::open(temp.permit(), schema, registry, [42; 32]),
+            Err(StoreError::Integrity)
+        ));
+    }
+}
+
+#[test]
+fn credentials_persist_only_verifiers_and_require_explicit_actions() {
+    let temp = Temp::new();
+    let (mut schema, mut registry) = schema();
+    let credential_type = SemanticType::Credential(Box::new(SemanticType::Text));
+    schema.resources[0].fields[0].ty = credential_type.clone();
+    schema.resources[0].fields[0].protection = FieldProtection::Credential;
+    registry[0].fields[0].ty = credential_type;
+    for action in ["credential:verify:body", "credential:set:body"] {
+        schema.resources[0].policies.rules.push(PolicyRule {
+            action: Action::new(action),
+            allow_if: PolicyExpr::PrincipalOwnsResource,
+        });
+    }
+    let credential = |text: &str| Value::Credential(Arc::new(Value::Text(text.into())));
+    let alice = Principal::new("alice", "tenant-a");
+    let mut store =
+        NativeStore::open(temp.permit(), schema.clone(), registry.clone(), [42; 32]).unwrap();
+    let mut tx = store.begin(alice.clone());
+    store
+        .create(
+            &mut tx,
+            "m1",
+            Value::Record {
+                schema: "Message".into(),
+                fields: Arc::new(BTreeMap::from([("body".into(), credential("original"))])),
+            },
+        )
+        .unwrap();
+    assert!(
+        store
+            .verify_credential(&tx, "Message", "m1", "body", &credential("original"))
+            .unwrap()
+    );
+    assert!(
+        !store
+            .verify_credential(&tx, "Message", "m1", "body", &credential("wrong"))
+            .unwrap()
+    );
+    assert!(matches!(
+        store.read(&tx, "Message", "m1"),
+        Err(StoreError::Denied)
+    ));
+    assert!(matches!(
+        store.update(
+            &mut tx,
+            "Message",
+            "m1",
+            BTreeMap::from([("body".into(), credential("new"))])
+        ),
+        Err(StoreError::Denied)
+    ));
+    store
+        .set_credential(&mut tx, "Message", "m1", "body", &credential("replacement"))
+        .unwrap();
+    store.commit(tx).unwrap();
+    drop(store);
+    let plaintext = inspect_snapshot(&temp);
+    for original in [b"original".as_slice(), b"replacement".as_slice()] {
+        assert!(!plaintext.windows(original.len()).any(|v| v == original));
+    }
+    let mut store =
+        NativeStore::open(temp.permit(), schema.clone(), registry.clone(), [42; 32]).unwrap();
+    let tx = store.begin(alice);
+    assert!(
+        !store
+            .verify_credential(&tx, "Message", "m1", "body", &credential("original"))
+            .unwrap()
+    );
+    assert!(
+        store
+            .verify_credential(&tx, "Message", "m1", "body", &credential("replacement"))
+            .unwrap()
+    );
+    assert!(matches!(
+        store.verify_credential(
+            &store.begin(Principal::new("bob", "tenant-a")),
+            "Message",
+            "m1",
+            "body",
+            &credential("replacement")
+        ),
+        Err(StoreError::Denied)
+    ));
+    let mut graph = g0::gir::Graph::new("verify");
+    let port = |id, ty| g0::gir::Port {
+        id,
+        name: format!("p{id}"),
+        ty,
+    };
+    graph.inputs = vec![
+        port(0, SemanticType::Text),
+        port(1, SemanticType::Credential(Box::new(SemanticType::Text))),
+    ];
+    graph.outputs = vec![port(0, SemanticType::Bool)];
+    let capability = Capability::new(
+        CapabilityClass::Storage,
+        "credential:verify:body",
+        "Message",
+        "tenant-a",
+    );
+    graph.nodes.push(g0::gir::Node {
+        id: 1,
+        operation: g0::gir::Operation::StoreVerifyCredential {
+            resource: "Message".into(),
+            field: "body".into(),
+        },
+        inputs: graph.inputs.clone(),
+        outputs: graph.outputs.clone(),
+        effects: BTreeSet::from([g0::gir::Effect::Storage]),
+        required_capabilities: BTreeSet::from([capability.clone()]),
+    });
+    for id in [0, 1] {
+        graph.edges.push(g0::gir::Edge {
+            from: g0::gir::SourceEndpoint::GraphInput(id),
+            to: g0::gir::TargetEndpoint::NodeInput { node: 1, port: id },
+        });
+    }
+    graph.edges.push(g0::gir::Edge {
+        from: g0::gir::SourceEndpoint::NodeOutput { node: 1, port: 0 },
+        to: g0::gir::TargetEndpoint::GraphOutput(0),
+    });
+    let bytes = g0::graph_binary::encode_graph(&graph).unwrap();
+    let mut legacy = bytes.clone();
+    legacy[6] = 3;
+    assert!(g0::graph_binary_decode::decode_graph(&legacy).is_err());
+    let graph = g0::graph_binary_decode::decode_graph(&bytes).unwrap();
+    let program = g0::program::ProgramContract {
+        entry_graph: Some(graph.name.clone()),
+        graphs: vec![graph],
+        schemas: registry.clone(),
+        ..Default::default()
+    };
+    let mut runtime = g0::execution::Executor::new(&program, Default::default()).unwrap();
+    let args = vec![Value::Text("m1".into()), credential("replacement")];
+    {
+        let mut host =
+            g0::storage_host::StorageHost::new(&mut store, Principal::new("alice", "tenant-a"));
+        assert!(
+            runtime
+                .run_with_host("verify", args.clone(), &mut host)
+                .is_err()
+        );
+        runtime.grant(capability);
+        assert_eq!(
+            runtime.run_with_host("verify", args, &mut host).unwrap(),
+            vec![Value::Bool(true)]
+        );
+    }
+    let tx = store.begin(Principal::new("alice", "tenant-a"));
+    for _ in 0..16 {
+        assert!(matches!(
+            store.verify_credential(&tx, "Message", "m1", "body", &credential("")),
+            Err(StoreError::Limit)
+        ));
+    }
+    assert!(matches!(
+        store.verify_credential(&tx, "Message", "m1", "body", &credential("replacement")),
+        Err(StoreError::Limit)
+    ));
+    let mut replacement = program.clone();
+    let graph = &mut replacement.graphs[0];
+    graph.nodes[0].operation = g0::gir::Operation::StoreSetCredential {
+        resource: "Message".into(),
+        field: "body".into(),
+    };
+    let version = SemanticType::Integer(g0::gir::IntegerType {
+        min: 0,
+        max: u64::MAX as i128,
+    });
+    graph.outputs[0].ty = version.clone();
+    graph.nodes[0].outputs[0].ty = version;
+    let cap = Capability::new(
+        CapabilityClass::Storage,
+        "credential:set:body",
+        "Message",
+        "tenant-a",
+    );
+    graph.nodes[0].required_capabilities = BTreeSet::from([cap.clone()]);
+    let bytes = g0::graph_binary::encode_graph(graph).unwrap();
+    replacement.graphs[0] = g0::graph_binary_decode::decode_graph(&bytes).unwrap();
+    let mut runtime = g0::execution::Executor::new(&replacement, Default::default()).unwrap();
+    runtime.grant(cap);
+    let mut host =
+        g0::storage_host::StorageHost::new(&mut store, Principal::new("alice", "tenant-a"));
+    assert_eq!(
+        runtime
+            .run_with_host(
+                "verify",
+                vec![Value::Text("m1".into()), credential("graph replacement")],
+                &mut host
+            )
+            .unwrap(),
+        vec![Value::Integer(2)]
+    );
+    host.commit().unwrap();
+    assert!(
+        store
+            .verify_credential(
+                &store.begin(Principal::new("alice", "tenant-a")),
+                "Message",
+                "m1",
+                "body",
+                &credential("graph replacement")
+            )
+            .unwrap()
+    );
+    drop(store);
+    let mut policy = g0::storage::FieldPolicy::inherit("body");
+    policy.update = g0::storage::FieldAccessRule::Deny;
+    schema.resources[0].field_policies.push(policy);
+    let store = NativeStore::open(temp.permit(), schema, registry, [42; 32]).unwrap();
+    let mut tx = store.begin(Principal::new("alice", "tenant-a"));
+    assert!(matches!(
+        store.set_credential(&mut tx, "Message", "m1", "body", &credential("forbidden")),
+        Err(StoreError::Denied)
+    ));
+}
+
+#[test]
 fn graph_storage_effects_set_and_traverse_persistent_relations() {
     use g0::{
         execution::{ExecutionLimits, Executor},
@@ -405,7 +812,7 @@ fn legacy_encrypted_snapshot_is_readable_and_upgraded_on_commit() {
         .unwrap();
     store.commit(tx).unwrap();
     drop(store);
-    assert_eq!(std::fs::read(temp.0.join("snapshot.g0s")).unwrap()[6], 2);
+    assert_eq!(std::fs::read(temp.0.join("snapshot.g0s")).unwrap()[6], 3);
     let store = open(&temp);
     assert_eq!(
         store

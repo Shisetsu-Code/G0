@@ -52,9 +52,9 @@ capabilities. Children cannot acquire grants absent from the parent. Groups shar
 cancellation and join all children on drop. Join returns typed results or an
 explicit error. Budgets are reserved cumulatively and are not recycled on join.
 
-These host APIs are executable. GIR region allocation/mutation operations and
-task handles are still a separate integration step; static ownership plans are
-not silently treated as runtime allocations.
+GIR region/buffer handles and pure task spawn/join execute through ResourceHost;
+see `graph-resources.md`. Child/secret region constructors and effectful child
+tasks still require additional GIR profiles.
 
 ## Canonical formats
 
@@ -63,6 +63,10 @@ G0G 0.2 adds operation tags 30..48, in the order listed in `Operation` from
 element in order with shared authority and budgets; `TextJoin` measures its
 output before allocation. Existing tags and semantic types remain unchanged.
 The decoder retains support for G0G 0.1.
+
+G0G 0.3 adds region/task operations 49..55 and relation operations 56..57.
+G0G 0.4 adds credential operations 58..59; readers retain versions 0.1..0.3.
+Older version headers cannot introduce the new operation tags.
 
 G0P 0.2 appends a schema registry after the graph list. It consists of a u32 count;
 each schema has a u32-length UTF-8 name, u32 version and u32 field count. Each field
@@ -96,16 +100,16 @@ requires an explicit migration. Temporary files are flushed before replacement;
 Unix synchronizes the directory and Windows uses write-through replacement.
 An uncertain commit requires reopening before further operations.
 
-The initial store profile supports public application fields protected by store
-encryption, and principal/scope-managed fields. Protected-field/credential
-profiles and generated/clock-managed fields are rejected
-until their executable implementations are supplied. Snapshot authentication
-detects modification; protection against restoring an older valid snapshot
-requires a separately trusted monotonic witness and is not yet implemented.
+The store supports public, private, secret and credential fields, plus
+principal/scope-managed fields. Generated/clock-managed fields remain rejected.
+See `protected-storage.md` for field envelopes, verifier-only credentials and
+explicit permissions. Optional `open_with_witness` detects restoration against
+an independently trusted monotonic witness supplied by the host; unanchored
+snapshots alone cannot detect restoring older valid bytes. See `store-witness.md`.
 
 Persistent relations now enforce target/scope/cardinality constraints and
 authorized Restrict/Detach/Cascade deletion. GIR can set and traverse relations
-in its storage transaction. G0S 0.2 preserves G0S 0.1 reading and upgrades on
+in its storage transaction. G0S 0.3 preserves G0S 0.1/0.2 reading and upgrades on
 commit. See `store-relations.md` for interfaces and resource limits.
 
 Native transport uses a separately selected platform profile. The pinned

@@ -8,6 +8,7 @@ default-run = "g0c"
 
 [dependencies]
 ring = "=0.17.14"
+zeroize = "=1.9.0"
 rustls = { version = "=0.23.43", default-features = false, features = ["std", "ring"] }
 
 [target.'cfg(windows)'.dependencies]

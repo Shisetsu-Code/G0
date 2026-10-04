@@ -12,6 +12,7 @@ pub mod compiler;
 pub mod composite;
 pub mod concurrency;
 pub mod control;
+pub mod credential;
 pub mod crypto;
 pub mod data_format;
 pub mod diagnostics;

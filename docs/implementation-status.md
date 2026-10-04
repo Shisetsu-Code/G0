@@ -39,10 +39,16 @@ GIR also executes opaque linear region/buffer handles and bounded pure child
 tasks through `ResourceHost`, including CLI/editor/native-wrapper/service
 hosting. See `graph-resources.md` for the current interfaces and profiles.
 
-Aggregate x86 lowering, protected-field/credential
-storage profiles, migrations, trusted anti-rollback witnesses and
+Aggregate x86 lowering, migrations, trusted witness providers and
 advanced scheduling/remote-execution profiles still require implementation.
 Current profiles reject unsupported requirements instead of weakening them.
+
+Private/Secret field encryption and opaque credential verifiers execute in the
+native store, including explicit GIR credential operations and bounded work.
+See `protected-storage.md` for the permissions, formats and memory boundaries.
+The native store also binds commits to an external rollback witness, detects
+restored/deleted snapshots and fails closed on unacknowledged commits. Deployment
+supplies a trusted witness provider; see `store-witness.md`.
 
 Persistent relations execute cardinality, referential/scope integrity and
 authorized Restrict/Detach/Cascade deletion, including GIR link/traversal nodes.

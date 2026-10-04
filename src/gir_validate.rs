@@ -416,6 +416,29 @@ fn validate_operation(node: &Node, report: &mut ValidationReport) {
         | Operation::StoreTraverse { .. } => {
             require_storage(node, report);
         }
+        Operation::StoreSetCredential { .. } | Operation::StoreVerifyCredential { .. } => {
+            require_storage(node, report);
+            let credential = node.inputs.get(1).is_some_and(|p| matches!(&p.ty, SemanticType::Credential(t) if matches!(t.as_ref(), SemanticType::Text | SemanticType::Bytes)));
+            let shape = (2..=3).contains(&node.inputs.len())
+                && node.outputs.len() == 1
+                && node
+                    .inputs
+                    .first()
+                    .is_some_and(|p| p.ty == SemanticType::Text)
+                && credential
+                && (node.inputs.len() == 2
+                    || matches!(node.inputs[2].ty, SemanticType::Integer(_)))
+                && node.outputs.first().is_some_and(|p| {
+                    if matches!(node.operation, Operation::StoreVerifyCredential { .. }) {
+                        p.ty == SemanticType::Bool
+                    } else {
+                        matches!(p.ty, SemanticType::Integer(_))
+                    }
+                });
+            if !shape {
+                report.push(ValidationCode::OperationShape, format!("credential node {} requires ID, typed credential, optional mutation version and one result", node.id));
+            }
+        }
         Operation::LocalExecute(_) => {
             require_execution(
                 node,

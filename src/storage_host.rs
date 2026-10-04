@@ -46,7 +46,16 @@ impl<'a> StorageHost<'a> {
 }
 impl EffectHost for StorageHost<'_> {
     fn execute(&mut self, node: &Node, inputs: &[Value]) -> Result<Vec<Value>, RuntimeError> {
+        let credential_action;
         let (action, resource) = match &node.operation {
+            Operation::StoreSetCredential { resource, field } => {
+                credential_action = format!("credential:set:{field}");
+                (credential_action.as_str(), resource)
+            }
+            Operation::StoreVerifyCredential { resource, field } => {
+                credential_action = format!("credential:verify:{field}");
+                (credential_action.as_str(), resource)
+            }
             Operation::StoreRead { resource, .. } => ("read", resource),
             Operation::StoreCreate { resource, .. } => ("create", resource),
             Operation::StoreUpdate { resource, .. } => ("update", resource),
@@ -72,6 +81,34 @@ impl EffectHost for StorageHost<'_> {
         };
         let failure = |error| Self::failure(node, error);
         match &node.operation {
+            Operation::StoreSetCredential { field, .. }
+            | Operation::StoreVerifyCredential { field, .. } => {
+                if !(2..=3).contains(&inputs.len())
+                    || (inputs.len() == 3 && !matches!(inputs[2], Value::Integer(_)))
+                {
+                    return Err(bad());
+                }
+                if matches!(node.operation, Operation::StoreSetCredential { .. }) {
+                    self.store
+                        .set_credential(&mut self.transaction, resource, id()?, field, &inputs[1])
+                        .map_err(failure)?;
+                    Ok(vec![Value::Integer(i128::from(
+                        self.transaction.prospective_version().ok_or_else(bad)?,
+                    ))])
+                } else {
+                    Ok(vec![Value::Bool(
+                        self.store
+                            .verify_credential(
+                                &self.transaction,
+                                resource,
+                                id()?,
+                                field,
+                                &inputs[1],
+                            )
+                            .map_err(failure)?,
+                    )])
+                }
+            }
             Operation::StoreSetRelation { relation, .. } => {
                 if !(2..=3).contains(&inputs.len())
                     || (inputs.len() == 3 && !matches!(inputs[2], Value::Integer(_)))

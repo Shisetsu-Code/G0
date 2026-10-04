@@ -270,8 +270,7 @@ pub fn validate_resource_schema(resource: &ResourceSchema) -> Result<(), Vec<Sto
         }
 
         let type_ok = match binding.source {
-            ManagedFieldSource::CurrentPrincipal
-            | ManagedFieldSource::CurrentScope => {
+            ManagedFieldSource::CurrentPrincipal | ManagedFieldSource::CurrentScope => {
                 field.ty == SemanticType::Text
             }
             ManagedFieldSource::StoreClock => {
@@ -315,11 +314,9 @@ pub fn validate_resource_schema(resource: &ResourceSchema) -> Result<(), Vec<Sto
             if let Some(schema) = resource.field(field)
                 && schema.protection != FieldProtection::Public
             {
-                issues.push(
-                    StorageSchemaIssue::ProtectedFieldRequiresProtectedIndex(
-                        field.clone(),
-                    ),
-                );
+                issues.push(StorageSchemaIssue::ProtectedFieldRequiresProtectedIndex(
+                    field.clone(),
+                ));
             }
         }
     }
@@ -380,6 +377,8 @@ pub enum StoreOperation {
     Update { fields: Vec<String> },
     Delete,
     Enumerate,
+    SetCredential { field: String },
+    VerifyCredential { field: String },
 }
 
 impl StoreOperation {
@@ -390,6 +389,8 @@ impl StoreOperation {
             Self::Update { .. } => Action::update(),
             Self::Delete => Action::delete(),
             Self::Enumerate => Action::enumerate(),
+            Self::SetCredential { field } => Action::new(format!("credential:set:{field}")),
+            Self::VerifyCredential { field } => Action::new(format!("credential:verify:{field}")),
         }
     }
 }
@@ -403,10 +404,7 @@ pub enum StoreAccessIssue {
     CredentialReadForbidden(String),
     CredentialMutationRequiresVerifier(String),
     ManagedFieldCannotBeSupplied(String),
-    FieldPolicyDenied {
-        field: String,
-        reason: DenyReason,
-    },
+    FieldPolicyDenied { field: String, reason: DenyReason },
     MutationProofNotApplicable,
     Freshness(FreshnessIssue),
 }
@@ -435,20 +433,12 @@ fn authorize_field_action(
                 }],
             };
 
-            match authorize(
-                principal,
-                resource,
-                &policies,
-                action,
-                schema.is_global(),
-            ) {
+            match authorize(principal, resource, &policies, action, schema.is_global()) {
                 AuthorizationDecision::Allow => None,
-                AuthorizationDecision::Deny(reason) => {
-                    Some(StoreAccessIssue::FieldPolicyDenied {
-                        field: field.to_owned(),
-                        reason,
-                    })
-                }
+                AuthorizationDecision::Deny(reason) => Some(StoreAccessIssue::FieldPolicyDenied {
+                    field: field.to_owned(),
+                    reason,
+                }),
             }
         }
     }
@@ -479,9 +469,7 @@ pub fn build_create_assignment_plan(
 
     for field in client_fields {
         if !seen.insert(field.as_str()) {
-            issues.push(StoreAccessIssue::DuplicateFieldInput(
-                field.clone(),
-            ));
+            issues.push(StoreAccessIssue::DuplicateFieldInput(field.clone()));
             continue;
         }
 
@@ -505,18 +493,10 @@ pub fn build_create_assignment_plan(
 
     for binding in &schema.managed_fields {
         let source = match binding.source {
-            ManagedFieldSource::CurrentPrincipal => {
-                CreateAssignmentSource::CurrentPrincipal
-            }
-            ManagedFieldSource::CurrentScope => {
-                CreateAssignmentSource::CurrentScope
-            }
-            ManagedFieldSource::Generated => {
-                CreateAssignmentSource::Generated
-            }
-            ManagedFieldSource::StoreClock => {
-                CreateAssignmentSource::StoreClock
-            }
+            ManagedFieldSource::CurrentPrincipal => CreateAssignmentSource::CurrentPrincipal,
+            ManagedFieldSource::CurrentScope => CreateAssignmentSource::CurrentScope,
+            ManagedFieldSource::Generated => CreateAssignmentSource::Generated,
+            ManagedFieldSource::StoreClock => CreateAssignmentSource::StoreClock,
         };
         assignments.push(CreateAssignment {
             field: binding.field.clone(),
@@ -581,18 +561,10 @@ pub fn authorize_store_operation(
                 if schema.field(name).is_none() {
                     issues.push(StoreAccessIssue::UnknownField(name.clone()));
                 } else if schema.managed_field(name).is_some() {
-                    issues.push(
-                        StoreAccessIssue::ManagedFieldCannotBeSupplied(
-                            name.clone(),
-                        ),
-                    );
-                } else if let Some(issue) = authorize_field_action(
-                    schema,
-                    principal,
-                    resource,
-                    name,
-                    &Action::create(),
-                ) {
+                    issues.push(StoreAccessIssue::ManagedFieldCannotBeSupplied(name.clone()));
+                } else if let Some(issue) =
+                    authorize_field_action(schema, principal, resource, name, &Action::create())
+                {
                     issues.push(issue);
                 }
             }
@@ -600,11 +572,7 @@ pub fn authorize_store_operation(
         StoreOperation::Update { fields } => {
             for name in fields {
                 if schema.managed_field(name).is_some() {
-                    issues.push(
-                        StoreAccessIssue::ManagedFieldCannotBeSupplied(
-                            name.clone(),
-                        ),
-                    );
+                    issues.push(StoreAccessIssue::ManagedFieldCannotBeSupplied(name.clone()));
                     continue;
                 }
 
@@ -632,6 +600,25 @@ pub fn authorize_store_operation(
                 }
             }
         }
+        StoreOperation::SetCredential { field: name }
+        | StoreOperation::VerifyCredential { field: name } => match schema.field(name) {
+            Some(field) if field.protection == FieldProtection::Credential => {
+                if matches!(operation, StoreOperation::SetCredential { .. }) {
+                    if !field.mutable {
+                        issues.push(StoreAccessIssue::ImmutableField(name.clone()));
+                    }
+                    if schema.managed_field(name).is_some() {
+                        issues.push(StoreAccessIssue::ManagedFieldCannotBeSupplied(name.clone()));
+                    }
+                    if let Some(issue) =
+                        authorize_field_action(schema, principal, resource, name, &Action::update())
+                    {
+                        issues.push(issue);
+                    }
+                }
+            }
+            _ => issues.push(StoreAccessIssue::UnknownField(name.clone())),
+        },
         StoreOperation::Delete | StoreOperation::Enumerate => {}
     }
 
@@ -744,11 +731,7 @@ mod tests {
             FieldSchema {
                 name: "created_at".into(),
                 ty: SemanticType::Integer(
-                    crate::gir::IntegerType::new(
-                        0,
-                        i64::MAX as i128,
-                    )
-                    .unwrap(),
+                    crate::gir::IntegerType::new(0, i64::MAX as i128).unwrap(),
                 ),
                 protection: FieldProtection::Public,
                 mutable: false,
@@ -776,11 +759,7 @@ mod tests {
         let schema = managed_document_schema();
         assert!(validate_resource_schema(&schema).is_ok());
 
-        let plan = build_create_assignment_plan(
-            &schema,
-            &["body".into()],
-        )
-        .unwrap();
+        let plan = build_create_assignment_plan(&schema, &["body".into()]).unwrap();
 
         assert_eq!(
             plan,
@@ -818,8 +797,7 @@ mod tests {
         });
 
         let principal = Principal::new("alice", "tenant-a");
-        let resource =
-            ResourceContext::new("Document", "new", "tenant-a");
+        let resource = ResourceContext::new("Document", "new", "tenant-a");
 
         assert_eq!(
             authorize_store_operation(
@@ -830,11 +808,9 @@ mod tests {
                     fields: vec!["owner_id".into()],
                 },
             ),
-            Err(vec![
-                StoreAccessIssue::ManagedFieldCannotBeSupplied(
-                    "owner_id".into(),
-                ),
-            ])
+            Err(vec![StoreAccessIssue::ManagedFieldCannotBeSupplied(
+                "owner_id".into(),
+            ),])
         );
 
         assert_eq!(
@@ -846,11 +822,9 @@ mod tests {
                     fields: vec!["tenant_id".into()],
                 },
             ),
-            Err(vec![
-                StoreAccessIssue::ManagedFieldCannotBeSupplied(
-                    "tenant_id".into(),
-                ),
-            ])
+            Err(vec![StoreAccessIssue::ManagedFieldCannotBeSupplied(
+                "tenant_id".into(),
+            ),])
         );
     }
 
@@ -869,8 +843,7 @@ mod tests {
         });
 
         let principal = Principal::new("alice", "tenant-a");
-        let resource =
-            ResourceContext::new("Message", "m1", "tenant-a");
+        let resource = ResourceContext::new("Message", "m1", "tenant-a");
 
         assert_eq!(
             authorize_store_operation(
@@ -897,32 +870,21 @@ mod tests {
         });
         schema.field_policies.push(FieldPolicy {
             field: "body".into(),
-            read: FieldAccessRule::Require(
-                PolicyExpr::PrincipalOwnsResource,
-            ),
+            read: FieldAccessRule::Require(PolicyExpr::PrincipalOwnsResource),
             create: FieldAccessRule::Inherit,
             update: FieldAccessRule::Inherit,
         });
 
         let alice = Principal::new("alice", "tenant-a");
         let mallory = Principal::new("mallory", "tenant-a");
-        let mut resource =
-            ResourceContext::new("Message", "m1", "tenant-a");
+        let mut resource = ResourceContext::new("Message", "m1", "tenant-a");
         resource.owner = Some(alice.id.clone());
 
         let operation = StoreOperation::Read {
             fields: vec!["body".into()],
         };
 
-        assert!(
-            authorize_store_operation(
-                &schema,
-                &alice,
-                &resource,
-                &operation,
-            )
-            .is_ok()
-        );
+        assert!(authorize_store_operation(&schema, &alice, &resource, &operation,).is_ok());
         assert!(matches!(
             authorize_store_operation(
                 &schema,
@@ -949,16 +911,12 @@ mod tests {
         ];
 
         let issues = validate_resource_schema(&schema).unwrap_err();
-        assert!(issues.contains(
-            &StorageSchemaIssue::UnknownFieldPolicyTarget(
+        assert!(
+            issues.contains(&StorageSchemaIssue::UnknownFieldPolicyTarget(
                 "missing".into(),
-            )
-        ));
-        assert!(issues.contains(
-            &StorageSchemaIssue::DuplicateFieldPolicy(
-                "missing".into(),
-            )
-        ));
+            ))
+        );
+        assert!(issues.contains(&StorageSchemaIssue::DuplicateFieldPolicy("missing".into(),)));
     }
 
     #[test]

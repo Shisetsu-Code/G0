@@ -44,7 +44,9 @@ Tasks 2..6: initial native profiles implemented — 324 tests passed; clippy all
 Ruling: Ship explicit initial storage/transport profiles and reject advanced unsupported requirements — preserves security instead of treating validation as implementation — cost if wrong: extend the profiles before applications requiring protected fields, relations, migration or multiplexing can run.
 - [x] GIR region/buffer handles and pure task spawn/join, including canonical files and native hosts.
 - [x] Persistent relations, cardinality, authorized delete plans and GIR set/traverse operations.
-- [ ] Remaining runtime integration: aggregate x86 lowering; protected fields/credentials; migration/rollback witnesses; advanced transport profiles; child/secret regions and effectful child task profiles in GIR.
+- [x] Private/Secret field envelopes and opaque credential verifiers, including GIR operations.
+- [x] Runtime protocol for independently trusted rollback witnesses; deployed providers remain host bindings.
+- [ ] Remaining runtime integration: aggregate x86 lowering; migration; advanced transport profiles; child/secret regions and effectful child task profiles in GIR.
 
 Task 7: initial Win32/GDI editor implemented and smoke-tested on Windows: create/connect/save/execute 42 + 7 = 49, native canvas rendered to BMP. Canonical editing model, undo/redo and bounded graph/node trace tested. Full toolbox constructors, persisted screen layout and live breakpoints remain. Collection Map/TextJoin operations added for compiler construction; order, empty input, wrong body types and execution limits tested.
 
@@ -53,3 +55,7 @@ Task 8: executable G0 native-wrapper backend added with canonical compiler sourc
 Runtime integration: G0G 0.3 resource operations now execute through opaque host-bound linear handles. Tests cover region lifetime, bounds, foreign/stale handles, schema-contained linear fan-out, explicit task permissions, ordered concurrent spawning, one-time join and child error propagation. Native wrappers, CLI, editor and graph services route these operations to the actual resource scope. Linux and Windows CI succeeded for the preceding 336-test editor/compiler checkpoint (run 37193464436).
 
 Storage relations: actual encrypted row metadata, serializable updates, scope/resource/cardinality enforcement and authorized Restrict/Detach/Cascade deletion implemented. Cascades are bounded to 128 entities before recursive planning. G0S 0.1 fixture read and G0S 0.2 commit/reopen upgrade verified; GIR set/traverse executes within the same storage transaction. Full suite: 345 tests pass.
+
+Protected storage: G0S 0.3 adds independently authenticated field envelopes and verifier-only credentials; canonical G0G 0.4 adds credential operations without granting authority. Plaintext/credential persistence, context substitution, explicit actions, field policy and work budgets tested. Rollback witness integration checks exact authenticated snapshot commitments and withholds acknowledgement when external durable advancement fails.
+
+Verification: 348 local tests pass and all-target Clippy is clean. Both credential GIR operations execute through StorageHost. The preceding resources/relations checkpoint also passed Linux and Windows CI (run 37194866493).

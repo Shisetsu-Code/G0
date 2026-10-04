@@ -26,6 +26,7 @@ pub enum Value {
     Result(Result<Arc<Value>, Arc<Value>>),
     Secret(Arc<Value>),
     Credential(Arc<Value>),
+    CredentialVerifier(crate::credential::Verifier),
     NativeHandle(crate::resource_host::NativeHandle),
 }
 
@@ -34,6 +35,7 @@ impl fmt::Debug for Value {
         match self {
             Self::Secret(_) => f.write_str("Secret(<redacted>)"),
             Self::Credential(_) => f.write_str("Credential(<redacted>)"),
+            Self::CredentialVerifier(v) => v.fmt(f),
             Self::NativeHandle(handle) => handle.fmt(f),
             Self::Bool(v) => v.fmt(f),
             Self::Integer(v) => v.fmt(f),
@@ -87,6 +89,7 @@ impl Value {
         *visited += 1;
         let mut fits = |v: &Value, t: &SemanticType| v.fits_at(t, schemas, depth + 1, visited);
         match (self, ty) {
+            (Self::CredentialVerifier(v), SemanticType::Credential(t)) => v.fits(t),
             (Self::NativeHandle(handle), SemanticType::Unique(ty)) => {
                 matches!(ty.as_ref(),SemanticType::Reference(name) if handle.kind() == name)
             }

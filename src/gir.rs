@@ -326,6 +326,14 @@ pub enum Operation {
         resource: String,
         relation: String,
     },
+    StoreSetCredential {
+        resource: String,
+        field: String,
+    },
+    StoreVerifyCredential {
+        resource: String,
+        field: String,
+    },
     StoreTraverse {
         resource: String,
         relation: String,

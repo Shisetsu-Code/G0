@@ -8,7 +8,7 @@ use crate::gir::{
 
 const MAGIC: &[u8; 4] = b"G0G\0";
 const FORMAT_MAJOR: u16 = 0;
-const FORMAT_MINOR: u16 = 3;
+const FORMAT_MINOR: u16 = 4;
 const MAX_TYPE_DEPTH: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -228,7 +228,8 @@ fn read_operation(reader: &mut Reader<'_>, minor: u16) -> Result<Operation, Bina
     let maximum = match minor {
         1 => 29,
         2 => 48,
-        _ => 57,
+        3 => 57,
+        _ => 59,
     };
     if tag > maximum {
         return Err(BinaryDecodeIssue::InvalidTag {
@@ -292,6 +293,14 @@ fn read_operation(reader: &mut Reader<'_>, minor: u16) -> Result<Operation, Bina
         56 => Operation::StoreSetRelation {
             resource: reader.string()?,
             relation: reader.string()?,
+        },
+        58 => Operation::StoreSetCredential {
+            resource: reader.string()?,
+            field: reader.string()?,
+        },
+        59 => Operation::StoreVerifyCredential {
+            resource: reader.string()?,
+            field: reader.string()?,
         },
         57 => Operation::StoreTraverse {
             resource: reader.string()?,
