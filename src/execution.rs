@@ -160,6 +160,18 @@ impl<'a> Executor<'a> {
         }
         self.call(name, inputs, 0, host)
     }
+    /// Internal bulk execution: one already-validated program and cumulative
+    /// budgets across records; no host effects or per-record budget reset.
+    pub(crate) fn run_graph_cumulative(
+        &mut self,
+        name: &str,
+        inputs: Vec<Value>,
+    ) -> Result<Vec<Value>, RuntimeError> {
+        for value in &inputs {
+            self.charge(value.resident_bytes().ok_or(RuntimeError::MemoryLimit)?)?;
+        }
+        self.call(name, inputs, 0, &mut DenyHost)
+    }
     fn tick(&mut self) -> Result<(), RuntimeError> {
         if self.cancelled.is_cancelled() {
             return Err(RuntimeError::Cancelled);

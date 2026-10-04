@@ -97,6 +97,221 @@ fn open(temp: &Temp) -> NativeStore {
 }
 
 #[test]
+fn offline_g0_migration_is_authorized_bounded_atomic_and_reopenable() {
+    use g0::{
+        gir::*,
+        migration::*,
+        program_binary::ProgramDocument,
+        store_engine::{MigrationPermit, StoreMigration},
+    };
+    let temp = Temp::new();
+    let (old_store, old_registry) = schema();
+    let mut new_resource = old_store.resources[0].clone();
+    new_resource.fields.push(FieldSchema {
+        name: "label".into(),
+        ty: SemanticType::Text,
+        protection: FieldProtection::Private,
+        mutable: true,
+    });
+    let mut new_data = old_registry[0].clone();
+    new_data.version = 2;
+    new_data.fields.push(SchemaField {
+        tag: 2,
+        name: "label".into(),
+        ty: SemanticType::Text,
+        requirement: FieldRequirement::Required,
+    });
+    let mut source = old_registry[0].clone();
+    source.name = "OldMessage".into();
+    let port = |id, ty| Port {
+        id,
+        name: format!("p{id}"),
+        ty,
+    };
+    let node = |id, operation, inputs, outputs| Node {
+        id,
+        operation,
+        inputs,
+        outputs,
+        effects: BTreeSet::new(),
+        required_capabilities: BTreeSet::new(),
+    };
+    let mut graph = Graph::new("migrate");
+    graph.inputs = vec![port(0, SemanticType::Record("OldMessage".into()))];
+    graph.outputs = vec![port(0, SemanticType::Record("Message".into()))];
+    graph.nodes = vec![
+        node(
+            1,
+            Operation::Field {
+                name: "body".into(),
+            },
+            graph.inputs.clone(),
+            vec![port(0, SemanticType::Text)],
+        ),
+        node(
+            2,
+            Operation::Const(Literal::Text("backfilled".into())),
+            vec![],
+            vec![port(0, SemanticType::Text)],
+        ),
+        node(
+            3,
+            Operation::MakeRecord {
+                schema: "Message".into(),
+                fields: vec!["body".into(), "label".into()],
+            },
+            vec![port(0, SemanticType::Text), port(1, SemanticType::Text)],
+            graph.outputs.clone(),
+        ),
+    ];
+    graph.edges = vec![
+        Edge {
+            from: SourceEndpoint::GraphInput(0),
+            to: TargetEndpoint::NodeInput { node: 1, port: 0 },
+        },
+        Edge {
+            from: SourceEndpoint::NodeOutput { node: 1, port: 0 },
+            to: TargetEndpoint::NodeInput { node: 3, port: 0 },
+        },
+        Edge {
+            from: SourceEndpoint::NodeOutput { node: 2, port: 0 },
+            to: TargetEndpoint::NodeInput { node: 3, port: 1 },
+        },
+        Edge {
+            from: SourceEndpoint::NodeOutput { node: 3, port: 0 },
+            to: TargetEndpoint::GraphOutput(0),
+        },
+    ];
+    let spec = StoreMigration {
+        resource: new_resource.clone(),
+        data_schema: new_data.clone(),
+        source_schema: "OldMessage".into(),
+        plan: MigrationPlan {
+            from_version: 1,
+            to_version: 2,
+            mode: MigrationMode::Offline,
+            steps: vec![
+                MigrationStep::AddOptionalField { tag: 2 },
+                MigrationStep::BackfillField { tag: 2 },
+                MigrationStep::PromoteFieldToRequired { tag: 2 },
+            ],
+        },
+        transform: ProgramDocument {
+            entry_graph: "migrate".into(),
+            graphs: vec![graph],
+            schemas: vec![source, new_data.clone()],
+        },
+        limits: Default::default(),
+        cancellation: Default::default(),
+    };
+    assert!(matches!(
+        MigrationPermit::authorize(&temp.0, "Message", 1, 2, &BTreeSet::new()),
+        Err(StoreError::Denied)
+    ));
+    let grant = Capability::new(
+        CapabilityClass::Storage,
+        "migrate:Message:1:2",
+        temp.0.canonicalize().unwrap().to_string_lossy(),
+        "store",
+    );
+    let permit = || {
+        MigrationPermit::authorize(&temp.0, "Message", 1, 2, &BTreeSet::from([grant.clone()]))
+            .unwrap()
+    };
+    let mut store = open(&temp);
+    let alice = Principal::new("alice", "tenant-a");
+    let mut tx = store.begin(alice.clone());
+    store.create(&mut tx, "m1", value("preserved")).unwrap();
+    store
+        .create(&mut tx, "m2", value("second preserved"))
+        .unwrap();
+    store.commit(tx).unwrap();
+    let original = std::fs::read(temp.0.join("snapshot.g0s")).unwrap();
+    let mut bounded = spec.clone();
+    bounded.limits.max_steps = 1;
+    assert!(store.migrate(permit(), bounded).is_err());
+    let mut cumulative = spec.clone();
+    cumulative.limits.max_steps = 7;
+    assert!(matches!(
+        store.migrate(permit(), cumulative),
+        Err(StoreError::Migration(
+            g0::execution::RuntimeError::StepLimit
+        ))
+    ));
+    let mut cancelled = spec.clone();
+    cancelled.cancellation = Default::default();
+    cancelled.cancellation.cancel();
+    assert!(matches!(
+        store.migrate(permit(), cancelled),
+        Err(StoreError::Migration(
+            g0::execution::RuntimeError::Cancelled
+        ))
+    ));
+    let mut undeclared = spec.clone();
+    undeclared.plan.steps.clear();
+    assert!(matches!(
+        store.migrate(permit(), undeclared),
+        Err(StoreError::InvalidSchema)
+    ));
+    assert_eq!(
+        std::fs::read(temp.0.join("snapshot.g0s")).unwrap(),
+        original
+    );
+    assert_eq!(
+        store
+            .read(&store.begin(alice.clone()), "Message", "m1")
+            .unwrap()
+            .value,
+        value("preserved")
+    );
+    let stale = store.begin(alice.clone());
+    store.migrate(permit(), spec).unwrap();
+    assert!(matches!(
+        store.commit(stale),
+        Err(StoreError::AuthorityChanged)
+    ));
+    drop(store);
+    assert!(NativeStore::open(temp.permit(), old_store, old_registry, [42; 32]).is_err());
+    let store = NativeStore::open(
+        temp.permit(),
+        StoreSchema {
+            resources: vec![new_resource],
+        },
+        vec![new_data],
+        [42; 32],
+    )
+    .unwrap();
+    assert_eq!(
+        store
+            .read_fields(
+                &store.begin(alice.clone()),
+                "Message",
+                "m1",
+                &["body".into(), "label".into()]
+            )
+            .unwrap(),
+        vec![
+            Value::Text("preserved".into()),
+            Value::Text("backfilled".into())
+        ]
+    );
+    assert_eq!(
+        store
+            .read_fields(
+                &store.begin(alice),
+                "Message",
+                "m2",
+                &["body".into(), "label".into()]
+            )
+            .unwrap(),
+        vec![
+            Value::Text("second preserved".into()),
+            Value::Text("backfilled".into())
+        ]
+    );
+}
+
+#[test]
 fn external_witness_rejects_rollback_deletion_and_unacknowledged_commits() {
     use g0::store_engine::{RollbackWitness, StoreCheckpoint, WitnessError};
     #[derive(Default)]
@@ -178,7 +393,7 @@ fn inspect_snapshot(temp: &Temp) -> Vec<u8> {
     let cipher = ring::aead::LessSafeKey::new(
         ring::aead::UnboundKey::new(&ring::aead::AES_256_GCM, &[42; 32]).unwrap(),
     );
-    let mut aad = b"g0.store.snapshot.v3\0".to_vec();
+    let mut aad = format!("g0.store.snapshot.v{}\0", bytes[6]).into_bytes();
     aad.extend_from_slice(temp.0.canonicalize().unwrap().to_string_lossy().as_bytes());
     let nonce = bytes[8..20].try_into().unwrap();
     cipher
@@ -191,10 +406,13 @@ fn inspect_snapshot(temp: &Temp) -> Vec<u8> {
         .to_vec()
 }
 fn replace_snapshot(temp: &Temp, mut plaintext: Vec<u8>) {
+    replace_snapshot_version(temp, std::mem::take(&mut plaintext), 4);
+}
+fn replace_snapshot_version(temp: &Temp, mut plaintext: Vec<u8>, version: u8) {
     let cipher = ring::aead::LessSafeKey::new(
         ring::aead::UnboundKey::new(&ring::aead::AES_256_GCM, &[42; 32]).unwrap(),
     );
-    let mut aad = b"g0.store.snapshot.v3\0".to_vec();
+    let mut aad = format!("g0.store.snapshot.v{version}\0").into_bytes();
     aad.extend_from_slice(temp.0.canonicalize().unwrap().to_string_lossy().as_bytes());
     let nonce = [19; 12];
     cipher
@@ -204,7 +422,8 @@ fn replace_snapshot(temp: &Temp, mut plaintext: Vec<u8>) {
             &mut plaintext,
         )
         .unwrap();
-    let mut bytes = b"G0S\0\0\0\x03\0".to_vec();
+    let mut bytes = b"G0S\0\0\0\x04\0".to_vec();
+    bytes[6] = version;
     bytes.extend_from_slice(&nonce);
     bytes.extend_from_slice(&plaintext);
     std::fs::write(temp.0.join("snapshot.g0s"), bytes).unwrap();
@@ -251,6 +470,9 @@ fn private_and_secret_fields_are_persistent_and_policy_checked() {
                 .windows(b"protected marker".len())
                 .any(|v| v == b"protected marker")
         );
+        let mut legacy = plaintext.clone();
+        legacy.drain(8..40);
+        replace_snapshot_version(&temp, legacy, 3);
         let store =
             NativeStore::open(temp.permit(), schema.clone(), registry.clone(), [42; 32]).unwrap();
         assert_eq!(
@@ -812,7 +1034,7 @@ fn legacy_encrypted_snapshot_is_readable_and_upgraded_on_commit() {
         .unwrap();
     store.commit(tx).unwrap();
     drop(store);
-    assert_eq!(std::fs::read(temp.0.join("snapshot.g0s")).unwrap()[6], 3);
+    assert_eq!(std::fs::read(temp.0.join("snapshot.g0s")).unwrap()[6], 4);
     let store = open(&temp);
     assert_eq!(
         store

@@ -109,8 +109,13 @@ snapshots alone cannot detect restoring older valid bytes. See `store-witness.md
 
 Persistent relations now enforce target/scope/cardinality constraints and
 authorized Restrict/Detach/Cascade deletion. GIR can set and traverse relations
-in its storage transaction. G0S 0.3 preserves G0S 0.1/0.2 reading and upgrades on
+in its storage transaction. G0S 0.4 preserves G0S 0.1..0.3 reading and upgrades on
 commit. See `store-relations.md` for interfaces and resource limits.
+
+Explicitly authorized offline migrations execute pure G0 transformation graphs
+with cumulative budgets, check the complete result and atomically replace the
+snapshot. The schema commitment rejects obsolete definitions on reopen; see
+`store-migrations.md` for supported changes and failure behavior.
 
 Native transport uses a separately selected platform profile. The pinned
 cryptography dependencies are bootstrap platform implementations, not G0 Core

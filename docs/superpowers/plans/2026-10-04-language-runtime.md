@@ -46,7 +46,8 @@ Ruling: Ship explicit initial storage/transport profiles and reject advanced uns
 - [x] Persistent relations, cardinality, authorized delete plans and GIR set/traverse operations.
 - [x] Private/Secret field envelopes and opaque credential verifiers, including GIR operations.
 - [x] Runtime protocol for independently trusted rollback witnesses; deployed providers remain host bindings.
-- [ ] Remaining runtime integration: aggregate x86 lowering; migration; advanced transport profiles; child/secret regions and effectful child task profiles in GIR.
+- [x] Executable bounded offline migrations through pure G0 graphs and committed structural schema identity.
+- [ ] Remaining runtime integration: aggregate x86 lowering; advanced transport profiles; child/secret regions and effectful child task profiles in GIR.
 
 Task 7: initial Win32/GDI editor implemented and smoke-tested on Windows: create/connect/save/execute 42 + 7 = 49, native canvas rendered to BMP. Canonical editing model, undo/redo and bounded graph/node trace tested. Full toolbox constructors, persisted screen layout and live breakpoints remain. Collection Map/TextJoin operations added for compiler construction; order, empty input, wrong body types and execution limits tested.
 
@@ -59,3 +60,5 @@ Storage relations: actual encrypted row metadata, serializable updates, scope/re
 Protected storage: G0S 0.3 adds independently authenticated field envelopes and verifier-only credentials; canonical G0G 0.4 adds credential operations without granting authority. Plaintext/credential persistence, context substitution, explicit actions, field policy and work budgets tested. Rollback witness integration checks exact authenticated snapshot commitments and withholds acknowledgement when external durable advancement fails.
 
 Verification: 348 local tests pass and all-target Clippy is clean. Both credential GIR operations execute through StorageHost. The preceding resources/relations checkpoint also passed Linux and Windows CI (run 37194866493).
+
+Migration integration: administrative capability binds root/resource/versions; a pure closed G0 graph transforms previous-schema records into the new schema. One executor shares limits across the complete resource. Validation, cancellation and mid-migration exhaustion preserve the previous snapshot. A required private-field backfill survives reopen; obsolete schemas and pre-migration transactions are rejected. G0S 0.4 adds authenticated schema and structural-store identity while retaining earlier snapshots. Linux/Windows CI also passed the protected-storage/witness checkpoint (run 37195779389).

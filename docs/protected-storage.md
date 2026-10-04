@@ -1,6 +1,7 @@
 # Native protected fields and credentials
 
-The native store writes G0S 0.3 snapshots and continues reading 0.1 and 0.2.
+G0S 0.3 introduced field envelopes; the native store now writes 0.4 snapshots
+with the same envelopes and a schema commitment, and continues reading 0.1..0.3.
 Each record encodes a canonical sorted field map before relation metadata.
 Public fields contain canonical typed G0V. Private and Secret fields contain
 a random 96-bit nonce and an AES-256-GCM field envelope. HKDF-SHA256 derives

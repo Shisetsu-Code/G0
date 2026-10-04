@@ -51,6 +51,7 @@ pub enum StoreError {
     CommitUncertain,
     Io(std::io::Error),
     Codec(CodecError),
+    Migration(crate::execution::RuntimeError),
 }
 impl From<std::io::Error> for StoreError {
     fn from(e: std::io::Error) -> Self {
@@ -140,6 +141,48 @@ pub trait RollbackWitness: Send + Sync {
     ) -> Result<(), WitnessError>;
 }
 
+pub struct MigrationPermit {
+    root: PathBuf,
+    resource: String,
+    from: u32,
+    to: u32,
+}
+impl MigrationPermit {
+    pub fn authorize(
+        root: &Path,
+        resource: &str,
+        from: u32,
+        to: u32,
+        grants: &BTreeSet<Capability>,
+    ) -> Result<Self, StoreError> {
+        let root = root.canonicalize()?;
+        if !grants.contains(&Capability::new(
+            CapabilityClass::Storage,
+            format!("migrate:{resource}:{from}:{to}"),
+            root.to_string_lossy(),
+            "store",
+        )) {
+            return Err(StoreError::Denied);
+        }
+        Ok(Self {
+            root,
+            resource: resource.into(),
+            from,
+            to,
+        })
+    }
+}
+#[derive(Clone)]
+pub struct StoreMigration {
+    pub resource: crate::storage::ResourceSchema,
+    pub data_schema: DataSchema,
+    pub source_schema: String,
+    pub plan: crate::migration::MigrationPlan,
+    pub transform: crate::program_binary::ProgramDocument,
+    pub limits: crate::execution::ExecutionLimits,
+    pub cancellation: crate::execution::Cancellation,
+}
+
 pub struct NativeStore {
     root: PathBuf,
     _lock: File,
@@ -155,16 +198,13 @@ pub struct NativeStore {
     witness: Option<Arc<dyn RollbackWitness>>,
 }
 impl NativeStore {
-    pub fn open(
-        permit: StorePermit,
-        schema: StoreSchema,
-        registry: Vec<DataSchema>,
-        key: [u8; 32],
-    ) -> Result<Self, StoreError> {
-        let key = Zeroizing::new(key);
-        validate_store_schema(&schema).map_err(|_| StoreError::InvalidSchema)?;
+    fn validate_definition(
+        schema: &StoreSchema,
+        registry: &[DataSchema],
+    ) -> Result<(), StoreError> {
+        validate_store_schema(schema).map_err(|_| StoreError::InvalidSchema)?;
         let mut names = BTreeSet::new();
-        for s in &registry {
+        for s in registry {
             if s.name.is_empty() || !names.insert(&s.name) || validate_schema(s).is_err() {
                 return Err(StoreError::InvalidSchema);
             }
@@ -203,9 +243,19 @@ impl NativeStore {
                     (FieldProtection::Secret, SemanticType::Secret(inner)) => inner,
                     (_, ty) => ty,
                 };
-                crate::value_codec::validate_public_type(ty, &registry)?;
+                crate::value_codec::validate_public_type(ty, registry)?;
             }
         }
+        Ok(())
+    }
+    pub fn open(
+        permit: StorePermit,
+        schema: StoreSchema,
+        registry: Vec<DataSchema>,
+        key: [u8; 32],
+    ) -> Result<Self, StoreError> {
+        let key = Zeroizing::new(key);
+        Self::validate_definition(&schema, &registry)?;
         let mut options = OpenOptions::new();
         options.read(true).write(true).create(true).truncate(false);
         #[cfg(unix)]
@@ -869,6 +919,190 @@ impl NativeStore {
         }
         Ok(values)
     }
+    pub fn migrate(
+        &mut self,
+        permit: MigrationPermit,
+        migration: StoreMigration,
+    ) -> Result<(), StoreError> {
+        use crate::migration::{MigrationMode, MigrationStep, validate_migration};
+        if self.recovery {
+            return Err(StoreError::RecoveryRequired);
+        }
+        let kind = &migration.resource.name;
+        if permit.root != self.root
+            || permit.resource != *kind
+            || permit.from != migration.plan.from_version
+            || permit.to != migration.plan.to_version
+        {
+            return Err(StoreError::Denied);
+        }
+        if migration.plan.mode != MigrationMode::Offline {
+            return Err(StoreError::UnsupportedProfile);
+        }
+        validate_migration(&migration.plan).map_err(|_| StoreError::InvalidSchema)?;
+        let resource_index = self
+            .schema
+            .resources
+            .iter()
+            .position(|r| &r.name == kind)
+            .ok_or(StoreError::InvalidSchema)?;
+        let data_index = self
+            .registry
+            .iter()
+            .position(|s| &s.name == kind)
+            .ok_or(StoreError::InvalidSchema)?;
+        let old_data = &self.registry[data_index];
+        let old_resource = &self.schema.resources[resource_index];
+        if old_data.version != migration.plan.from_version
+            || migration.data_schema.version != migration.plan.to_version
+            || migration.data_schema.name != *kind
+        {
+            return Err(StoreError::InvalidSchema);
+        }
+        if old_resource.tenant_isolation != migration.resource.tenant_isolation
+            || old_resource.managed_fields != migration.resource.managed_fields
+        {
+            return Err(StoreError::UnsupportedProfile);
+        }
+        for field in &old_data.fields {
+            match migration.data_schema.fields.iter().find(|f| f.tag == field.tag) {
+                None if !migration.plan.steps.iter().any(|s| matches!(s,MigrationStep::RemoveField {tag,allow_data_loss:true} if *tag == field.tag)) => return Err(StoreError::InvalidSchema),
+                Some(new) => {
+                    if new.ty != field.ty { return Err(StoreError::UnsupportedProfile) }
+                    if new.name != field.name && !migration.plan.steps.iter().any(|s| matches!(s,MigrationStep::RenameField {tag} if *tag == field.tag)) { return Err(StoreError::InvalidSchema) }
+                    if field.requirement == crate::data_format::FieldRequirement::Optional && new.requirement == crate::data_format::FieldRequirement::Required && !migration.plan.steps.iter().any(|s| matches!(s,MigrationStep::PromoteFieldToRequired {tag} if *tag == field.tag)) { return Err(StoreError::InvalidSchema) }
+                    if old_resource.field(&field.name).unwrap().protection != migration.resource.field(&new.name).ok_or(StoreError::InvalidSchema)?.protection
+                        && !migration.plan.steps.iter().any(|s| matches!(s,MigrationStep::RotateStorageProtection {profile,to_version:1} if profile == "g0.native.fields")) { return Err(StoreError::InvalidSchema) }
+                }
+                None => {},
+            }
+        }
+        for field in &migration.data_schema.fields {
+            if !old_data.fields.iter().any(|f| f.tag == field.tag) {
+                if !migration
+                    .plan
+                    .steps
+                    .iter()
+                    .any(|s| matches!(s,MigrationStep::AddOptionalField {tag} if *tag == field.tag))
+                {
+                    return Err(StoreError::InvalidSchema);
+                }
+                if field.requirement == crate::data_format::FieldRequirement::Required
+                    && (!migration.plan.steps.iter().any(|s| matches!(s,MigrationStep::BackfillField {tag} if *tag == field.tag)) || !migration.plan.steps.iter().any(|s| matches!(s,MigrationStep::PromoteFieldToRequired {tag} if *tag == field.tag))) { return Err(StoreError::InvalidSchema) }
+            }
+        }
+        let mut schema = self.schema.clone();
+        schema.resources[resource_index] = migration.resource.clone();
+        let mut registry = self.registry.clone();
+        registry[data_index] = migration.data_schema.clone();
+        Self::validate_definition(&schema, &registry)?;
+        if registry.iter().any(|s| s.name == migration.source_schema) {
+            return Err(StoreError::InvalidSchema);
+        }
+        let mut source = old_data.clone();
+        source.name = migration.source_schema.clone();
+        if !migration.transform.schemas.contains(&source)
+            || !registry
+                .iter()
+                .all(|s| migration.transform.schemas.contains(s))
+        {
+            return Err(StoreError::InvalidSchema);
+        }
+        let program = migration
+            .transform
+            .validated_contract()
+            .map_err(|_| StoreError::InvalidSchema)?;
+        if program
+            .graphs
+            .iter()
+            .flat_map(|g| &g.nodes)
+            .any(|n| !n.effects.is_empty() || !n.required_capabilities.is_empty())
+        {
+            return Err(StoreError::Denied);
+        }
+        let graph = program
+            .graphs
+            .iter()
+            .find(|g| g.name == migration.transform.entry_graph)
+            .ok_or(StoreError::InvalidSchema)?;
+        if graph.inputs.len() != 1
+            || graph.outputs.len() != 1
+            || graph.inputs[0].ty != SemanticType::Record(migration.source_schema.clone())
+            || graph.outputs[0].ty != SemanticType::Record(kind.clone())
+        {
+            return Err(StoreError::InvalidSchema);
+        }
+        let mut runtime = crate::execution::Executor::new(&program, migration.limits)
+            .map_err(StoreError::Migration)?;
+        runtime.set_cancellation(migration.cancellation.clone());
+        let epoch = self.epoch.checked_add(1).ok_or(StoreError::Limit)?;
+        let generation = self
+            .snapshot
+            .generation
+            .checked_add(1)
+            .ok_or(StoreError::Limit)?;
+        let mut next = (*self.snapshot).clone();
+        next.generation = generation;
+        for ((_, resource, _), row) in next.rows.iter_mut() {
+            if resource != kind {
+                continue;
+            }
+            let Value::Record { fields, .. } = &row.value else {
+                return Err(StoreError::Integrity);
+            };
+            let input = Value::Record {
+                schema: migration.source_schema.clone(),
+                fields: fields.clone(),
+            };
+            let mut outputs = runtime
+                .run_graph_cumulative(&graph.name, vec![input])
+                .map_err(StoreError::Migration)?;
+            let value = outputs.pop().ok_or(StoreError::TypeMismatch)?;
+            if !value.fits(&SemanticType::Record(kind.clone()), &registry) {
+                return Err(StoreError::TypeMismatch);
+            }
+            let Value::Record {
+                fields: new_fields, ..
+            } = &value
+            else {
+                return Err(StoreError::TypeMismatch);
+            };
+            for managed in &old_resource.managed_fields {
+                if fields.get(&managed.field) != new_fields.get(&managed.field) {
+                    return Err(StoreError::Denied);
+                }
+            }
+            for field in &migration.resource.fields {
+                if field.protection == FieldProtection::Credential
+                    && new_fields
+                        .get(&field.name)
+                        .is_some_and(|v| !matches!(v, Value::CredentialVerifier(_)))
+                {
+                    return Err(StoreError::TypeMismatch);
+                }
+            }
+            row.value = value;
+            row.version = generation;
+        }
+        if migration.cancellation.is_cancelled() {
+            return Err(StoreError::Migration(
+                crate::execution::RuntimeError::Cancelled,
+            ));
+        }
+        let old_schema = std::mem::replace(&mut self.schema, schema);
+        let old_registry = std::mem::replace(&mut self.registry, registry);
+        match self.persist_snapshot(next) {
+            Ok(()) => {
+                self.epoch = epoch;
+                Ok(())
+            }
+            Err(error) => {
+                self.schema = old_schema;
+                self.registry = old_registry;
+                Err(error)
+            }
+        }
+    }
     pub fn commit(&mut self, tx: Transaction) -> Result<(), StoreError> {
         self.check(&tx)?;
         if tx.snapshot.generation != self.snapshot.generation {
@@ -886,6 +1120,9 @@ impl NativeStore {
                 next.rows.remove(&key);
             }
         }
+        self.persist_snapshot(next)
+    }
+    fn persist_snapshot(&mut self, next: Snapshot) -> Result<(), StoreError> {
         if next.rows.len() > MAX_ROWS {
             return Err(StoreError::Limit);
         }
@@ -1127,9 +1364,98 @@ impl NativeStore {
         }
         Ok(value)
     }
+    fn schema_digest(&self) -> Result<[u8; 32], StoreError> {
+        let mut writer = Writer(Zeroizing::new(Vec::new()));
+        writer.string("g0.store.schemas.v1")?;
+        let mut schemas: Vec<_> = self.registry.iter().collect();
+        schemas.sort_by(|a, b| a.name.cmp(&b.name));
+        writer.count(schemas.len())?;
+        for schema in schemas {
+            writer.string(&schema.name)?;
+            writer.put(&schema.version.to_le_bytes())?;
+            writer.count(schema.fields.len())?;
+            for field in &schema.fields {
+                writer.put(&field.tag.to_le_bytes())?;
+                writer.string(&field.name)?;
+                writer.blob(
+                    &crate::graph_binary::encode_semantic_type(&field.ty)
+                        .map_err(|_| StoreError::InvalidSchema)?,
+                )?;
+                writer.put(&[match field.requirement {
+                    crate::data_format::FieldRequirement::Required => 0,
+                    crate::data_format::FieldRequirement::Optional => 1,
+                }])?;
+            }
+        }
+        let mut resources: Vec<_> = self.schema.resources.iter().collect();
+        resources.sort_by(|a, b| a.name.cmp(&b.name));
+        writer.count(resources.len())?;
+        for resource in resources {
+            writer.string(&resource.name)?;
+            writer.put(&[u8::from(
+                resource.tenant_isolation == TenantIsolation::Global,
+            )])?;
+            let mut fields: Vec<_> = resource.fields.iter().collect();
+            fields.sort_by(|a, b| a.name.cmp(&b.name));
+            writer.count(fields.len())?;
+            for field in fields {
+                writer.string(&field.name)?;
+                writer.put(&[match field.protection {
+                    FieldProtection::Public => 0,
+                    FieldProtection::Private => 1,
+                    FieldProtection::Secret => 2,
+                    FieldProtection::Credential => 3,
+                }])?;
+            }
+            let mut managed: Vec<_> = resource.managed_fields.iter().collect();
+            managed.sort_by(|a, b| a.field.cmp(&b.field));
+            writer.count(managed.len())?;
+            for field in managed {
+                writer.string(&field.field)?;
+                writer.put(&[match field.source {
+                    ManagedFieldSource::CurrentPrincipal => 0,
+                    ManagedFieldSource::CurrentScope => 1,
+                    ManagedFieldSource::Generated => 2,
+                    ManagedFieldSource::StoreClock => 3,
+                }])?;
+            }
+            let mut relations: Vec<_> = resource.relations.iter().collect();
+            relations.sort_by(|a, b| a.name.cmp(&b.name));
+            writer.count(relations.len())?;
+            for relation in relations {
+                writer.string(&relation.name)?;
+                writer.string(&relation.target_resource)?;
+                writer.put(&[
+                    match relation.cardinality {
+                        crate::storage::Cardinality::One => 0,
+                        crate::storage::Cardinality::OptionalOne => 1,
+                        crate::storage::Cardinality::Many => 2,
+                    },
+                    match relation.on_delete {
+                        crate::storage::DeleteRule::Restrict => 0,
+                        crate::storage::DeleteRule::Cascade => 1,
+                        crate::storage::DeleteRule::Detach => 2,
+                    },
+                ])?;
+            }
+            writer.count(resource.indexes.len())?;
+            for index in &resource.indexes {
+                writer.put(&[u8::from(index.unique)])?;
+                writer.count(index.fields.len())?;
+                for field in &index.fields {
+                    writer.string(field)?;
+                }
+            }
+        }
+        Ok(ring::digest::digest(&ring::digest::SHA256, &writer.0)
+            .as_ref()
+            .try_into()
+            .unwrap())
+    }
     fn encode_snapshot(&self, snapshot: &Snapshot) -> Result<Vec<u8>, StoreError> {
         let mut writer = Writer(Zeroizing::new(Vec::new()));
         writer.put(&snapshot.generation.to_le_bytes())?;
+        writer.put(&self.schema_digest()?)?;
         writer.count(snapshot.rows.len())?;
         for ((scope, kind, id), row) in &snapshot.rows {
             writer.string(scope)?;
@@ -1161,11 +1487,11 @@ impl NativeStore {
         self.cipher
             .seal_in_place_append_tag(
                 aead::Nonce::assume_unique_for_key(nonce),
-                aead::Aad::from(self.aad(3)),
+                aead::Aad::from(self.aad(4)),
                 &mut *bytes,
             )
             .map_err(|_| StoreError::Integrity)?;
-        let mut framed = b"G0S\0\0\0\x03\0".to_vec();
+        let mut framed = b"G0S\0\0\0\x04\0".to_vec();
         framed.extend_from_slice(&nonce);
         framed.extend_from_slice(&bytes);
         Ok(framed)
@@ -1175,8 +1501,10 @@ impl NativeStore {
             b"g0.store.snapshot.v1\0".to_vec()
         } else if version == 2 {
             b"g0.store.snapshot.v2\0".to_vec()
-        } else {
+        } else if version == 3 {
             b"g0.store.snapshot.v3\0".to_vec()
+        } else {
+            b"g0.store.snapshot.v4\0".to_vec()
         };
         aad.extend_from_slice(self.root.to_string_lossy().as_bytes());
         aad
@@ -1185,7 +1513,7 @@ impl NativeStore {
         let mut bytes = Zeroizing::new(bytes);
         if bytes.len() < 36
             || &bytes[..6] != b"G0S\0\0\0"
-            || !(1..=3).contains(&bytes[6])
+            || !(1..=4).contains(&bytes[6])
             || bytes[7] != 0
         {
             return Err(StoreError::Integrity);
@@ -1202,6 +1530,9 @@ impl NativeStore {
             .map_err(|_| StoreError::Integrity)?;
         let mut reader = Reader(plaintext);
         let generation = reader.u64()?;
+        if format_version >= 4 && reader.take(32)? != self.schema_digest()? {
+            return Err(StoreError::InvalidSchema);
+        }
         let count = reader.count()?;
         if count > MAX_ROWS || count > reader.0.len() / 28 {
             return Err(StoreError::Integrity);

@@ -39,7 +39,7 @@ GIR also executes opaque linear region/buffer handles and bounded pure child
 tasks through `ResourceHost`, including CLI/editor/native-wrapper/service
 hosting. See `graph-resources.md` for the current interfaces and profiles.
 
-Aggregate x86 lowering, migrations, trusted witness providers and
+Aggregate x86 lowering, online migration/type-change profiles, trusted witness providers and
 advanced scheduling/remote-execution profiles still require implementation.
 Current profiles reject unsupported requirements instead of weakening them.
 
@@ -49,6 +49,9 @@ See `protected-storage.md` for the permissions, formats and memory boundaries.
 The native store also binds commits to an external rollback witness, detects
 restored/deleted snapshots and fails closed on unacknowledged commits. Deployment
 supplies a trusted witness provider; see `store-witness.md`.
+Offline migrations execute pure G0 transformation graphs over real records,
+preserve identities and managed values, validate integrity and replace snapshots
+atomically. G0S 0.4 binds structural schema identity; see `store-migrations.md`.
 
 Persistent relations execute cardinality, referential/scope integrity and
 authorized Restrict/Detach/Cascade deletion, including GIR link/traversal nodes.
