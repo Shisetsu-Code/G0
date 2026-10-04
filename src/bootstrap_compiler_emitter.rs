@@ -9,25 +9,30 @@ fn nodes() -> SemanticType {
     SemanticType::Slice(Box::new(seq()))
 }
 impl G {
-    fn text(&mut self, s: &str) -> SourceEndpoint {
+    pub(super) fn text(&mut self, s: &str) -> SourceEndpoint {
         self.op(
             Operation::Const(Literal::Text(s.into())),
             vec![],
             SemanticType::Text,
         )
     }
-    fn concat(&mut self, a: SourceEndpoint, b: SourceEndpoint) -> SourceEndpoint {
+    pub(super) fn concat(&mut self, a: SourceEndpoint, b: SourceEndpoint) -> SourceEndpoint {
         self.op(
             Operation::TextConcat,
             vec![(a, SemanticType::Text), (b, SemanticType::Text)],
             SemanticType::Text,
         )
     }
-    fn number(&mut self, a: SourceEndpoint) -> SourceEndpoint {
+    pub(super) fn number(&mut self, a: SourceEndpoint) -> SourceEndpoint {
         let ty = self.ty(&a);
         self.op(Operation::FormatInteger, vec![(a, ty)], SemanticType::Text)
     }
-    fn line(&mut self, prefix: &str, value: SourceEndpoint, suffix: &str) -> SourceEndpoint {
+    pub(super) fn line(
+        &mut self,
+        prefix: &str,
+        value: SourceEndpoint,
+        suffix: &str,
+    ) -> SourceEndpoint {
         let prefix = self.text(prefix);
         let number = self.number(value);
         let line = self.concat(prefix, number);
@@ -242,7 +247,7 @@ pub(super) fn graphs() -> Vec<Graph> {
     graphs.extend(output_graphs());
     graphs.extend(domain_graphs());
     let mut main = G::new(
-        "compile-direct",
+        "compile-direct-scalar",
         vec![SemanticType::Bytes],
         vec![SemanticType::Text],
     );
@@ -329,7 +334,8 @@ pub(super) fn graphs() -> Vec<Graph> {
     let bridge = main.concat(bridge, suffix);
     let number = main.number(length);
     let bridge = main.concat(bridge, number);
-    let suffix = main.text(", %rsi\n    jmp g0_native_invoke\n.section .rodata\n.Lg0_program:\n");
+    let suffix =
+        main.text(", %rsi\n    jmp g0_native_invoke\n.section .rodata\n.Lg0_program:\n.byte ");
     let bridge = main.concat(bridge, suffix);
     let assembly = main.concat(assembly, bridge);
     let lines_ty = SemanticType::Slice(Box::new(SemanticType::Text));
@@ -340,14 +346,14 @@ pub(super) fn graphs() -> Vec<Graph> {
         vec![(input(0), SemanticType::Bytes)],
         lines_ty.clone(),
     );
-    let empty = main.text("");
+    let empty = main.text("\n.byte ");
     let lines = main.op(
         Operation::TextJoin,
         vec![(lines, lines_ty), (empty, SemanticType::Text)],
         SemanticType::Text,
     );
     let assembly = main.concat(assembly, lines);
-    let footer = main.text(".section .note.GNU-stack,\"\",@progbits\n");
+    let footer = main.text("\n.section .note.GNU-stack,\"\",@progbits\n");
     let assembly = main.concat(assembly, footer);
     graphs.push(main.finish(vec![assembly]));
     graphs

@@ -374,6 +374,10 @@ fn validate_operation(node: &Node, report: &mut ValidationReport) {
         | Operation::ArrayConcat
         | Operation::Range
         | Operation::BytesFromArray
+        | Operation::CheckedAdd
+        | Operation::CheckedSub
+        | Operation::CheckedMul
+        | Operation::ResultIsOk
         | Operation::EncodeUtf8
         | Operation::DecodeUtf8
         | Operation::FormatInteger

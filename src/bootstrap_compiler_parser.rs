@@ -1,6 +1,10 @@
 //! The binary reader is expressed as executable GIR. Rust here only constructs
 //! the definition; it never reads, decodes, or validates compiler input bytes.
 use super::*;
+#[path = "bootstrap_compiler_control.rs"]
+mod control;
+#[path = "bootstrap_compiler_semantics.rs"]
+mod semantics;
 #[path = "bootstrap_compiler_emitter.rs"]
 mod emitter;
 
@@ -419,9 +423,13 @@ pub(super) fn graphs() -> Vec<Graph> {
     let valid = main.and(header_valid, eof);
     syntax.extend([word, cond, body, main.finish(vec![valid])]);
     syntax.extend(ast_graphs());
+    syntax.extend(program_ast_graphs());
+    syntax.extend(version_validation_graphs());
     syntax.extend(edge_ast_graphs());
     syntax.extend(scheduler_graphs());
     syntax.extend(emitter::graphs());
+    syntax.extend(control::graphs());
+    syntax.extend(semantics::graphs());
     syntax
 }
 
@@ -449,6 +457,9 @@ fn sequence(name: &str, parts: &[Part]) -> Graph {
     g.finish(vec![at])
 }
 fn list_graphs(name: &str) -> Vec<Graph> {
+    if matches!(name, "reader-port" | "reader-node-checked") {
+        return unique_identifier_list_graphs(name);
+    }
     let state = vec![SemanticType::Bytes, int(), int()];
     let mut cond = G::new(
         &format!("reader-list-{name}-condition"),
@@ -491,6 +502,66 @@ fn list_graphs(name: &str) -> Vec<Graph> {
         cond.finish(vec![test]),
         body.finish(vec![input(0), next, left]),
         main.finish(vec![SourceEndpoint::NodeOutput { node: id, port: 1 }]),
+    ]
+}
+
+fn unique_identifier_list_graphs(name: &str) -> Vec<Graph> {
+    let ids = SemanticType::Slice(Box::new(int()));
+    let state = vec![
+        SemanticType::Bytes,
+        int(),
+        int(),
+        ids.clone(),
+        SemanticType::Bool,
+    ];
+    let prefix = format!("reader-list-{name}");
+    let mut condition = G::new(
+        &format!("{prefix}-condition"),
+        state.clone(),
+        vec![SemanticType::Bool],
+    );
+    let zero = condition.n(0);
+    let test = condition.compare(Operation::Gt, input(2), zero);
+    let test = condition.and(test, input(4));
+    let mut body = G::new(&format!("{prefix}-body"), state.clone(), state.clone());
+    let word = body.u32(input(1));
+    let id = if name == "reader-port" {
+        let modulus = body.n(65536);
+        body.op(Operation::Rem, vec![(word, int()), (modulus, int())], int())
+    } else {
+        word
+    };
+    let duplicate = body.op(
+        Operation::Subgraph("scheduler-contains".into()),
+        vec![(input(3), ids.clone()), (id.clone(), int())],
+        SemanticType::Bool,
+    );
+    let unique = body.not(duplicate);
+    let valid = body.and(input(4), unique);
+    let singleton = body.op(Operation::MakeArray, vec![(id, int())], ids.clone());
+    let seen = body.op(
+        Operation::ArrayConcat,
+        vec![(input(3), ids.clone()), (singleton, ids.clone())],
+        ids.clone(),
+    );
+    let next = body.call(name, input(1));
+    let one = body.n(1);
+    let remaining = body.arithmetic(Operation::Sub, input(2), one);
+    let mut main = cursor_graph(&prefix);
+    let count = main.u32(input(1));
+    let start = main.advance(input(1), 4);
+    let empty = main.op(Operation::MakeArray, vec![], ids);
+    let initially_valid = main.bool(true);
+    let output = main.loop_node(
+        &prefix,
+        state,
+        vec![input(0), start, count, empty, initially_valid],
+    );
+    let end = main.guard(output[4].clone(), output[1].clone());
+    vec![
+        condition.finish(vec![test]),
+        body.finish(vec![input(0), next, remaining, seen, valid]),
+        main.finish(vec![end]),
     ]
 }
 /// A tag dispatcher is GIR Select nodes and graph calls, not a Rust input switch.
@@ -598,7 +669,7 @@ fn syntax_graphs() -> Vec<Graph> {
             (3, "reader-blob"),
         ],
     ));
-    let operations: Vec<_> = (0..=69)
+    let operations: Vec<_> = (0..=73)
         .map(|tag| {
             let parser = match tag {
                 0 => "reader-literal",
@@ -647,6 +718,17 @@ fn syntax_graphs() -> Vec<Graph> {
             Repeat("reader-capability"),
         ],
     ));
+    graphs.push(sequence(
+        "reader-node-checked",
+        &[
+            Fixed(4),
+            Call("reader-operation-checked"),
+            Repeat("reader-port"),
+            Repeat("reader-port"),
+            Repeat("reader-effect"),
+            Repeat("reader-capability"),
+        ],
+    ));
     graphs.extend(dispatch(
         "reader-source",
         &[(0, "reader-two"), (1, "reader-six")],
@@ -667,7 +749,7 @@ fn syntax_graphs() -> Vec<Graph> {
             Call("reader-authority"),
             Repeat("reader-port"),
             Repeat("reader-port"),
-            Repeat("reader-node"),
+            Repeat("reader-node-checked"),
             Repeat("reader-edge"),
         ],
     ));
@@ -691,6 +773,7 @@ fn syntax_graphs() -> Vec<Graph> {
         "reader-effect",
         "reader-capability",
         "reader-node",
+        "reader-node-checked",
         "reader-edge",
         "reader-string",
         "reader-arm",
@@ -705,7 +788,7 @@ fn syntax_graphs() -> Vec<Graph> {
     let magic_ok = graph.compare(Operation::Eq, magic, expected);
     let version_at = graph.advance(input(1), 4);
     let version = graph.u32(version_at);
-    let expected = graph.n(0x00080000);
+    let expected = graph.n(0x00090000);
     let version_ok = graph.compare(Operation::Le, version.clone(), expected);
     let lowest = graph.n(0x00010000);
     let version_low = graph.compare(Operation::Ge, version.clone(), lowest);
@@ -737,13 +820,16 @@ fn syntax_graphs() -> Vec<Graph> {
     node.inputs[0].name = "selector".into();
     node.inputs[1].name = "p0".into();
     node.inputs[2].name = "p1".into();
+    let structure = graph.op(Operation::Subgraph("validator-graph-edges".into()),vec![(input(0),SemanticType::Bytes),(input(1),int())],SemanticType::Bool);
+    let out = graph.guard(structure,out);
     graphs.push(graph.finish(vec![out]));
     graphs
 }
 
 fn type_graphs() -> Vec<Graph> {
     let state = vec![SemanticType::Bytes, int(), int()];
-    let mut graphs = Vec::new();
+    let mut graphs = signed_integer_graphs();
+    graphs.push(integer_bounds_graph());
     let payloads = [
         0, 32, 0, 0, 8, 0, 4, 0, 0, 8, 0, 8, -1, -1, 0, 0, -1, 0, 0, 0, 0, 0, 0, 0, 0,
     ];
@@ -757,6 +843,23 @@ fn type_graphs() -> Vec<Graph> {
             g.call("reader-string", at)
         } else {
             g.advance(at, payload)
+        };
+        let at = if tag == 1 {
+            let minimum_at = g.advance(input(1), 1);
+            let valid = g.op(
+                Operation::Subgraph("reader-i128-bounds".into()),
+                vec![(input(0), SemanticType::Bytes), (minimum_at, int())],
+                SemanticType::Bool,
+            );
+            g.guard(valid, at)
+        } else if matches!(tag, 4 | 6) {
+            let precision_at = g.advance(input(1), 1);
+            let precision = g.u32(precision_at);
+            let lowest = g.n(if tag == 4 { 1 } else { 2 });
+            let valid = g.compare(Operation::Ge, precision, lowest);
+            g.guard(valid, at)
+        } else {
+            at
         };
         let pending = if tag == 15 {
             g.advance(input(2), 1)
@@ -850,6 +953,189 @@ fn type_graphs() -> Vec<Graph> {
     graphs
 }
 
+fn full_integer() -> SemanticType {
+    SemanticType::Integer(IntegerType {
+        min: i128::MIN,
+        max: i128::MAX,
+    })
+}
+
+fn integer_bounds_graph() -> Graph {
+    let mut graph = G::new(
+        "reader-i128-bounds",
+        vec![SemanticType::Bytes, int()],
+        vec![SemanticType::Bool],
+    );
+    let mut less = graph.bool(false);
+    let mut equal = graph.bool(true);
+    for index in (0..16).rev() {
+        let minimum_at = graph.advance(input(1), index);
+        let maximum_at = graph.advance(input(1), 16 + index);
+        let mut minimum = graph.byte(minimum_at);
+        let mut maximum = graph.byte(maximum_at);
+        if index == 15 {
+            let bias = graph.n(128);
+            minimum = graph.arithmetic(Operation::Add, minimum, bias.clone());
+            maximum = graph.arithmetic(Operation::Add, maximum, bias);
+            let modulus = graph.n(256);
+            minimum = graph.op(
+                Operation::Rem,
+                vec![(minimum, int()), (modulus.clone(), int())],
+                int(),
+            );
+            maximum = graph.op(
+                Operation::Rem,
+                vec![(maximum, int()), (modulus, int())],
+                int(),
+            );
+        }
+        let byte_less = graph.compare(Operation::Lt, minimum.clone(), maximum.clone());
+        let first_difference = graph.and(equal.clone(), byte_less);
+        less = graph.logic(Operation::Or, less, first_difference);
+        let byte_equal = graph.compare(Operation::Eq, minimum, maximum);
+        equal = graph.and(equal, byte_equal);
+    }
+    let valid = graph.logic(Operation::Or, less, equal);
+    graph.finish(vec![valid])
+}
+
+fn version_validation_graphs() -> Vec<Graph> {
+    let mut graphs = Vec::new();
+    let parameters = vec![SemanticType::Bytes, int()];
+    for (index, maximum) in [29, 48, 57, 59, 61, 63, 65, 69, 73].into_iter().enumerate() {
+        let minor = index + 1;
+        let mut constant = G::new(
+            &format!("validator-version-maximum-{minor}"),
+            parameters.clone(),
+            vec![int()],
+        );
+        let value = constant.n(maximum);
+        graphs.push(constant.finish(vec![value]));
+        if minor == 1 {
+            continue;
+        }
+        let mut dispatch = G::new(
+            &format!("validator-version-limit-{minor}"),
+            parameters.clone(),
+            vec![int()],
+        );
+        let expected = dispatch.n((minor as i128) << 16);
+        let test = dispatch.compare(Operation::Ge, input(1), expected);
+        let fallback = if minor == 2 {
+            "validator-version-maximum-1".into()
+        } else {
+            format!("validator-version-limit-{}", minor - 1)
+        };
+        let value = dispatch.op(
+            Operation::Select {
+                when_true: format!("validator-version-maximum-{minor}"),
+                when_false: fallback,
+            },
+            vec![
+                (test, SemanticType::Bool),
+                (input(0), SemanticType::Bytes),
+                (input(1), int()),
+            ],
+            int(),
+        );
+        let node = dispatch.b.graph.nodes.last_mut().unwrap();
+        node.inputs[0].name = "selector".into();
+        node.inputs[1].name = "p0".into();
+        node.inputs[2].name = "p1".into();
+        graphs.push(dispatch.finish(vec![value]));
+    }
+    let mut checked = cursor_graph("reader-operation-checked");
+    let header = checked.n(4);
+    let version = checked.u32(header);
+    let maximum = checked.call("validator-version-limit-9", version);
+    let tag = checked.byte(input(1));
+    let valid = checked.compare(Operation::Le, tag, maximum);
+    let end = checked.call("reader-operation", input(1));
+    let end = checked.guard(valid, end);
+    graphs.push(checked.finish(vec![end]));
+    graphs
+}
+
+fn signed_integer_graphs() -> Vec<Graph> {
+    let full = full_integer();
+    let result = SemanticType::Result(Box::new(full.clone()), Box::new(SemanticType::Bool));
+    let state = vec![SemanticType::Bytes, int(), int(), full.clone()];
+    let mut condition = G::new(
+        "reader-i128-condition",
+        state.clone(),
+        vec![SemanticType::Bool],
+    );
+    let zero = condition.n(0);
+    let test = condition.compare(Operation::Gt, input(2), zero);
+    let mut body = G::new("reader-i128-body", state.clone(), state.clone());
+    let one = body.n(1);
+    let remaining = body.arithmetic(Operation::Sub, input(2), one);
+    let offset = body.arithmetic(Operation::Add, input(1), remaining.clone());
+    let byte = body.byte(offset);
+    let factor = body.n(256);
+    let multiplied = body.op(
+        Operation::CheckedMul,
+        vec![(input(3), full.clone()), (factor, full.clone())],
+        result.clone(),
+    );
+    let zero = body.n(0);
+    let multiplied = body.op(
+        Operation::UnwrapOr,
+        vec![(multiplied, result.clone()), (zero, full.clone())],
+        full.clone(),
+    );
+    let added = body.op(
+        Operation::CheckedAdd,
+        vec![(multiplied, full.clone()), (byte, full.clone())],
+        result.clone(),
+    );
+    let zero = body.n(0);
+    let value = body.op(
+        Operation::UnwrapOr,
+        vec![(added, result), (zero, full.clone())],
+        full.clone(),
+    );
+    let mut main = G::new("reader-i128", vec![SemanticType::Bytes, int()], vec![full]);
+    let high_at = main.advance(input(1), 15);
+    let high = main.byte(high_at);
+    let flip = main.n(128);
+    let high = main.arithmetic(Operation::Add, high, flip);
+    let modulus = main.n(256);
+    let byte_type = SemanticType::Integer(IntegerType { min: 0, max: 255 });
+    let high = main.op(Operation::Rem, vec![(high, int()), (modulus, int())], int());
+    let high = main.op(
+        Operation::ConvertChecked,
+        vec![(high, int())],
+        byte_type.clone(),
+    );
+    let bias = main.n(128);
+    let signed = main.op(
+        Operation::Sub,
+        vec![
+            (high, byte_type),
+            (
+                bias,
+                SemanticType::Integer(IntegerType { min: 128, max: 128 }),
+            ),
+        ],
+        SemanticType::Integer(IntegerType {
+            min: -128,
+            max: 127,
+        }),
+    );
+    let count = main.n(15);
+    let loop_values = main.loop_node(
+        "reader-i128",
+        state,
+        vec![input(0), input(1), count, signed],
+    );
+    vec![
+        condition.finish(vec![test]),
+        body.finish(vec![input(0), input(1), remaining, value]),
+        main.finish(vec![loop_values[3].clone()]),
+    ]
+}
+
 fn ast_graphs() -> Vec<Graph> {
     let descriptor = SemanticType::Slice(Box::new(int()));
     let collection = SemanticType::Slice(Box::new(descriptor.clone()));
@@ -941,6 +1227,108 @@ fn ast_graphs() -> Vec<Graph> {
             node: loop_id,
             port: 3,
         }]),
+    ]
+}
+
+fn program_ast_graphs() -> Vec<Graph> {
+    let descriptor = SemanticType::Slice(Box::new(int()));
+    let collection = SemanticType::Slice(Box::new(descriptor.clone()));
+    let state = vec![SemanticType::Bytes, int(), int(), collection.clone()];
+    let mut condition = G::new(
+        "reader-program-ast-condition",
+        state.clone(),
+        vec![SemanticType::Bool],
+    );
+    let zero = condition.n(0);
+    let remaining = condition.compare(Operation::Gt, input(2), zero);
+    let mut layout = G::new(
+        "reader-program-graph-layout",
+        vec![SemanticType::Bytes],
+        vec![descriptor.clone()],
+    );
+    let local_name = layout.n(8);
+    let authority = layout.skip_blob(local_name.clone());
+    let local_inputs = layout.advance(authority, 1);
+    let local_outputs = layout.call("reader-list-reader-port", local_inputs.clone());
+    let local_nodes = layout.call("reader-list-reader-port", local_outputs.clone());
+    let local_edges = layout.call("reader-list-reader-node", local_nodes.clone());
+    let local_row = layout.op(
+        Operation::MakeArray,
+        vec![
+            local_name,
+            local_inputs,
+            local_outputs,
+            local_nodes,
+            local_edges,
+        ]
+        .into_iter()
+        .map(|e| (e, int()))
+        .collect(),
+        descriptor.clone(),
+    );
+    let mut body = G::new("reader-program-ast-body", state.clone(), state.clone());
+    let size = body.u32(input(1));
+    let start = body.advance(input(1), 4);
+    let end = body.arithmetic(Operation::Add, start.clone(), size.clone());
+    let bytes = body.op(
+        Operation::BytesSlice,
+        vec![
+            (input(0), SemanticType::Bytes),
+            (start.clone(), int()),
+            (size, int()),
+        ],
+        SemanticType::Bytes,
+    );
+    let local = body.op(
+        Operation::Subgraph("reader-program-graph-layout".into()),
+        vec![(bytes, SemanticType::Bytes)],
+        descriptor.clone(),
+    );
+    let mut fields = vec![start.clone(), end.clone()];
+    for index in 0..5 {
+        let offset = body.field(local.clone(), index);
+        fields.push(body.arithmetic(Operation::Add, start.clone(), offset));
+    }
+    let row = body.op(
+        Operation::MakeArray,
+        fields.into_iter().map(|e| (e, int())).collect(),
+        descriptor.clone(),
+    );
+    let singleton = body.op(
+        Operation::MakeArray,
+        vec![(row, descriptor)],
+        collection.clone(),
+    );
+    let rows = body.op(
+        Operation::ArrayConcat,
+        vec![
+            (input(3), collection.clone()),
+            (singleton, collection.clone()),
+        ],
+        collection.clone(),
+    );
+    let one = body.n(1);
+    let count = body.arithmetic(Operation::Sub, input(2), one);
+    let mut main = G::new(
+        "reader-program-ast",
+        vec![SemanticType::Bytes],
+        vec![collection.clone()],
+    );
+    let eight = main.n(8);
+    let count_at = main.skip_blob(eight);
+    let count_value = main.u32(count_at.clone());
+    let cursor = main.advance(count_at, 4);
+    let empty = main.op(Operation::MakeArray, vec![], collection);
+    let result = main.loop_node(
+        "reader-program-ast",
+        state,
+        vec![input(0), cursor, count_value, empty],
+    );
+    vec![
+        layout.finish(vec![local_row]),
+        condition.finish(vec![remaining]),
+        body.finish(vec![input(0), end, count, rows]),
+        main.finish(vec![result[3].clone()]),
     ]
 }
 

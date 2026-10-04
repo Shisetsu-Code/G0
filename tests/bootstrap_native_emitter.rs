@@ -1,4 +1,6 @@
 use g0::{bootstrap_compiler::*, execution::Executor, program_binary::*, value::Value};
+#[path = "support/program_fixture.rs"]
+mod fixture;
 #[test]
 fn g0_emitter_lowers_constant_graph_to_granular_native_calls() {
     let document = compiler_document();
@@ -17,7 +19,7 @@ fn g0_emitter_lowers_constant_graph_to_granular_native_calls() {
         panic!("assembly")
     };
     assert!(assembly.contains("call g0_native_primitive"), "{assembly}");
-    assert!(assembly.contains("g0_direct_entry"));
+    assert!(assembly.contains("g0_direct_name_"));
     assert!(assembly.contains("jmp g0_native_invoke"));
     assert!(!assembly.contains("g0_runtime_entry"));
 }
@@ -95,12 +97,41 @@ fn g0_native_emitter_schedules_and_wires_reversed_node_ids() {
 }
 
 #[test]
-fn g0_direct_emitter_rejects_its_unsupported_control_domain() {
-    let source = encode_program(&compiler_document()).unwrap();
+fn g0_direct_emitter_rejects_effect_domain() {
+    use g0::gir::*;
+    let mut graph = g0::editor::GraphEditor::new().graph().clone();
+    graph.nodes[0].operation = Operation::LocalExecute("artifact".into());
+    graph.nodes[0].effects.insert(Effect::LocalExecution);
+    graph.nodes[0].required_capabilities.insert(Capability::new(
+        CapabilityClass::LocalExecution,
+        "execute",
+        "artifact",
+        "scope",
+    ));
+    let source = encode_program(&ProgramDocument {
+        entry_graph: "main".into(),
+        graphs: vec![graph],
+        schemas: vec![],
+    })
+    .unwrap();
     assert!(matches!(
         compile_direct_native(&source),
         Err(BootstrapError::Output)
     ));
+}
+
+#[test]
+fn g0_native_emitter_lowers_multiple_graphs_and_control() {
+    for document in [
+        fixture::call_program(),
+        fixture::select_program(),
+        fixture::loop_program(),
+    ] {
+        let source = encode_program(&document).unwrap();
+        let assembly = compile_direct_native(&source).unwrap();
+        assert!(assembly.contains("jmp g0_native_invoke"));
+        assert!(!assembly.contains("g0_runtime_entry"));
+    }
 }
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]

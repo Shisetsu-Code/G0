@@ -38,6 +38,19 @@ negative, overflowing and out-of-bounds offsets while accepting an empty slice
 at the end. Range and byte construction charge allocation before reserving
 storage and consume cumulative steps while constructing their elements.
 
+G0G 0.9 adds `CheckedAdd`, `CheckedSub` and `CheckedMul`. These accept Integer
+inputs and return `Result<Integer(i128::MIN,i128::MAX),Bool>`: successful values
+are exact; overflow returns `Err(true)`. They allow graph algorithms to examine
+overflow explicitly without weakening the interval proofs of ordinary arithmetic.
+`ResultIsOk` returns the discriminant of any Result as Bool without unwrapping
+its payload. Both the executor and native value primitives implement these rules.
+
+Native compilation also selects the value backend for Integer ranges extending
+beyond signed i64. The scalar compatibility entry checks i64 representability;
+typed hosts retain the full i128 value. `g0_runtime_integer128(result, limbs, 2)`
+writes two uint64 limbs in low/high order, preserving the signed two's-complement
+representation. An invalid result or short buffer returns failure without writes.
+
 `MakeRecord { schema, fields }` maps fields to inputs ordered by port ID. Required
 fields must be supplied and every field type is checked against the program's
 single schema registry. `Field` returns the field value or `Option` for an
@@ -88,6 +101,7 @@ previous operation encodings and retaining readers for 0.1..0.4.
 G0G 0.6 adds scoped task spawn/join (62..63) and retains readers for 0.1..0.5.
 G0G 0.7 adds explicitly hosted task spawn/join (64..65), retaining 0.1..0.6.
 G0G 0.8 adds collection primitives (66..69), retaining 0.1..0.7.
+G0G 0.9 adds checked arithmetic and ResultIsOk (70..73), retaining 0.1..0.8.
 
 G0P 0.2 appends a schema registry after the graph list. It consists of a u32 count;
 each schema has a u32-length UTF-8 name, u32 version and u32 field count. Each field

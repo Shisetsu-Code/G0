@@ -8,6 +8,7 @@ extern NativeResult *g0_compiled_entry(const unsigned char *, size_t);
 typedef struct { uint64_t max_steps, max_value_bytes, max_call_depth; } NativeLimits;
 extern NativeResult *g0_compiled_entry_with_limits(const unsigned char *, size_t, const NativeLimits *);
 extern int32_t g0_runtime_status(const NativeResult *);
+extern int32_t g0_runtime_failure_kind(const NativeResult *);
 extern const unsigned char *g0_runtime_bytes(const NativeResult *, size_t *);
 extern void g0_runtime_free(NativeResult *);
 
@@ -21,10 +22,14 @@ int main(int argc, char **argv) {
     int failed = ferror(file);
     fclose(file);
     if (failed || length > 1048576) { free(input); return 5; }
-    const NativeLimits limits = { 16000000, UINT64_C(8) * 1024 * 1024 * 1024, 128 };
+    const NativeLimits limits = { 16000000, UINT64_C(16) * 1024 * 1024 * 1024, 128 };
     NativeResult *result = g0_compiled_entry_with_limits(input, length, &limits);
     free(input);
-    if (g0_runtime_status(result)) { g0_runtime_free(result); return 6; }
+    if (g0_runtime_status(result)) {
+        fprintf(stderr, "G0 compiler runtime failure kind: %d\n", g0_runtime_failure_kind(result));
+        g0_runtime_free(result);
+        return 6;
+    }
     size_t output_length = 0;
     const unsigned char *output = g0_runtime_bytes(result, &output_length);
     if (!output) { g0_runtime_free(result); return 7; }

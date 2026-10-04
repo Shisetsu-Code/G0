@@ -431,6 +431,24 @@ impl<'a> Executor<'a> {
                 self.charge(size as u64)?;
                 Value::from(literal)
             }
+            Operation::CheckedAdd | Operation::CheckedSub | Operation::CheckedMul => {
+                let (a, b) = (integer(0)?, integer(1)?);
+                Value::Result(
+                    match node.operation {
+                        Operation::CheckedAdd => a.checked_add(b),
+                        Operation::CheckedSub => a.checked_sub(b),
+                        _ => a.checked_mul(b),
+                    }
+                    .map(|n| Arc::new(Value::Integer(n)))
+                    .ok_or_else(|| Arc::new(Value::Bool(true))),
+                )
+            }
+            Operation::ResultIsOk => {
+                let Value::Result(result) = &args[0] else {
+                    return Err(bad());
+                };
+                Value::Bool(result.is_ok())
+            }
             Operation::Add | Operation::Sub | Operation::Mul | Operation::Div | Operation::Rem => {
                 let (a, b) = (integer(0)?, integer(1)?);
                 Value::Integer(

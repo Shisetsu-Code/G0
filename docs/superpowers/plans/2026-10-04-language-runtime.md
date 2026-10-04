@@ -51,7 +51,8 @@ Ruling: Ship explicit initial storage/transport profiles and reject advanced uns
 - [x] Scoped child task profile for owned memory effects, bounded reservations and handle containment.
 - [x] Explicit child effect-host factory and storage transaction provider, with delegated grants and completion failure propagation.
 - [x] Required hybrid key exchange and bounded typed multiplexing with independent stream closure.
-- [ ] Remaining runtime integration: aggregate x86 lowering.
+- [x] Aggregate x86 lowering: Linux CI assembles and executes primitive, Map,
+  Loop and multigraph fixtures through the direct value-runtime ABI.
 
 Task 7: initial Win32/GDI editor implemented and smoke-tested on Windows: create/connect/save/execute 42 + 7 = 49, native canvas rendered to BMP. Canonical editing model, undo/redo and bounded graph/node trace tested. Full toolbox constructors, persisted screen layout and live breakpoints remain. Collection Map/TextJoin operations added for compiler construction; order, empty input, wrong body types and execution limits tested.
 
@@ -71,7 +72,9 @@ one graph of primitive operations. Full semantic validation and program/control
 emission in G0 remain. Host limits distinguish ordinary execution from explicit
 compiler reservations. The Rust aggregate native backend has machine-level
 control, typed entries, private tagged result packs and cancellation; Linux
-assembly execution is being verified in CI.
+assembly execution passed CI run 37201209650 on Linux. The full run also passed
+Windows editor verification and three linked wrapper-bootstrap stages, including
+rejection of a legacy compiler input without publishing diagnostic text as assembly.
 
 Runtime integration: G0G 0.3 resource operations now execute through opaque host-bound linear handles. Tests cover region lifetime, bounds, foreign/stale handles, schema-contained linear fan-out, explicit task permissions, ordered concurrent spawning, one-time join and child error propagation. Native wrappers, CLI, editor and graph services route these operations to the actual resource scope. Linux and Windows CI succeeded for the preceding 336-test editor/compiler checkpoint (run 37193464436).
 

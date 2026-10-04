@@ -87,6 +87,16 @@ jobs:
           cc target/native_convert.s target/native_convert_harness.c -o target/native_convert
           ./target/native_convert
 
+  native-compiler:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Execute direct G0 compiler and native bootstrap stages
+        run: |
+          cargo build --lib
+          cargo test --test bootstrap_control --test native_aggregate_cli
+
   windows-editor:
     runs-on: windows-latest
     steps:

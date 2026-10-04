@@ -20,8 +20,7 @@ pub fn compile_native(source: &[u8]) -> Result<String, BootstrapError> {
     compile_with(COMPILER_SOURCE, source)
 }
 
-/// Executes the GIR native emitter. Its current domain is one graph with
-/// contiguous port IDs and one output per primitive node and graph.
+/// Executes the GIR native emitter for closed, pure programs.
 pub fn compile_direct_native(source: &[u8]) -> Result<String, BootstrapError> {
     if source.len() > MAX_SOURCE_BYTES {
         return Err(BootstrapError::TooLarge);
@@ -40,7 +39,7 @@ fn compile_direct_inner(source: &[u8]) -> Result<String, BootstrapError> {
         Executor::new(&contract, compiler_limits()).map_err(BootstrapError::Runtime)?;
     let input = Value::Bytes(source.into());
     let eligible = executor
-        .run_graph("direct-domain", vec![input.clone()])
+        .run_graph("control-domain", vec![input.clone()])
         .map_err(BootstrapError::Runtime)?;
     if eligible != [Value::Bool(true)] {
         return Err(BootstrapError::Output);
@@ -117,7 +116,7 @@ pub fn compiler_limits() -> ExecutionLimits {
         max_steps: 16_000_000,
         // This is cumulative logical allocation, including graph metadata on
         // every call and shared byte values forwarded through reader loops.
-        max_value_bytes: 8 * 1024 * 1024 * 1024,
+        max_value_bytes: 16 * 1024 * 1024 * 1024,
         max_call_depth: 128,
     }
 }
@@ -208,11 +207,7 @@ pub fn compiler_document() -> ProgramDocument {
         )],
         SemanticType::Text,
     );
-    let prefix = byte.text(".byte ");
-    let suffix = byte.text("\n");
-    let line = byte.concat(prefix, number);
-    let line = byte.concat(line, suffix);
-    let byte = byte.finish(line);
+    let byte = byte.finish(number);
     let mut main = Builder::new("emit-wrapper", SemanticType::Bytes);
     let length_type = SemanticType::Integer(IntegerType {
         min: 0,
@@ -233,7 +228,7 @@ pub fn compiler_document() -> ProgramDocument {
     let header = main.concat(prefix, number.clone());
     let header = main.concat(header, suffix);
     let header = main.concat(header, number);
-    let suffix=main.text(", %rsi\n    jmp g0_runtime_entry_with_limits\n.size g0_compiled_entry_with_limits, .-g0_compiled_entry_with_limits\n.section .rodata\n.Lg0_program:\n");
+    let suffix=main.text(", %rsi\n    jmp g0_runtime_entry_with_limits\n.size g0_compiled_entry_with_limits, .-g0_compiled_entry_with_limits\n.section .rodata\n.Lg0_program:\n.byte ");
     let header = main.concat(header, suffix);
     let texts = SemanticType::Slice(Box::new(SemanticType::Text));
     let lines = main.op(
@@ -243,14 +238,14 @@ pub fn compiler_document() -> ProgramDocument {
         vec![(SourceEndpoint::GraphInput(0), SemanticType::Bytes)],
         texts.clone(),
     );
-    let separator = main.text("");
+    let separator = main.text("\n.byte ");
     let lines = main.op(
         Operation::TextJoin,
         vec![(lines, texts), (separator, SemanticType::Text)],
         SemanticType::Text,
     );
     let assembly = main.concat(header, lines);
-    let footer = main.text(".section .note.GNU-stack,\"\",@progbits\n");
+    let footer = main.text("\n.section .note.GNU-stack,\"\",@progbits\n");
     let assembly = main.concat(assembly, footer);
     let mut entry = Builder::new("compile", SemanticType::Bytes);
     let valid = entry.op(
@@ -273,11 +268,14 @@ pub fn compiler_document() -> ProgramDocument {
     entry.graph.nodes.last_mut().unwrap().inputs[0].name = "selector".into();
     let mut invalid = Builder::new("invalid-container", SemanticType::Bytes);
     let message = invalid.text("G0 compiler: invalid container");
+    let mut direct=Builder::new("compile-direct",SemanticType::Bytes);
+    let native=direct.op(Operation::Subgraph("control-compile".into()),vec![(SourceEndpoint::GraphInput(0),SemanticType::Bytes)],SemanticType::Text);
     let mut graphs = vec![
         entry.finish(result),
         main.finish(assembly),
         byte,
         invalid.finish(message),
+        direct.finish(native),
     ];
     graphs.extend(parser::graphs());
     ProgramDocument {

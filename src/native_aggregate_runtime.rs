@@ -198,6 +198,24 @@ impl NativeContext {
                 }
                 Value::from(literal)
             }
+            Operation::CheckedAdd | Operation::CheckedSub | Operation::CheckedMul => {
+                let (a, b) = (integer(0)?, integer(1)?);
+                Value::Result(
+                    match node.operation {
+                        Operation::CheckedAdd => a.checked_add(b),
+                        Operation::CheckedSub => a.checked_sub(b),
+                        _ => a.checked_mul(b),
+                    }
+                    .map(|n| Arc::new(Value::Integer(n)))
+                    .ok_or_else(|| Arc::new(Value::Bool(true))),
+                )
+            }
+            Operation::ResultIsOk => {
+                let Value::Result(result) = &args[0] else {
+                    return Err(bad());
+                };
+                Value::Bool(result.is_ok())
+            }
             Operation::Add => Value::Integer(
                 integer(0)?
                     .checked_add(integer(1)?)
@@ -538,7 +556,10 @@ pub unsafe extern "C" fn g0_native_enter(context: *mut NativeContext, graph: u64
         .max(1);
     let Some(frame) = slots
         .checked_add(args)
-        .and_then(|n| n.checked_add(8))
+        // Reserve saved registers and control locals for both native emitters.
+        // The graph-compiler ABI uses four callee-saved registers and six
+        // control slots, in addition to alignment and fixed frame metadata.
+        .and_then(|n| n.checked_add(16))
         .and_then(|n| n.checked_mul(8))
         .map(|n| (n as u64).div_ceil(16) * 16)
     else {

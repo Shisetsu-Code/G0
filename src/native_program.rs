@@ -47,11 +47,12 @@ pub fn requires_aggregate_values(graph: &crate::gir::Graph) -> bool {
                 .iter()
                 .flat_map(|node| node.inputs.iter().chain(&node.outputs)),
         )
-        .any(|port| {
-            !matches!(
-                port.ty,
-                crate::gir::SemanticType::Bool | crate::gir::SemanticType::Integer(_)
-            )
+        .any(|port| match &port.ty {
+            crate::gir::SemanticType::Bool => false,
+            crate::gir::SemanticType::Integer(t) => {
+                t.min < i128::from(i64::MIN) || t.max > i128::from(i64::MAX)
+            }
+            _ => true,
         })
 }
 

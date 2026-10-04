@@ -39,7 +39,7 @@ impl NativeLimits {
         if self.max_steps == 0
             || self.max_steps > 16_000_000
             || self.max_value_bytes == 0
-            || self.max_value_bytes > 8 * 1024 * 1024 * 1024
+            || self.max_value_bytes > 16 * 1024 * 1024 * 1024
             || !(1..=128).contains(&self.max_call_depth)
         {
             return Err(NativeRuntimeError::TooLarge);
@@ -106,6 +106,32 @@ pub fn execute_embedded_with_limits(
 
 pub struct NativeResult {
     pub(crate) output: Result<Vec<Value>, NativeRuntimeError>,
+}
+
+/// Bounded diagnostic codes: 0 success, 1 steps, 2 memory, 3 call depth,
+/// 4 cancellation, 5 input/interface/host limits, 6 program/runtime failure,
+/// 7 null handle. This exposes no graph names, values or protected data.
+///
+/// # Safety
+/// A nonnull handle must be live and returned by this runtime.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn g0_runtime_failure_kind(result: *const NativeResult) -> i32 {
+    let Some(result) = (unsafe { result.as_ref() }) else {
+        return 7;
+    };
+    match &result.output {
+        Ok(_) => 0,
+        Err(NativeRuntimeError::Runtime(RuntimeError::StepLimit)) => 1,
+        Err(NativeRuntimeError::Runtime(RuntimeError::MemoryLimit)) => 2,
+        Err(NativeRuntimeError::Runtime(RuntimeError::CallDepth)) => 3,
+        Err(NativeRuntimeError::Runtime(RuntimeError::Cancelled)) => 4,
+        Err(
+            NativeRuntimeError::TooLarge
+            | NativeRuntimeError::EntryInterface
+            | NativeRuntimeError::Input,
+        ) => 5,
+        Err(_) => 6,
+    }
 }
 
 /// # Safety
@@ -221,6 +247,32 @@ pub unsafe extern "C" fn g0_runtime_integer(result: *const NativeResult, output:
         && let Ok(value) = i64::try_from(*value)
     {
         unsafe { *output = value };
+        return 0;
+    }
+    1
+}
+/// Writes the exact signed i128 as two unsigned two's-complement limbs, low
+/// limb first. Failure leaves the caller's buffer unchanged.
+/// # Safety
+/// `result` must be null or live. A nonnull output must refer to writable
+/// storage for at least output_len u64 values until this call returns.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn g0_runtime_integer128(
+    result: *const NativeResult,
+    output: *mut u64,
+    output_len: usize,
+) -> i32 {
+    if result.is_null() || output.is_null() || output_len < 2 {
+        return 1;
+    }
+    if let Ok(values) = &unsafe { &*result }.output
+        && let [Value::Integer(value)] = values.as_slice()
+    {
+        let bits = *value as u128;
+        unsafe {
+            output.write(bits as u64);
+            output.add(1).write((bits >> 64) as u64);
+        }
         return 0;
     }
     1

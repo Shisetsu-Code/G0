@@ -20,12 +20,16 @@ pub fn validate_node(node: &Node, schemas: Option<&[DataSchema]>) -> Result<(), 
         | Operation::TextJoin
         | Operation::BytesConcat
         | Operation::ArrayConcat
+        | Operation::CheckedAdd
+        | Operation::CheckedSub
+        | Operation::CheckedMul
         | Operation::UnwrapOr => 2,
         Operation::BytesSlice => 3,
         Operation::None => 0,
         Operation::Length
         | Operation::Range
         | Operation::BytesFromArray
+        | Operation::ResultIsOk
         | Operation::EncodeUtf8
         | Operation::DecodeUtf8
         | Operation::FormatInteger
@@ -50,6 +54,17 @@ pub fn validate_node(node: &Node, schemas: Option<&[DataSchema]>) -> Result<(), 
     };
     let schema = |name: &str| schemas.and_then(|schemas| schemas.iter().find(|s| s.name == name));
     let valid = match op {
+        Operation::CheckedAdd | Operation::CheckedSub | Operation::CheckedMul => {
+            inputs
+                .iter()
+                .all(|p| matches!(p.ty, SemanticType::Integer(_)))
+                && matches!(output, SemanticType::Result(ok, err)
+                    if matches!(ok.as_ref(), SemanticType::Integer(t) if t.min == i128::MIN && t.max == i128::MAX)
+                    && err.as_ref() == &SemanticType::Bool)
+        }
+        Operation::ResultIsOk => {
+            matches!(input(0), SemanticType::Result(_, _)) && output == &SemanticType::Bool
+        }
         Operation::MakeArray => match output {
             SemanticType::Array(t, len) | SemanticType::Vector(t, len) => {
                 *len == inputs.len() && inputs.iter().all(|p| type_assignable(&p.ty, t))
