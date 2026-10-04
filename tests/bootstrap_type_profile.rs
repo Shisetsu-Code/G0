@@ -23,7 +23,7 @@ fn native_type_depth_accepts_wide_trees_and_enforces_exact_depth_128() {
             .unwrap(),
         vec![Value::Bool(true)]
     );
-    for (depth, valid) in [(128, true), (129, false)] {
+    for (depth, valid) in [(127, true), (128, false), (129, false)] {
         let mut source = vec![14; depth];
         source.push(0);
         assert_eq!(

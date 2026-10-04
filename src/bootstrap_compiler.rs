@@ -16,7 +16,6 @@ pub const MAX_SOURCE_BYTES: usize = 4 * 1024 * 1024;
 pub const HOST_STACK_BYTES: usize = 16 * 1024 * 1024;
 pub const COMPILER_SOURCE: &[u8] = include_bytes!("../compiler/native-wrapper.g0p");
 
-
 pub fn compile_native(source: &[u8]) -> Result<String, BootstrapError> {
     compile_with(COMPILER_SOURCE, source)
 }
@@ -43,9 +42,7 @@ fn compile_direct_inner(source: &[u8]) -> Result<String, BootstrapError> {
         .run_graph("compile-direct", vec![input])
         .map_err(BootstrapError::Runtime)?;
     match output.as_slice() {
-        [Value::Text(text)] if !text.starts_with("G0 compiler:") => {
-            Ok(text.to_string())
-        }
+        [Value::Text(text)] if !text.starts_with("G0 compiler:") => Ok(text.to_string()),
         _ => Err(BootstrapError::Output),
     }
 }
@@ -99,9 +96,7 @@ fn compile_inner(compiler: &[u8], source: &[u8]) -> Result<String, BootstrapErro
         .run_graph(&document.entry_graph, vec![Value::Bytes(source.into())])
         .map_err(BootstrapError::Runtime)?;
     match output.as_slice() {
-        [Value::Text(text)] if !text.starts_with("G0 compiler:") => {
-            Ok(text.to_string())
-        }
+        [Value::Text(text)] if !text.starts_with("G0 compiler:") => Ok(text.to_string()),
         _ => Err(BootstrapError::Output),
     }
 }
@@ -254,28 +249,155 @@ pub fn compiler_document() -> ProgramDocument {
     entry.graph.nodes.last_mut().unwrap().inputs[0].name = "selector".into();
     let mut invalid = Builder::new("invalid-container", SemanticType::Bytes);
     let message = invalid.text("G0 compiler: invalid container");
-    let mut direct=Builder::new("compile-direct",SemanticType::Bytes);
-    let valid=direct.op(Operation::Subgraph("reader-container".into()),vec![(SourceEndpoint::GraphInput(0),SemanticType::Bytes)],SemanticType::Bool);
-    let native=direct.op(Operation::Select{when_true:"compile-direct-validated".into(),when_false:"invalid-container".into()},vec![(valid,SemanticType::Bool),(SourceEndpoint::GraphInput(0),SemanticType::Bytes)],SemanticType::Text);
-    let node=direct.graph.nodes.last_mut().unwrap();node.inputs[0].name="selector".into();node.inputs[1].name="p0".into();
-    let mut checked=Builder::new("compile-direct-validated",SemanticType::Bytes);
-    let domain=checked.op(Operation::Subgraph("control-domain".into()),vec![(SourceEndpoint::GraphInput(0),SemanticType::Bytes)],SemanticType::Bool);
-    let names=checked.op(Operation::Subgraph("validator-program-names".into()),vec![(SourceEndpoint::GraphInput(0),SemanticType::Bytes)],SemanticType::Bool);
-    let domain=checked.op(Operation::And,vec![(domain,SemanticType::Bool),(names,SemanticType::Bool)],SemanticType::Bool);
-    let references=checked.op(Operation::Subgraph("validator-program-references".into()),vec![(SourceEndpoint::GraphInput(0),SemanticType::Bytes)],SemanticType::Bool);
-    let domain=checked.op(Operation::And,vec![(domain,SemanticType::Bool),(references,SemanticType::Bool)],SemanticType::Bool);
-    let acyclic=checked.op(Operation::Subgraph("validator-program-callcycles-fast".into()),vec![(SourceEndpoint::GraphInput(0),SemanticType::Bytes)],SemanticType::Bool);
-    let domain=checked.op(Operation::And,vec![(domain,SemanticType::Bool),(acyclic,SemanticType::Bool)],SemanticType::Bool);
-    let schemas=checked.op(Operation::Subgraph("validator-program-schemas".into()),vec![(SourceEndpoint::GraphInput(0),SemanticType::Bytes)],SemanticType::Bool);
-    let domain=checked.op(Operation::And,vec![(domain,SemanticType::Bool),(schemas,SemanticType::Bool)],SemanticType::Bool);
-    let schema_types=checked.op(Operation::Subgraph("validator-program-schema-types".into()),vec![(SourceEndpoint::GraphInput(0),SemanticType::Bytes)],SemanticType::Bool);
-    let domain=checked.op(Operation::And,vec![(domain,SemanticType::Bool),(schema_types,SemanticType::Bool)],SemanticType::Bool);
-    let port_types=checked.op(Operation::Subgraph("validator-program-port-types".into()),vec![(SourceEndpoint::GraphInput(0),SemanticType::Bytes)],SemanticType::Bool);
-    let domain=checked.op(Operation::And,vec![(domain,SemanticType::Bool),(port_types,SemanticType::Bool)],SemanticType::Bool);
-    let emitted=checked.op(Operation::Select{when_true:"control-compile".into(),when_false:"invalid-native-domain".into()},vec![(domain,SemanticType::Bool),(SourceEndpoint::GraphInput(0),SemanticType::Bytes)],SemanticType::Text);
-    let node=checked.graph.nodes.last_mut().unwrap();node.inputs[0].name="selector".into();node.inputs[1].name="p0".into();
-    let mut unsupported=Builder::new("invalid-native-domain",SemanticType::Bytes);let error=unsupported.text("G0 compiler: unsupported native profile");
-    let mut legacy=Builder::new("compile",SemanticType::Bytes);let wrapper=legacy.op(Operation::Subgraph("compile-wrapper".into()),vec![(SourceEndpoint::GraphInput(0),SemanticType::Bytes)],SemanticType::Text);
+    let mut direct = Builder::new("compile-direct", SemanticType::Bytes);
+    let valid = direct.op(
+        Operation::Subgraph("reader-container".into()),
+        vec![(SourceEndpoint::GraphInput(0), SemanticType::Bytes)],
+        SemanticType::Bool,
+    );
+    let native = direct.op(
+        Operation::Select {
+            when_true: "compile-direct-validated".into(),
+            when_false: "invalid-container".into(),
+        },
+        vec![
+            (valid, SemanticType::Bool),
+            (SourceEndpoint::GraphInput(0), SemanticType::Bytes),
+        ],
+        SemanticType::Text,
+    );
+    let node = direct.graph.nodes.last_mut().unwrap();
+    node.inputs[0].name = "selector".into();
+    node.inputs[1].name = "p0".into();
+    let mut checked = Builder::new("compile-direct-validated", SemanticType::Bytes);
+    let table = SemanticType::Slice(Box::new(SemanticType::Slice(Box::new(
+        SemanticType::Integer(IntegerType {
+            min: 0,
+            max: 1_i128 << 48,
+        }),
+    ))));
+    let program_rows = checked.op(
+        Operation::Subgraph("reader-program-ast".into()),
+        vec![(SourceEndpoint::GraphInput(0), SemanticType::Bytes)],
+        table.clone(),
+    );
+    let schema_rows = checked.op(
+        Operation::Subgraph("reader-program-schemas".into()),
+        vec![(SourceEndpoint::GraphInput(0), SemanticType::Bytes)],
+        table.clone(),
+    );
+    let context_args = vec![
+        (SourceEndpoint::GraphInput(0), SemanticType::Bytes),
+        (program_rows.clone(), table.clone()),
+        (schema_rows.clone(), table.clone()),
+    ];
+    let domain = checked.op(
+        Operation::Subgraph("control-domain-context".into()),
+        context_args.clone(),
+        SemanticType::Bool,
+    );
+    let names = checked.op(
+        Operation::Subgraph("validator-program-names-context".into()),
+        context_args.clone(),
+        SemanticType::Bool,
+    );
+    let domain = checked.op(
+        Operation::And,
+        vec![(domain, SemanticType::Bool), (names, SemanticType::Bool)],
+        SemanticType::Bool,
+    );
+    let references = checked.op(
+        Operation::Subgraph("validator-program-references-context".into()),
+        context_args.clone(),
+        SemanticType::Bool,
+    );
+    let domain = checked.op(
+        Operation::And,
+        vec![
+            (domain, SemanticType::Bool),
+            (references, SemanticType::Bool),
+        ],
+        SemanticType::Bool,
+    );
+    let acyclic = checked.op(
+        Operation::Subgraph("validator-program-callcycles-fast-context".into()),
+        context_args.clone(),
+        SemanticType::Bool,
+    );
+    let domain = checked.op(
+        Operation::And,
+        vec![(domain, SemanticType::Bool), (acyclic, SemanticType::Bool)],
+        SemanticType::Bool,
+    );
+    let schemas = checked.op(
+        Operation::Subgraph("validator-program-schemas-context".into()),
+        context_args.clone(),
+        SemanticType::Bool,
+    );
+    let domain = checked.op(
+        Operation::And,
+        vec![(domain, SemanticType::Bool), (schemas, SemanticType::Bool)],
+        SemanticType::Bool,
+    );
+    let schema_types = checked.op(
+        Operation::Subgraph("validator-program-schema-types-context".into()),
+        context_args.clone(),
+        SemanticType::Bool,
+    );
+    let domain = checked.op(
+        Operation::And,
+        vec![
+            (domain, SemanticType::Bool),
+            (schema_types, SemanticType::Bool),
+        ],
+        SemanticType::Bool,
+    );
+    let port_types = checked.op(
+        Operation::Subgraph("validator-program-port-types-context".into()),
+        context_args.clone(),
+        SemanticType::Bool,
+    );
+    let domain = checked.op(
+        Operation::And,
+        vec![
+            (domain, SemanticType::Bool),
+            (port_types, SemanticType::Bool),
+        ],
+        SemanticType::Bool,
+    );
+    let emitted = checked.op(
+        Operation::Select {
+            when_true: "control-compile-context".into(),
+            when_false: "invalid-native-context".into(),
+        },
+        vec![
+            (domain, SemanticType::Bool),
+            (SourceEndpoint::GraphInput(0), SemanticType::Bytes),
+            (program_rows, table.clone()),
+            (schema_rows, table.clone()),
+        ],
+        SemanticType::Text,
+    );
+    let node = checked.graph.nodes.last_mut().unwrap();
+    node.inputs[0].name = "selector".into();
+    node.inputs[1].name = "p0".into();
+    node.inputs[2].name = "p1".into();
+    node.inputs[3].name = "p2".into();
+    let mut unsupported = Builder::new("invalid-native-domain", SemanticType::Bytes);
+    let error = unsupported.text("G0 compiler: unsupported native profile");
+    let mut invalid_context = Builder::new("invalid-native-context", SemanticType::Bytes);
+    invalid_context.graph.inputs = vec![
+        port(0, SemanticType::Bytes),
+        port(1, table.clone()),
+        port(2, table),
+    ];
+    let context_error = invalid_context.text("G0 compiler: unsupported native profile");
+    let mut legacy = Builder::new("compile", SemanticType::Bytes);
+    let wrapper = legacy.op(
+        Operation::Subgraph("compile-wrapper".into()),
+        vec![(SourceEndpoint::GraphInput(0), SemanticType::Bytes)],
+        SemanticType::Text,
+    );
     let mut graphs = vec![
         entry.finish(result),
         main.finish(assembly),
@@ -284,9 +406,11 @@ pub fn compiler_document() -> ProgramDocument {
         direct.finish(native),
         checked.finish(emitted),
         unsupported.finish(error),
+        invalid_context.finish(context_error),
         legacy.finish(wrapper),
     ];
     graphs.extend(parser::graphs());
+    graphs.extend(parser::contextual_graphs(&graphs));
     ProgramDocument {
         entry_graph: "compile".into(),
         graphs,

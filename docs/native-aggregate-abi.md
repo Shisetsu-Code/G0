@@ -73,6 +73,14 @@ metadata for zero-output calls; frame bytes consume
 that budget while a call is active. Individual frames are limited to one MiB,
 active native frame accounting is limited to four MiB, and call depth is capped
 at 128. Collection sizes are checked against available memory before allocation.
+Graph frame sizes and graph input/output port ordinals are cached lazily from
+immutable program metadata. The first eligible entry charges a bounded dense
+metadata table; each used graph additionally charges its ordinal vectors once,
+before allocation. Eligibility requires room for the frame and twice the new
+cache footprint, leaving working space beyond the cache. Tight budgets use the
+original sorting and frame calculation path. Cached metadata consumes the value
+budget, so an execution that enables caching can exhaust memory earlier than
+one without it. Value production charges and recursive type checks are unchanged.
 `NativeContext::cancellation` gives Rust hosts a shared cancellation token. Calls
 and primitive/collection iteration ticks stop when it is cancelled. An error is
 sticky, preserves the first graph/node diagnostic where applicable,

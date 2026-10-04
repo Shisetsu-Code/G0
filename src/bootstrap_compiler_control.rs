@@ -1409,6 +1409,12 @@ fn graph_emission_graphs() -> Vec<Graph> {
         vec![edges.clone()],
         rows(),
     );
+    let interval_ordered = call(
+        &mut main,
+        "control-fast-node-intervals",
+        vec![ordered, cached_edges.clone()],
+        rows(),
+    );
     let input_ports = main.field(input(2), 3);
     let output_ports = main.field(input(2), 4);
     let outputs = main.u32(output_ports.clone());
@@ -1495,7 +1501,7 @@ fn graph_emission_graphs() -> Vec<Graph> {
             nodes,
             cached_edges.clone(),
             cached_slots.clone(),
-            ordered,
+            interval_ordered,
         ],
         SemanticType::Text,
     );

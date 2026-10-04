@@ -189,12 +189,6 @@ pub(super) fn graphs() -> Vec<Graph> {
     let children = body.compare(Operation::Gt, arity.clone(), zero);
     let bound = body.n(128);
     let depth_ok = body.compare(Operation::Lt, input(4), bound.clone());
-    let leaf = body.op(
-        Operation::Not,
-        vec![(children.clone(), SemanticType::Bool)],
-        SemanticType::Bool,
-    );
-    let depth_ok = body.logic(Operation::Or, leaf, depth_ok);
     let valid = body.and(input(7), supported);
     let valid = body.and(valid, named_valid);
     let valid = body.and(valid, payload_valid);

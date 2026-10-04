@@ -52,7 +52,7 @@ requires graph names in canonical UTF-8 order and an entry with at most one inpu
 and exactly one output. G0 checks name uniqueness, entry resolution, exact control
 interfaces, graph references and call cycles. Schema checks cover registry names,
 versions, tags, required fields, named type references, Record/Variant operations
-and Match interfaces. A subtree stack enforces type depth 128 independently of
+and Match interfaces. A subtree stack enforces the 128-level type limit independently of
 tree width. Nested reference, ownership, permission and secret types remain
 outside this pure profile and are rejected before emission.
 The Rust bootstrap host still validates source as an additional guard. Independent
@@ -115,7 +115,12 @@ container through nested reader calls. Byte emission uses 64 KiB chunks so a
 large source does not create an array exceeding the runtime's one-million-value
 traversal bound. The emitted assembly byte protocol remains unchanged.
 Program AST construction also slices graph blobs and rebases its offsets to the
-original container. The example's `profile` command runs the current definition
+original container. The direct pipeline constructs program and schema tables
+once and supplies them to contextual validation and emission graphs. Its global
+port-type proof retains all type and named-reference checks; contextual domain
+graphs check ordering, operations and effects without repeating that proof.
+Standalone domain graphs retain their independent type checks.
+The example's `profile` command runs the current definition
 with a diagnostic 64 GiB allocation ceiling and 64 million steps, and prints
 steps and logical bytes;
 this diagnostic ceiling does not alter the compiler or ordinary runtime budgets.

@@ -5,6 +5,8 @@ use super::*;
 mod bytes;
 #[path = "bootstrap_compiler_callcycles.rs"]
 mod callcycles;
+#[path = "bootstrap_compiler_context.rs"]
+mod context;
 #[path = "bootstrap_compiler_control.rs"]
 mod control;
 #[path = "bootstrap_compiler_control_fast.rs"]
@@ -31,6 +33,9 @@ fn int() -> SemanticType {
         min: 0,
         max: 1_i128 << 48,
     })
+}
+pub(super) fn contextual_graphs(definitions: &[Graph]) -> Vec<Graph> {
+    context::graphs(definitions)
 }
 fn input(n: u16) -> SourceEndpoint {
     SourceEndpoint::GraphInput(n)
@@ -1156,36 +1161,37 @@ fn integer_bounds_graph() -> Graph {
         vec![SemanticType::Bytes, int()],
         vec![SemanticType::Bool],
     );
-    let mut less = graph.bool(false);
-    let mut equal = graph.bool(true);
-    for index in (0..16).rev() {
-        let minimum_at = graph.advance(input(1), index);
-        let maximum_at = graph.advance(input(1), 16 + index);
-        let mut minimum = graph.byte(minimum_at);
-        let mut maximum = graph.byte(maximum_at);
-        if index == 15 {
-            let bias = graph.n(128);
-            minimum = graph.arithmetic(Operation::Add, minimum, bias.clone());
-            maximum = graph.arithmetic(Operation::Add, maximum, bias);
-            let modulus = graph.n(256);
-            minimum = graph.op(
-                Operation::Rem,
-                vec![(minimum, int()), (modulus.clone(), int())],
-                int(),
-            );
-            maximum = graph.op(
-                Operation::Rem,
-                vec![(maximum, int()), (modulus, int())],
-                int(),
-            );
-        }
-        let byte_less = graph.compare(Operation::Lt, minimum.clone(), maximum.clone());
-        let first_difference = graph.and(equal.clone(), byte_less);
-        less = graph.logic(Operation::Or, less, first_difference);
-        let byte_equal = graph.compare(Operation::Eq, minimum, maximum);
-        equal = graph.and(equal, byte_equal);
-    }
-    let valid = graph.logic(Operation::Or, less, equal);
+    let length = graph.n(16);
+    let maximum_at = graph.advance(input(1), 16);
+    let minimum = graph.op(
+        Operation::BytesSlice,
+        vec![
+            (input(0), SemanticType::Bytes),
+            (input(1), int()),
+            (length.clone(), int()),
+        ],
+        SemanticType::Bytes,
+    );
+    let maximum = graph.op(
+        Operation::BytesSlice,
+        vec![
+            (input(0), SemanticType::Bytes),
+            (maximum_at, int()),
+            (length, int()),
+        ],
+        SemanticType::Bytes,
+    );
+    let minimum = graph.op(
+        Operation::DecodeInteger128Le,
+        vec![(minimum, SemanticType::Bytes)],
+        full_integer(),
+    );
+    let maximum = graph.op(
+        Operation::DecodeInteger128Le,
+        vec![(maximum, SemanticType::Bytes)],
+        full_integer(),
+    );
+    let valid = graph.compare(Operation::Le, minimum, maximum);
     graph.finish(vec![valid])
 }
 

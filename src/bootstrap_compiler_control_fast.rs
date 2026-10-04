@@ -600,45 +600,71 @@ fn argument_graphs() -> Vec<Graph> {
         input(6),
         chunks,
     ]));
+    for (name, interval) in [
+        ("control-fast-arguments-binary", false),
+        ("control-fast-arguments-interval", true),
+    ] {
+        let mut known = G::new(name, base.clone(), vec![SemanticType::Text]);
+        let (start, stop) = if interval {
+            (known.field(input(1), 9), known.field(input(1), 10))
+        } else {
+            let id = known.field(input(1), 0);
+            let zero = known.n(0);
+            let start = call(
+                &mut known,
+                "control-fast-edge-bound",
+                vec![input(3), id.clone(), zero.clone()],
+                int(),
+            );
+            let next = known.advance(id, 1);
+            let stop = call(
+                &mut known,
+                "control-fast-edge-bound",
+                vec![input(3), next, zero],
+                int(),
+            );
+            (start, stop)
+        };
+        let e = array(&mut known, vec![], texts());
+        let out = known.loop_node(
+            "control-fast-argument-range",
+            state.clone(),
+            vec![
+                input(0),
+                input(1),
+                input(2),
+                input(3),
+                input(4),
+                start,
+                stop,
+                e,
+            ],
+        );
+        let separator = known.text("");
+        let result = known.op(
+            Operation::TextJoin,
+            vec![(out[7].clone(), texts()), (separator, SemanticType::Text)],
+            SemanticType::Text,
+        );
+        graphs.push(known.finish(vec![result]));
+    }
     let mut known = G::new(
         "control-fast-arguments-known",
         base.clone(),
         vec![SemanticType::Text],
     );
-    let id = known.field(input(1), 0);
-    let zero = known.n(0);
-    let start = call(
+    let valid = call(
         &mut known,
-        "control-fast-edge-bound",
-        vec![input(3), id.clone(), zero.clone()],
-        int(),
+        "control-fast-interval-valid",
+        vec![input(1), input(3)],
+        SemanticType::Bool,
     );
-    let next = known.advance(id, 1);
-    let stop = call(
+    let result = choose(
         &mut known,
-        "control-fast-edge-bound",
-        vec![input(3), next, zero],
-        int(),
-    );
-    let e = array(&mut known, vec![], texts());
-    let out = known.loop_node(
-        "control-fast-argument-range",
-        state,
-        vec![
-            input(0),
-            input(1),
-            input(2),
-            input(3),
-            input(4),
-            start,
-            stop,
-            e,
-        ],
-    );
-    let separator = known.text("");
-    let result = known.op(
-        Operation::TextJoin,
-        vec![(out[7].clone(), texts()), (separator, SemanticType::Text)],
+        valid,
+        "control-fast-arguments-interval",
+        "control-fast-arguments-binary",
+        (0..5).map(input).collect(),
         SemanticType::Text,
     );
     graphs.push(known.finish(vec![result]));
@@ -665,10 +691,147 @@ fn argument_graphs() -> Vec<Graph> {
     graphs
 }
 
+fn interval_graphs() -> Vec<Graph> {
+    let mut graphs = vec![];
+    let prefix = "control-fast-edge-cursor";
+    let state = vec![rows(), int(), int()];
+    let mut condition = G::new(
+        &format!("{prefix}-condition"),
+        state.clone(),
+        vec![SemanticType::Bool],
+    );
+    let count = condition.length(input(0));
+    let inside = condition.compare(Operation::Lt, input(1), count);
+    let key = call(
+        &mut condition,
+        "control-fast-edge-key",
+        vec![input(0), input(1)],
+        int(),
+    );
+    let before = condition.compare(Operation::Lt, key, input(2));
+    let more = condition.and(inside, before);
+    graphs.push(condition.finish(vec![more]));
+    let mut body = G::new(&format!("{prefix}-body"), state.clone(), state.clone());
+    let next = body.advance(input(1), 1);
+    graphs.push(body.finish(vec![input(0), next, input(2)]));
+    let mut cursor = G::new(prefix, state.clone(), vec![int()]);
+    let out = cursor.loop_node(prefix, state, (0..3).map(input).collect());
+    graphs.push(cursor.finish(vec![out[1].clone()]));
+
+    let prefix = "control-fast-node-intervals-build";
+    let state = vec![rows(), rows(), int(), int(), rows()];
+    let mut condition = G::new(
+        &format!("{prefix}-condition"),
+        state.clone(),
+        vec![SemanticType::Bool],
+    );
+    let count = condition.length(input(0));
+    let more = condition.compare(Operation::Lt, input(2), count);
+    graphs.push(condition.finish(vec![more]));
+    let mut body = G::new(&format!("{prefix}-body"), state.clone(), state.clone());
+    let node = body.index(input(0), input(2));
+    let id = body.field(node.clone(), 0);
+    let start = call(
+        &mut body,
+        "control-fast-edge-cursor",
+        vec![input(1), input(3), id.clone()],
+        int(),
+    );
+    let next_id = body.advance(id, 1);
+    let stop = call(
+        &mut body,
+        "control-fast-edge-cursor",
+        vec![input(1), start.clone(), next_id],
+        int(),
+    );
+    let marker = body.n(1_i128 << 32);
+    let suffix = array(&mut body, vec![marker, start, stop.clone()], seq());
+    let node = body.op(
+        Operation::ArrayConcat,
+        vec![(node, seq()), (suffix, seq())],
+        seq(),
+    );
+    let output = append(&mut body, input(4), node, rows());
+    let next = body.advance(input(2), 1);
+    graphs.push(body.finish(vec![input(0), input(1), next, stop, output]));
+    let mut build = G::new(prefix, vec![rows(), rows()], vec![rows()]);
+    let zero = build.n(0);
+    let one = build.n(1);
+    let empty = array(&mut build, vec![], rows());
+    let out = build.loop_node(prefix, state, vec![input(0), input(1), zero, one, empty]);
+    graphs.push(build.finish(vec![out[4].clone()]));
+    let identity = G::new(
+        "control-fast-node-intervals-identity",
+        vec![rows(), rows()],
+        vec![rows()],
+    );
+    graphs.push(identity.finish(vec![input(0)]));
+    let mut main = G::new(
+        "control-fast-node-intervals",
+        vec![rows(), rows()],
+        vec![rows()],
+    );
+    let ordered = call(
+        &mut main,
+        "scheduler-fast-nodes",
+        vec![input(0)],
+        SemanticType::Bool,
+    );
+    let zero = main.n(0);
+    let header = main.index(input(1), zero);
+    let source = main.field(header.clone(), 0);
+    let flag = main.field(header.clone(), 1);
+    let target = main.field(header.clone(), 3);
+    let size = main.length(header);
+    let source = eq(&mut main, source, 2);
+    let target = eq(&mut main, target, 2);
+    let flag = eq(&mut main, flag, 1);
+    let shape = eq(&mut main, size, 6);
+    let valid = main.and(source, target);
+    let valid = main.and(valid, flag);
+    let valid = main.and(valid, shape);
+    let valid = main.and(valid, ordered);
+    let result = choose(
+        &mut main,
+        valid,
+        "control-fast-node-intervals-build",
+        "control-fast-node-intervals-identity",
+        vec![input(0), input(1)],
+        rows(),
+    );
+    graphs.push(main.finish(vec![result]));
+
+    // This metadata is produced only after scheduling validated GIR. Original
+    // descriptor fields stay intact; malformed/private markers use old lookup.
+    let mut valid = G::new(
+        "control-fast-interval-valid",
+        vec![seq(), rows()],
+        vec![SemanticType::Bool],
+    );
+    let shape = valid.length(input(0));
+    let shape = eq(&mut valid, shape, 11);
+    let marker = valid.field(input(0), 8);
+    let marker = eq(&mut valid, marker, 1_i128 << 32);
+    let start = valid.field(input(0), 9);
+    let stop = valid.field(input(0), 10);
+    let zero = valid.n(0);
+    let nonzero = valid.compare(Operation::Gt, start.clone(), zero);
+    let ordered = valid.compare(Operation::Le, start, stop.clone());
+    let count = valid.length(input(1));
+    let bounded = valid.compare(Operation::Le, stop, count);
+    let result = valid.and(shape, marker);
+    let result = valid.and(result, nonzero);
+    let result = valid.and(result, ordered);
+    let result = valid.and(result, bounded);
+    graphs.push(valid.finish(vec![result]));
+    graphs
+}
+
 pub(super) fn graphs() -> Vec<Graph> {
     let mut graphs = cache_graphs();
     graphs.extend(edge_sort_graphs());
     graphs.extend(binary_graphs());
     graphs.extend(argument_graphs());
+    graphs.extend(interval_graphs());
     graphs
 }

@@ -148,3 +148,54 @@ using a fixed 1058-handle cache. Eighteen tests in four suites and four independ
 review tests pass, covering exact cumulative quota exhaustion, typed pack
 separation, all cache slots, full i128 boundaries, steps and cancellation.
 Allocation accounting still charges every production before physical reuse.
+
+GIR 0.10 checkpoint 8024a2b adds an exact 16-byte little-endian full-width
+integer decoder, validated in the executor, native ABI, binary format and
+editor. The published tree matches the local tree exactly. Its full direct
+compiler profile, with a 2,019,721-byte self input, exhausted a diagnostic
+128-million-step limit after charging 175,377,866,716 cumulative logical bytes.
+Native self-compilation remains unproved; the next optimization shares parsed
+program/schema tables between semantic passes while retaining all rejection
+gates. Independent raw-input review also found a type-depth boundary mismatch:
+Rust rejects a leaf at depth 128 but the G0 predicate accepted it. This must be
+fixed before replacing host validation or making the direct compiler default.
+
+The depth boundary is now corrected: nested prefixes permit leaves below depth
+128, matching Rust. Seven raw-input review tests passed in 11.69 seconds,
+comparing Rust validation with direct execution of G0 compile-direct over
+manually encoded bytes. Coverage includes node/call cycles, wiring and container
+boundaries, schemas and named types, integer bounds, depth versus width,
+precision, opcode version gates, Record/Variant payload contracts and
+Select/Loop/Map contracts. Native self-generation and full-branch checks are
+still pending.
+
+CI 37210897202 verifies the GIR 0.10 integer codec through assembled Linux code
+and the full-width C ABI. Native graph-name and graph-reference phases pass;
+the reader and emitter still exhaust their 64-million-step production
+reservations, and the native self-generation test fails with step-limit code 1.
+The Windows job now propagates every exit code and passes editor/runtime/wrapper
+checks. These results do not establish a green whole-branch build.
+
+The shared-AST definition's reader alone completed in 92,590,894 steps and
+126,945,329,343 logical bytes for a frozen 2,029,711-byte input at diagnostic
+limits. Its full compile-direct input has 2,029,718 bytes and exhausted 128
+million steps after 175,421,397,306 logical bytes. A remaining unrolled signed
+integer-bound comparison in the parser is being replaced by the same general
+codec, and duplicate profile checks are being removed only where the global
+port-type validator already proves those predicates before emission.
+
+The complete local Windows all-target test run for checkpoint 8024a2b passed
+541 tests in 61 suites (880.49 seconds). Current-tree Clippy also passed. This
+does not include successful Linux self-generation, nor does it replace the
+fresh verification required after the subsequent compiler optimizations.
+
+The next frozen definition is 2,037,656 bytes, SHA-256
+3962BACF742EE5F746A7D9EA29CEB09D1F46BB294EC826D06963D141845BC580.
+It includes shared program/schema AST tables, the remaining integer-bound codec
+replacement, contextual elimination of duplicate type proofs, and a monotonic
+incoming-edge interval cache. The real compiler's 397-edge graph preserves exact
+argument assembly within 1,500 steps where binary lookup exhausts that budget.
+Lazy native graph frame/port metadata is charged once when eligible and uses
+the previous path under tight budgets. Fresh verification passes 21 tests in
+six focused suites (23.55 seconds) and all-target Clippy. Full native
+self-generation remains pending.

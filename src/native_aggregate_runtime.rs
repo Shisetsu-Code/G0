@@ -12,6 +12,32 @@ const SCALAR_MIN: i128 = -32;
 const SCALAR_MAX: i128 = 1023;
 const INTEGER_SCALAR_SLOTS: usize = (SCALAR_MAX - SCALAR_MIN + 1) as usize;
 const SCALAR_SLOTS: usize = INTEGER_SCALAR_SLOTS + 2;
+struct GraphMetadata {
+    frame_bytes: u64,
+    inputs: Vec<usize>,
+    outputs: Vec<usize>,
+}
+
+fn frame_bytes(graph: &crate::gir::Graph) -> Option<u64> {
+    let slots = graph
+        .nodes
+        .iter()
+        .try_fold(graph.inputs.len(), |sum, node| {
+            sum.checked_add(node.outputs.len())
+        })?;
+    let args = graph
+        .nodes
+        .iter()
+        .map(|node| node.inputs.len().max(node.outputs.len()))
+        .max()
+        .unwrap_or(0)
+        .max(graph.outputs.len())
+        .max(1);
+    // Both emitters save four registers and six locals, plus alignment/metadata.
+    let bytes = slots.checked_add(args)?.checked_add(16)?.checked_mul(8)?;
+    let bytes = u64::try_from(bytes).ok()?;
+    Some(bytes.checked_add(15)? / 16 * 16)
+}
 fn pack_index(pack: u64) -> Option<usize> {
     if pack & PACK_TAG == 0 {
         return None;
@@ -26,6 +52,8 @@ pub struct NativeContext {
     // small arithmetic constant or Bool in a long-running native compiler.
     // Handles denote immutable values, so equal scalars can share a slot.
     scalar_handles: [u64; SCALAR_SLOTS],
+    // Optional, lazily charged metadata. Small quotas retain the uncached path.
+    graph_metadata: Vec<Option<GraphMetadata>>,
     limits: ExecutionLimits,
     steps: u64,
     bytes: u64,
@@ -49,6 +77,7 @@ impl NativeContext {
             program,
             values: Vec::new(),
             scalar_handles: [0; SCALAR_SLOTS],
+            graph_metadata: Vec::new(),
             limits,
             steps: 0,
             bytes: 0,
@@ -101,6 +130,62 @@ impl NativeContext {
         } else {
             Ok(())
         }
+    }
+    fn cache_graph_metadata(&mut self, graph: usize) {
+        if self.graph_metadata.get(graph).is_some_and(Option::is_some)
+            || self.error.is_some()
+            || self.cancelled.is_cancelled()
+        {
+            return;
+        }
+        let Some(g) = self.program.graphs.get(graph) else {
+            return;
+        };
+        let Some(frame) = frame_bytes(g) else {
+            return;
+        };
+        let table_charge = if self.graph_metadata.is_empty() {
+            self.program
+                .graphs
+                .len()
+                .checked_mul(2 * std::mem::size_of::<Option<GraphMetadata>>())
+        } else {
+            Some(0)
+        };
+        let Some(charge) = g
+            .inputs
+            .len()
+            .checked_add(g.outputs.len())
+            .and_then(|n| n.checked_mul(2 * std::mem::size_of::<usize>()))
+            // Bound table and ordinal-vector storage before any allocation.
+            .and_then(|n| n.checked_add(table_charge?))
+            .and_then(|n| u64::try_from(n).ok())
+        else {
+            return;
+        };
+        let Some(required) = charge.checked_mul(2).and_then(|n| n.checked_add(frame)) else {
+            return;
+        };
+        // Keep at least the cache's footprint available for useful work beyond
+        // this frame. Tight value budgets use the original uncached path.
+        if self.reserve(required).is_err() {
+            return;
+        }
+        let mut inputs: Vec<_> = (0..g.inputs.len()).collect();
+        inputs.sort_by_key(|index| g.inputs[*index].id);
+        let mut outputs: Vec<_> = (0..g.outputs.len()).collect();
+        outputs.sort_by_key(|index| g.outputs[*index].id);
+        if self.graph_metadata.is_empty() {
+            self.graph_metadata = Vec::with_capacity(self.program.graphs.len());
+            self.graph_metadata
+                .resize_with(self.program.graphs.len(), || None);
+        }
+        self.bytes += charge;
+        self.graph_metadata[graph] = Some(GraphMetadata {
+            frame_bytes: frame,
+            inputs,
+            outputs,
+        });
     }
     fn tick(&mut self) -> Result<(), RuntimeError> {
         if self.error.is_some() {
@@ -573,31 +658,14 @@ pub unsafe extern "C" fn g0_native_enter(context: *mut NativeContext, graph: u64
     if c.depth >= c.limits.max_call_depth {
         return c.fail(RuntimeError::CallDepth);
     }
-    let g = &c.program.graphs[graph as usize];
-    let Some(slots) = g
-        .nodes
-        .iter()
-        .try_fold(g.inputs.len(), |sum, n| sum.checked_add(n.outputs.len()))
-    else {
-        return c.fail(RuntimeError::MemoryLimit);
-    };
-    let args = g
-        .nodes
-        .iter()
-        .map(|n| n.inputs.len().max(n.outputs.len()))
-        .max()
-        .unwrap_or(0)
-        .max(g.outputs.len())
-        .max(1);
-    let Some(frame) = slots
-        .checked_add(args)
-        // Reserve saved registers and control locals for both native emitters.
-        // The graph-compiler ABI uses four callee-saved registers and six
-        // control slots, in addition to alignment and fixed frame metadata.
-        .and_then(|n| n.checked_add(16))
-        .and_then(|n| n.checked_mul(8))
-        .map(|n| (n as u64).div_ceil(16) * 16)
-    else {
+    c.cache_graph_metadata(graph as usize);
+    let frame = c
+        .graph_metadata
+        .get(graph as usize)
+        .and_then(Option::as_ref)
+        .map(|metadata| metadata.frame_bytes)
+        .or_else(|| frame_bytes(&c.program.graphs[graph as usize]));
+    let Some(frame) = frame else {
         return c.fail(RuntimeError::MemoryLimit);
     };
     if c.stack_bytes.saturating_add(frame) > 4 * 1024 * 1024 {
@@ -914,9 +982,22 @@ pub unsafe extern "C" fn g0_native_graph_enter(
     } else {
         unsafe { std::slice::from_raw_parts(args, count as usize) }
     };
-    let mut ports: Vec<_> = g.inputs.iter().collect();
-    ports.sort_by_key(|p| p.id);
-    if !handles.iter().zip(ports).all(|(h, p)| {
+    c.cache_graph_metadata(graph as usize);
+    let g = &c.program.graphs[graph as usize];
+    let mut fallback = Vec::new();
+    let order = if let Some(metadata) = c
+        .graph_metadata
+        .get(graph as usize)
+        .and_then(Option::as_ref)
+    {
+        metadata.inputs.as_slice()
+    } else {
+        fallback.extend(0..g.inputs.len());
+        fallback.sort_by_key(|index| g.inputs[*index].id);
+        fallback.as_slice()
+    };
+    if !handles.iter().zip(order).all(|(h, index)| {
+        let p = &g.inputs[*index];
         c.value(*h)
             .is_some_and(|v| v.fits(&p.ty, &c.program.schemas))
     }) {
@@ -1092,13 +1173,25 @@ pub unsafe extern "C" fn g0_native_pack_check(
         };
         &n.outputs
     };
-    let mut ports: Vec<_> = ports.iter().collect();
-    ports.sort_by_key(|p| p.id);
+    let mut fallback = Vec::new();
+    let order = if node == u64::MAX
+        && let Some(metadata) = c
+            .graph_metadata
+            .get(graph as usize)
+            .and_then(Option::as_ref)
+    {
+        metadata.outputs.as_slice()
+    } else {
+        fallback.extend(0..ports.len());
+        fallback.sort_by_key(|index| ports[*index].id);
+        fallback.as_slice()
+    };
     let Some(handles) = pack_index(pack).and_then(|p| c.packs.get(p)) else {
         return c.fail(RuntimeError::InvalidProgram);
     };
     if handles.len() != ports.len()
-        || !handles.iter().zip(ports).all(|(h, p)| {
+        || !handles.iter().zip(order).all(|(h, index)| {
+            let p = &ports[*index];
             c.value(*h)
                 .is_some_and(|v| v.fits(&p.ty, &c.program.schemas))
         })
