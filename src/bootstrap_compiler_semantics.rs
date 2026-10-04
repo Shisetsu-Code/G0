@@ -58,6 +58,26 @@ fn port_id(g: &mut G, at: SourceEndpoint) -> SourceEndpoint {
     let modulus = g.n(65536);
     g.op(Operation::Rem, vec![(word, int()), (modulus, int())], int())
 }
+fn port_position_graphs()->Vec<Graph>{
+    let loop_state=vec![SemanticType::Bytes,int(),int()];
+    let mut cond=G::new("validator-port-cursor-condition",loop_state.clone(),vec![SemanticType::Bool]);let zero=cond.n(0);let test=cond.compare(Operation::Gt,input(2),zero);
+    let mut body=G::new("validator-port-cursor-body",loop_state.clone(),loop_state.clone());let body_cursor=body.call("reader-port-layout",input(1));let one=body.n(1);let left=body.arithmetic(Operation::Sub,input(2),one);
+    let mut main=G::new("validator-port-cursor",loop_state.clone(),vec![int()]);let start=main.advance(input(1),4);let out=main.loop_node("validator-port-cursor",loop_state.clone(),vec![input(0),start,input(2)]);
+    let mut ty=G::new("validator-port-type-at",loop_state.clone(),vec![int()]);let cursor=call(&mut ty,"validator-port-cursor",vec![input(0),input(1),input(2)],int());let name=ty.advance(cursor,2);let type_at=ty.skip_blob(name);
+    let mut id=G::new("validator-port-id-at",loop_state,vec![int()]);let cursor=call(&mut id,"validator-port-cursor",vec![input(0),input(1),input(2)],int());let port=port_id(&mut id,cursor);
+    vec![cond.finish(vec![test]),body.finish(vec![input(0),body_cursor,left]),main.finish(vec![out[1].clone()]),ty.finish(vec![type_at]),id.finish(vec![port])]
+}
+fn endpoint_type_graphs()->Vec<Graph>{
+    let types=vec![SemanticType::Bytes,rows(),int(),int(),int(),int(),int(),int()];
+    let graph=G::new("validator-endpoint-graph-list",types.clone(),vec![int()]);
+    let mut node=G::new("validator-endpoint-node-list",types.clone(),vec![int()]);let index=call(&mut node,"emitter-node-index",vec![input(1),input(4)],int());let descriptor=node.index(input(1),index);let node_list=node.index(descriptor,input(6));
+    let mut main=G::new("validator-endpoint-type",types,vec![int()]);let is_node=main.compare(Operation::Eq,input(3),input(7));
+    let mut args=vec![(is_node,SemanticType::Bool)];args.extend((0..8).map(|p|(input(p),main.b.graph.inputs[p as usize].ty.clone())));
+    let list=main.op(Operation::Select{when_true:"validator-endpoint-node-list".into(),when_false:"validator-endpoint-graph-list".into()},args,int());
+    let selector=main.b.graph.nodes.last_mut().unwrap();selector.inputs[0].name="selector".into();for (i,port) in selector.inputs.iter_mut().skip(1).enumerate(){port.name=format!("p{i}");}
+    let rank=call(&mut main,"control-port-rank",vec![input(0),list.clone(),input(5)],int());let type_at=call(&mut main,"validator-port-type-at",vec![input(0),list,rank],int());
+    vec![graph.finish(vec![input(2)]),node.finish(vec![node_list]),main.finish(vec![type_at])]
+}
 fn endpoint_graphs() -> Vec<Graph> {
     // bytes, node table, graph port-list offset, endpoint kind/node/port,
     // node port-list descriptor field, node endpoint discriminator.
@@ -293,6 +313,7 @@ fn edge_graphs() -> Vec<Graph> {
     let test = cond.and(test, input(6));
     let mut body = G::new("validator-edges-body", state.clone(), state.clone());
     let edge = body.index(input(2), input(5));
+    let mut endpoint_types=Vec::new();
     let mut valid = input(6);
     for (start, list, field, node_kind) in [(0, 3, 4, 1), (3, 4, 3, 0)] {
         let kind = body.field(edge.clone(), start);
@@ -307,16 +328,18 @@ fn edge_graphs() -> Vec<Graph> {
                 input(0),
                 input(1),
                 input(list),
-                kind,
-                node,
-                port,
-                field,
-                node_kind,
+                kind.clone(),
+                node.clone(),
+                port.clone(),
+                field.clone(),
+                node_kind.clone(),
             ],
             SemanticType::Bool,
         );
         valid = body.and(valid, endpoint_valid);
+        let type_at=call(&mut body,"validator-endpoint-type",vec![input(0),input(1),input(list),kind,node,port,field,node_kind],int());endpoint_types.push(type_at);
     }
+    let assigned=call(&mut body,"validator-type-assignable",vec![input(0),endpoint_types[0].clone(),endpoint_types[1].clone()],SemanticType::Bool);valid=body.and(valid,assigned);
     let edge_valid = valid;
     let next = body.advance(input(5), 1);
     let mut main = G::new("validator-edges", types, vec![SemanticType::Bool]);
@@ -393,6 +416,8 @@ fn edge_graphs() -> Vec<Graph> {
 }
 pub(super) fn graphs() -> Vec<Graph> {
     let mut graphs = endpoint_graphs();
+    graphs.extend(port_position_graphs());
+    graphs.extend(endpoint_type_graphs());
     graphs.extend(incoming_graphs());
     graphs.extend(required_port_graphs());
     graphs.extend(node_inputs_graphs());

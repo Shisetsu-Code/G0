@@ -16,13 +16,13 @@ int main(int argc, char **argv) {
     if (argc != 2) return 2;
     FILE *file = fopen(argv[1], "rb");
     if (!file) return 3;
-    unsigned char *input = malloc(1048577);
+    unsigned char *input = malloc(4194305);
     if (!input) { fclose(file); return 4; }
-    size_t length = fread(input, 1, 1048577, file);
+    size_t length = fread(input, 1, 4194305, file);
     int failed = ferror(file);
     fclose(file);
-    if (failed || length > 1048576) { free(input); return 5; }
-    const NativeLimits limits = { 16000000, UINT64_C(16) * 1024 * 1024 * 1024, 128 };
+    if (failed || length > 4194304) { free(input); return 5; }
+    const NativeLimits limits = { 64000000, UINT64_C(16) * 1024 * 1024 * 1024, 128 };
     NativeResult *result = g0_compiled_entry_with_limits(input, length, &limits);
     free(input);
     if (g0_runtime_status(result)) {

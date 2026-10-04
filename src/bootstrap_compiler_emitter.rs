@@ -338,18 +338,9 @@ pub(super) fn graphs() -> Vec<Graph> {
         main.text(", %rsi\n    jmp g0_native_invoke\n.section .rodata\n.Lg0_program:\n.byte ");
     let bridge = main.concat(bridge, suffix);
     let assembly = main.concat(assembly, bridge);
-    let lines_ty = SemanticType::Slice(Box::new(SemanticType::Text));
     let lines = main.op(
-        Operation::Map {
-            body: "emit-byte".into(),
-        },
+        Operation::Subgraph("emit-program-byte-values".into()),
         vec![(input(0), SemanticType::Bytes)],
-        lines_ty.clone(),
-    );
-    let empty = main.text("\n.byte ");
-    let lines = main.op(
-        Operation::TextJoin,
-        vec![(lines, lines_ty), (empty, SemanticType::Text)],
         SemanticType::Text,
     );
     let assembly = main.concat(assembly, lines);

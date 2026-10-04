@@ -104,13 +104,21 @@ fn failure_diagnostics_distinguish_memory_and_invalid_handles() {
 #[test]
 fn explicit_compiler_reservation_remains_bounded_and_does_not_change_defaults() {
     let limits = NativeLimits {
-        max_steps: 16_000_000,
+        max_steps: 64_000_000,
         max_value_bytes: 16 * 1024 * 1024 * 1024,
         max_call_depth: 128,
     };
     assert_eq!(
         limits.execution_limits().unwrap().max_value_bytes,
         limits.max_value_bytes
+    );
+    assert!(
+        NativeLimits {
+            max_steps: limits.max_steps + 1,
+            ..limits
+        }
+        .execution_limits()
+        .is_err()
     );
     assert!(
         NativeLimits {
@@ -122,4 +130,35 @@ fn explicit_compiler_reservation_remains_bounded_and_does_not_change_defaults() 
     );
     assert_eq!(ExecutionLimits::default().max_value_bytes, 64 * 1024 * 1024);
     assert_eq!(ExecutionLimits::default().max_steps, 1_000_000);
+}
+
+#[test]
+fn host_accepts_large_valid_documents_and_rejects_the_declared_source_ceiling() {
+    use g0::gir::{Edge, Literal, Operation, SemanticType, SourceEndpoint, TargetEndpoint};
+    let mut document = fixture::call_program();
+    let mut graph = document.graphs.remove(0);
+    graph.inputs.clear();
+    graph.outputs[0].ty = SemanticType::Text;
+    graph.nodes.truncate(1);
+    graph.nodes[0].operation = Operation::Const(Literal::Text("x".repeat(1024 * 1024)));
+    graph.nodes[0].inputs.clear();
+    graph.nodes[0].outputs = graph.outputs.clone();
+    graph.edges = vec![Edge {
+        from: SourceEndpoint::NodeOutput {
+            node: graph.nodes[0].id,
+            port: graph.outputs[0].id,
+        },
+        to: TargetEndpoint::GraphOutput(graph.outputs[0].id),
+    }];
+    document.entry_graph = graph.name.clone();
+    document.graphs = vec![graph];
+    let source = g0::program_binary::encode_program(&document).unwrap();
+    assert!(source.len() > 1024 * 1024);
+    let output = execute_embedded(&source, &[]).unwrap();
+    assert!(matches!(&output[..], [g0::value::Value::Text(text)] if text.len() == 1024 * 1024));
+    let oversized = vec![0; g0::bootstrap_compiler::MAX_SOURCE_BYTES + 1];
+    assert!(matches!(
+        execute_embedded(&oversized, &[]),
+        Err(NativeRuntimeError::TooLarge)
+    ));
 }

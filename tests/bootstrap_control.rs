@@ -473,7 +473,7 @@ fn g0_control_compiler_selfhosts_through_two_native_generation_stages() {
     document.entry_graph = "compile-direct".into();
     let compiler = g0::program_binary::encode_program(&document).unwrap();
     assert!(
-        compiler.len() <= 1048576,
+        compiler.len() <= g0::bootstrap_compiler::MAX_SOURCE_BYTES,
         "compiler must fit its declared input protocol"
     );
     std::fs::write(dir.join("compiler.g0p"), &compiler).unwrap();
@@ -498,8 +498,8 @@ extern const unsigned char*g0_runtime_bytes(const NativeResult*,size_t*);
 extern void g0_runtime_free(NativeResult*);
 int main(int argc,char**argv){
  if(argc!=2)return 1;FILE*f=fopen(argv[1],"rb");if(!f)return 2;
- unsigned char*b=malloc(1048577);if(!b){fclose(f);return 3;}size_t n=fread(b,1,1048577,f);int bad=ferror(f);fclose(f);if(bad||n>1048576){free(b);return 4;}
- const NativeLimits limits={16000000,UINT64_C(16)*1024*1024*1024,128};
+ unsigned char*b=malloc(4194305);if(!b){fclose(f);return 3;}size_t n=fread(b,1,4194305,f);int bad=ferror(f);fclose(f);if(bad||n>4194304){free(b);return 4;}
+ const NativeLimits limits={64000000,UINT64_C(16)*1024*1024*1024,128};
  NativeResult*r=g0_native_invoke(b,n,b,n,g0_compiled_entry_with_inputs,&limits);free(b);
  if(g0_runtime_status(r)){fprintf(stderr,"native compiler failure kind %d\n",g0_runtime_failure_kind(r));g0_runtime_free(r);return 5;}size_t size=0;const unsigned char*out=g0_runtime_bytes(r,&size);if(!out||size<6||memcmp(out,".text\n",6)){g0_runtime_free(r);return 6;}bad=fwrite(out,1,size,stdout)!=size;g0_runtime_free(r);return bad?7:0;
 }

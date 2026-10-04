@@ -273,3 +273,17 @@ fn g0_type_assignment_checks_ranges_and_nested_shapes() {
         );
     }
 }
+
+#[test]
+fn g0_graph_reader_rejects_incompatible_edge_types() {
+    let graph=g0::editor::GraphEditor::new().graph().clone();
+    let mut source=g0::graph_binary::encode_graph(&graph).unwrap();
+    let outputs=8+4+graph.name.len()+1+4;
+    let output_type=outputs+4+2+4+graph.outputs[0].name.len();
+    assert_eq!(source[output_type],1);
+    source.splice(output_type..output_type+33,[0]);
+    let length=source.len() as i128;
+    let contract=compiler_document().validated_contract().unwrap();
+    let output=Executor::new(&contract,compiler_limits()).unwrap().run_graph("reader-graph",vec![Value::Bytes(source.into()),Value::Integer(0)]);
+    assert!(!matches!(output,Ok(ref values) if values==&vec![Value::Integer(length)]));
+}

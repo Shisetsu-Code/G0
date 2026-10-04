@@ -897,7 +897,7 @@ fn output_graphs() -> Vec<Graph> {
         ],
     );
     let body_parts = append(&mut body, input(8), code, texts());
-    let cursor = body.call("reader-port", input(5));
+    let cursor = body.call("reader-port-layout", input(5));
     let one = body.n(1);
     let left = body.arithmetic(Operation::Sub, input(6), one);
     let ordinal = body.advance(input(7), 1);
@@ -1435,19 +1435,7 @@ fn program_emission_graphs() -> Vec<Graph> {
     );
     let length = main.length(input(0));
     let bridge=template(&mut main,vec![Fragment::Literal(".text\n.globl g0_compiled_entry\ng0_compiled_entry:\n    xorl %r9d, %r9d\n    movq %rsi, %rcx\n    movq %rdi, %rdx\n    leaq "),Fragment::Text(entry.clone()),Fragment::Literal("(%rip), %r8\n    leaq .Lg0_program(%rip), %rdi\n    movq $"),Fragment::Number(length.clone()),Fragment::Literal(", %rsi\n    jmp g0_native_invoke\n.globl g0_compiled_entry_with_limits\ng0_compiled_entry_with_limits:\n    movq %rdx, %r9\n    movq %rsi, %rcx\n    movq %rdi, %rdx\n    leaq "),Fragment::Text(entry),Fragment::Literal("(%rip), %r8\n    leaq .Lg0_program(%rip), %rdi\n    movq $"),Fragment::Number(length),Fragment::Literal(", %rsi\n    jmp g0_native_invoke\n.section .rodata\n.Lg0_program:\n.byte ")]);
-    let byte_lines = main.op(
-        Operation::Map {
-            body: "emit-byte".into(),
-        },
-        vec![(input(0), SemanticType::Bytes)],
-        texts(),
-    );
-    let sep = main.text("\n.byte ");
-    let data = main.op(
-        Operation::TextJoin,
-        vec![(byte_lines, texts()), (sep, SemanticType::Text)],
-        SemanticType::Text,
-    );
+    let data = call(&mut main,"emit-program-byte-values",vec![input(0)],SemanticType::Text);
     let code = template(
         &mut main,
         vec![
@@ -1485,7 +1473,7 @@ fn port_rank_graphs() -> Vec<Graph> {
     let mut body = G::new("control-port-rank-body", state.clone(), state.clone());
     let id = mod_id(&mut body, input(1));
     let found = body.compare(Operation::Eq, id, input(3));
-    let body_at = body.call("reader-port", input(1));
+    let body_at = body.call("reader-port-layout", input(1));
     let one = body.n(1);
     let left = body.arithmetic(Operation::Sub, input(2), one);
     let next = body.advance(input(4), 1);
@@ -1523,7 +1511,7 @@ fn slot_graphs() -> Vec<Graph> {
     let port_id = mod_id(&mut body, input(1));
     let row = array(&mut body, vec![input(3), port_id, input(4)], seq());
     let table = append(&mut body, input(5), row, rows());
-    let body_at = body.call("reader-port", input(1));
+    let body_at = body.call("reader-port-layout", input(1));
     let one = body.n(1);
     let left = body.arithmetic(Operation::Sub, input(2), one);
     let slot = body.advance(input(4), 1);
@@ -1713,7 +1701,7 @@ fn domain_graphs() -> Vec<Graph> {
     let ordered = pb.compare(Operation::Gt, port_id.clone(), input(3));
     let ordered = pb.logic(Operation::Or, ordered, input(5));
     let port_valid = pb.and(input(4), ordered);
-    let port_next = pb.call("reader-port", input(1));
+    let port_next = pb.call("reader-port-layout", input(1));
     let one = pb.n(1);
     let left = pb.arithmetic(Operation::Sub, input(2), one);
     let no = pb.bool(false);

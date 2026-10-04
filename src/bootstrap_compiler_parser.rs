@@ -5,6 +5,10 @@ use super::*;
 mod control;
 #[path = "bootstrap_compiler_semantics.rs"]
 mod semantics;
+#[path = "bootstrap_compiler_bytes.rs"]
+mod bytes;
+#[path = "bootstrap_compiler_operationcheck.rs"]
+mod operationcheck;
 #[path = "bootstrap_compiler_emitter.rs"]
 mod emitter;
 
@@ -421,7 +425,13 @@ pub(super) fn graphs() -> Vec<Graph> {
     );
     let eof = main.compare(Operation::Eq, end, length);
     let valid = main.and(header_valid, eof);
-    syntax.extend([word, cond, body, main.finish(vec![valid])]);
+    let container=main.finish(vec![valid]);
+    let mut layout_condition=cond.clone();layout_condition.name="reader-blobs-syntax-condition".into();
+    let mut layout_body=body.clone();layout_body.name="reader-blobs-syntax-body".into();
+    for node in &mut layout_body.nodes {if let Operation::Subgraph(name)=&mut node.operation && name=="reader-graph" {*name="reader-graph-syntax".into();}}
+    let mut layout_container=container.clone();layout_container.name="reader-container-syntax".into();
+    for node in &mut layout_container.nodes {if let Operation::Loop{condition,body,..}=&mut node.operation && condition=="reader-blobs-condition" {*condition="reader-blobs-syntax-condition".into();*body="reader-blobs-syntax-body".into();}}
+    syntax.extend([word,cond,body,container,layout_condition,layout_body,layout_container]);
     syntax.extend(ast_graphs());
     syntax.extend(program_ast_graphs());
     syntax.extend(version_validation_graphs());
@@ -430,6 +440,8 @@ pub(super) fn graphs() -> Vec<Graph> {
     syntax.extend(emitter::graphs());
     syntax.extend(control::graphs());
     syntax.extend(semantics::graphs());
+    syntax.extend(bytes::graphs());
+    syntax.extend(operationcheck::graphs());
     syntax
 }
 
@@ -698,11 +710,13 @@ fn syntax_graphs() -> Vec<Graph> {
     graphs.extend(dispatch("reader-operation", &operations));
     // Types are prefix trees. The loop consumes one tag and updates the number
     // of outstanding child types, so nested types do not need recursive calls.
-    graphs.extend(type_graphs());
+    graphs.extend(type_graphs(false));
+    graphs.extend(type_graphs(true));
     graphs.push(sequence(
         "reader-port",
         &[Fixed(2), Blob, Call("reader-type")],
     ));
+    graphs.push(sequence("reader-port-layout",&[Fixed(2),Blob,Call("reader-type-layout")]));
     graphs.push(sequence(
         "reader-capability",
         &[Call("reader-capability-class"), Blob, Blob, Blob],
@@ -733,6 +747,8 @@ fn syntax_graphs() -> Vec<Graph> {
         "reader-source",
         &[(0, "reader-two"), (1, "reader-six")],
     ));
+    graphs.push(sequence("reader-node-layout",&[Fixed(4),Call("reader-operation"),Repeat("reader-port-layout"),Repeat("reader-port-layout"),Repeat("reader-effect"),Repeat("reader-capability")]));
+    graphs.push(sequence("reader-node-syntax",&[Fixed(4),Call("reader-operation-checked"),Repeat("reader-port-layout"),Repeat("reader-port-layout"),Repeat("reader-effect"),Repeat("reader-capability")]));
     graphs.extend(dispatch(
         "reader-target",
         &[(0, "reader-six"), (1, "reader-two")],
@@ -757,6 +773,7 @@ fn syntax_graphs() -> Vec<Graph> {
         "reader-schema",
         &[Blob, Fixed(4), Repeat("reader-schema-field")],
     ));
+    graphs.push(sequence("reader-graph-content-syntax",&[Blob,Call("reader-authority"),Repeat("reader-port-layout"),Repeat("reader-port-layout"),Repeat("reader-node-syntax"),Repeat("reader-edge")]));
     graphs.push(sequence(
         "reader-schema-field",
         &[
@@ -769,11 +786,14 @@ fn syntax_graphs() -> Vec<Graph> {
     graphs.push(framed_type_graph());
     for name in [
         "reader-port",
+        "reader-port-layout",
         "reader-byte",
         "reader-effect",
         "reader-capability",
         "reader-node",
         "reader-node-checked",
+        "reader-node-layout",
+        "reader-node-syntax",
         "reader-edge",
         "reader-string",
         "reader-arm",
@@ -782,7 +802,7 @@ fn syntax_graphs() -> Vec<Graph> {
     ] {
         graphs.extend(list_graphs(name));
     }
-    let mut graph = cursor_graph("reader-graph");
+    let mut graph = cursor_graph("reader-graph-header");
     let magic = graph.u32(input(1));
     let expected = graph.n(0x00473047);
     let magic_ok = graph.compare(Operation::Eq, magic, expected);
@@ -820,21 +840,26 @@ fn syntax_graphs() -> Vec<Graph> {
     node.inputs[0].name = "selector".into();
     node.inputs[1].name = "p0".into();
     node.inputs[2].name = "p1".into();
-    let structure = graph.op(Operation::Subgraph("validator-graph-edges".into()),vec![(input(0),SemanticType::Bytes),(input(1),int())],SemanticType::Bool);
-    let out = graph.guard(structure,out);
-    graphs.push(graph.finish(vec![out]));
+    let checked_header=graph.finish(vec![out]);
+    let mut layout_header=checked_header.clone();layout_header.name="reader-graph-syntax".into();
+    for node in &mut layout_header.nodes {if let Operation::Select{when_true,..}=&mut node.operation && when_true=="reader-graph-content" {*when_true="reader-graph-content-syntax".into();}}
+    let mut semantic=cursor_graph("reader-graph");let end=semantic.call("reader-graph-header",input(1));
+    let structure=semantic.op(Operation::Subgraph("validator-graph-edges".into()),vec![(input(0),SemanticType::Bytes),(input(1),int())],SemanticType::Bool);
+    let end=semantic.guard(structure,end);
+    graphs.extend([checked_header,layout_header,semantic.finish(vec![end])]);
     graphs
 }
 
-fn type_graphs() -> Vec<Graph> {
+fn type_graphs(layout:bool) -> Vec<Graph> {
+    let prefix=if layout {"reader-type-layout"} else {"reader-type"};
     let state = vec![SemanticType::Bytes, int(), int()];
-    let mut graphs = signed_integer_graphs();
-    graphs.push(integer_bounds_graph());
+    let mut graphs = if layout {Vec::new()} else {signed_integer_graphs()};
+    if !layout {graphs.push(integer_bounds_graph());}
     let payloads = [
         0, 32, 0, 0, 8, 0, 4, 0, 0, 8, 0, 8, -1, -1, 0, 0, -1, 0, 0, 0, 0, 0, 0, 0, 0,
     ];
     for (tag, payload) in payloads.into_iter().enumerate() {
-        let name = format!("reader-type-tag-{tag}");
+        let name = format!("{prefix}-tag-{tag}");
         let mut g = G::new(&name, state.clone(), state.clone());
         let at = g.advance(input(1), 1);
         let at = if tag == 5 {
@@ -844,7 +869,7 @@ fn type_graphs() -> Vec<Graph> {
         } else {
             g.advance(at, payload)
         };
-        let at = if tag == 1 {
+        let at = if tag == 1 && !layout {
             let minimum_at = g.advance(input(1), 1);
             let valid = g.op(
                 Operation::Subgraph("reader-i128-bounds".into()),
@@ -852,7 +877,7 @@ fn type_graphs() -> Vec<Graph> {
                 SemanticType::Bool,
             );
             g.guard(valid, at)
-        } else if matches!(tag, 4 | 6) {
+        } else if matches!(tag, 4 | 6) && !layout {
             let precision_at = g.advance(input(1), 1);
             let precision = g.u32(precision_at);
             let lowest = g.n(if tag == 4 { 1 } else { 2 });
@@ -871,18 +896,18 @@ fn type_graphs() -> Vec<Graph> {
         };
         graphs.push(g.finish(vec![input(0), at, pending]));
         let dispatch_name = if tag == 0 {
-            "reader-type-step".into()
+            format!("{prefix}-step")
         } else {
-            format!("reader-type-step-{tag}")
+            format!("{prefix}-step-{tag}")
         };
         let mut dispatch = G::new(&dispatch_name, state.clone(), state.clone());
         let byte = dispatch.byte(input(1));
         let expected = dispatch.n(tag as i128);
         let test = dispatch.compare(Operation::Eq, byte, expected);
         let fallback = if tag == 24 {
-            "reader-type-invalid".into()
+            format!("{prefix}-invalid")
         } else {
-            format!("reader-type-step-{}", tag + 1)
+            format!("{prefix}-step-{}", tag + 1)
         };
         let id = dispatch.b.graph.nodes.len() as u32 + 1;
         dispatch.op(
@@ -916,25 +941,25 @@ fn type_graphs() -> Vec<Graph> {
             ),
         );
     }
-    let mut invalid = G::new("reader-type-invalid", state.clone(), state.clone());
+    let mut invalid = G::new(&format!("{prefix}-invalid"), state.clone(), state.clone());
     let sentinel = invalid.n(1_i128 << 48);
     let zero = invalid.n(0);
     graphs.push(invalid.finish(vec![input(0), sentinel, zero]));
     let mut cond = G::new(
-        "reader-type-condition",
+        &format!("{prefix}-condition"),
         state.clone(),
         vec![SemanticType::Bool],
     );
     let zero = cond.n(0);
     let test = cond.compare(Operation::Gt, input(2), zero);
     graphs.push(cond.finish(vec![test]));
-    let mut main = cursor_graph("reader-type");
+    let mut main = cursor_graph(prefix);
     let one = main.n(1);
     let id = main.b.graph.nodes.len() as u32 + 1;
     main.op(
         Operation::Loop {
-            condition: "reader-type-condition".into(),
-            body: "reader-type-step".into(),
+            condition: format!("{prefix}-condition"),
+            body: format!("{prefix}-step"),
             max_iterations: 131072,
         },
         vec![
@@ -1151,8 +1176,8 @@ fn ast_graphs() -> Vec<Graph> {
     let id = body.u32(input(1));
     let operation = body.advance(input(1), 4);
     let inputs = body.call("reader-operation", operation.clone());
-    let outputs = body.call("reader-list-reader-port", inputs.clone());
-    let effects = body.call("reader-list-reader-port", outputs.clone());
+    let outputs = body.call("reader-list-reader-port-layout", inputs.clone());
+    let effects = body.call("reader-list-reader-port-layout", outputs.clone());
     let capabilities = body.call("reader-list-reader-byte", effects.clone());
     let end = body.call("reader-list-reader-capability", capabilities.clone());
     let descriptor_value = body.op(
@@ -1195,8 +1220,8 @@ fn ast_graphs() -> Vec<Graph> {
     let at = main.advance(input(1), 8);
     let at = main.skip_blob(at);
     let at = main.advance(at, 1);
-    let at = main.call("reader-list-reader-port", at);
-    let at = main.call("reader-list-reader-port", at);
+    let at = main.call("reader-list-reader-port-layout", at);
+    let at = main.call("reader-list-reader-port-layout", at);
     let count = main.u32(at.clone());
     let start = main.advance(at, 4);
     let empty = main.op(Operation::MakeArray, vec![], collection.clone());
@@ -1249,9 +1274,9 @@ fn program_ast_graphs() -> Vec<Graph> {
     let local_name = layout.n(8);
     let authority = layout.skip_blob(local_name.clone());
     let local_inputs = layout.advance(authority, 1);
-    let local_outputs = layout.call("reader-list-reader-port", local_inputs.clone());
-    let local_nodes = layout.call("reader-list-reader-port", local_outputs.clone());
-    let local_edges = layout.call("reader-list-reader-node", local_nodes.clone());
+    let local_outputs = layout.call("reader-list-reader-port-layout", local_inputs.clone());
+    let local_nodes = layout.call("reader-list-reader-port-layout", local_outputs.clone());
+    let local_edges = layout.call("reader-list-reader-node-layout", local_nodes.clone());
     let local_row = layout.op(
         Operation::MakeArray,
         vec![
@@ -1704,9 +1729,9 @@ fn edge_ast_graphs() -> Vec<Graph> {
     let at = main.advance(input(1), 8);
     let at = main.call("reader-string", at);
     let at = main.advance(at, 1);
-    let at = main.call("reader-list-reader-port", at);
-    let at = main.call("reader-list-reader-port", at);
-    let at = main.call("reader-list-reader-node", at);
+    let at = main.call("reader-list-reader-port-layout", at);
+    let at = main.call("reader-list-reader-port-layout", at);
+    let at = main.call("reader-list-reader-node-layout", at);
     let count = main.u32(at.clone());
     let at = main.advance(at, 4);
     let empty = main.op(Operation::MakeArray, vec![], collection);

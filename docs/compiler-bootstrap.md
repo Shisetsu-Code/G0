@@ -81,12 +81,15 @@ of the Rust bootstrap host.
 
 ## Host limits and ABI
 
-Compiler hosting accepts at most one MiB of source or compiler document. Its
-explicit budget is 16 million steps, sixteen GiB of cumulative logical allocation
+Compiler hosting accepts at most four MiB of source or compiler document. Rust
+bootstrap hosting uses 16 million steps; linked compiler drivers explicitly
+reserve up to 64 million steps. Both reserve sixteen GiB of cumulative logical allocation
 and call depth 128. Logical accounting includes repeated graph metadata and
 forwarded shared values; it is not an estimate of resident memory. The reader
 slices each graph blob before parsing it to avoid repeatedly charging the entire
-container through nested reader calls.
+container through nested reader calls. Byte emission uses 64 KiB chunks so a
+large source does not create an array exceeding the runtime's one-million-value
+traversal bound. The emitted assembly byte protocol remains unchanged.
 Program AST construction also slices graph blobs and rebases its offsets to the
 original container. The example's `profile` command runs the current definition
 with a diagnostic 64 GiB allocation ceiling and 64 million steps, and prints

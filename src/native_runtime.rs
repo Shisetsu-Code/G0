@@ -37,7 +37,7 @@ pub struct NativeLimits {
 impl NativeLimits {
     pub fn execution_limits(self) -> Result<crate::execution::ExecutionLimits, NativeRuntimeError> {
         if self.max_steps == 0
-            || self.max_steps > 16_000_000
+            || self.max_steps > 64_000_000
             || self.max_value_bytes == 0
             || self.max_value_bytes > 16 * 1024 * 1024 * 1024
             || !(1..=128).contains(&self.max_call_depth)

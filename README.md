@@ -168,6 +168,6 @@ compiler backend is checked in as `compiler/native-wrapper.g0p`; use
 `cargo run -- bootstrap input.g0p -o output.s` to generate its interpreter-backed
 native wrapper. See [`docs/native-editor.md`](docs/native-editor.md) and
 [`docs/compiler-bootstrap.md`](docs/compiler-bootstrap.md) for verified behavior
-and the remaining editor/self-hosting work.
+and the remaining compiler validation/self-hosting work.
 
 See `docs/architecture.md` for the architectural constraints.

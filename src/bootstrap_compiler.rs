@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 #[path = "bootstrap_compiler_parser.rs"]
 mod parser;
 
-pub const MAX_SOURCE_BYTES: usize = 1024 * 1024;
+pub const MAX_SOURCE_BYTES: usize = 4 * 1024 * 1024;
 /// Compiler callbacks run on a reserved, bounded stack instead of inheriting
 /// the host's main-thread stack (two MiB on Windows).
 pub const HOST_STACK_BYTES: usize = 16 * 1024 * 1024;
@@ -38,17 +38,11 @@ fn compile_direct_inner(source: &[u8]) -> Result<String, BootstrapError> {
     let mut executor =
         Executor::new(&contract, compiler_limits()).map_err(BootstrapError::Runtime)?;
     let input = Value::Bytes(source.into());
-    let eligible = executor
-        .run_graph("control-domain", vec![input.clone()])
-        .map_err(BootstrapError::Runtime)?;
-    if eligible != [Value::Bool(true)] {
-        return Err(BootstrapError::Output);
-    }
     let output = executor
         .run_graph("compile-direct", vec![input])
         .map_err(BootstrapError::Runtime)?;
     match output.as_slice() {
-        [Value::Text(text)] if text.as_ref() != "G0 compiler: invalid container" => {
+        [Value::Text(text)] if !text.starts_with("G0 compiler:") => {
             Ok(text.to_string())
         }
         _ => Err(BootstrapError::Output),
@@ -104,7 +98,7 @@ fn compile_inner(compiler: &[u8], source: &[u8]) -> Result<String, BootstrapErro
         .run_graph(&document.entry_graph, vec![Value::Bytes(source.into())])
         .map_err(BootstrapError::Runtime)?;
     match output.as_slice() {
-        [Value::Text(text)] if text.as_ref() != "G0 compiler: invalid container" => {
+        [Value::Text(text)] if !text.starts_with("G0 compiler:") => {
             Ok(text.to_string())
         }
         _ => Err(BootstrapError::Output),
@@ -230,26 +224,17 @@ pub fn compiler_document() -> ProgramDocument {
     let header = main.concat(header, number);
     let suffix=main.text(", %rsi\n    jmp g0_runtime_entry_with_limits\n.size g0_compiled_entry_with_limits, .-g0_compiled_entry_with_limits\n.section .rodata\n.Lg0_program:\n.byte ");
     let header = main.concat(header, suffix);
-    let texts = SemanticType::Slice(Box::new(SemanticType::Text));
     let lines = main.op(
-        Operation::Map {
-            body: "emit-byte".into(),
-        },
+        Operation::Subgraph("emit-program-byte-values".into()),
         vec![(SourceEndpoint::GraphInput(0), SemanticType::Bytes)],
-        texts.clone(),
-    );
-    let separator = main.text("\n.byte ");
-    let lines = main.op(
-        Operation::TextJoin,
-        vec![(lines, texts), (separator, SemanticType::Text)],
         SemanticType::Text,
     );
     let assembly = main.concat(header, lines);
     let footer = main.text("\n.section .note.GNU-stack,\"\",@progbits\n");
     let assembly = main.concat(assembly, footer);
-    let mut entry = Builder::new("compile", SemanticType::Bytes);
+    let mut entry = Builder::new("compile-wrapper", SemanticType::Bytes);
     let valid = entry.op(
-        Operation::Subgraph("reader-container".into()),
+        Operation::Subgraph("reader-container-syntax".into()),
         vec![(SourceEndpoint::GraphInput(0), SemanticType::Bytes)],
         SemanticType::Bool,
     );
@@ -269,13 +254,24 @@ pub fn compiler_document() -> ProgramDocument {
     let mut invalid = Builder::new("invalid-container", SemanticType::Bytes);
     let message = invalid.text("G0 compiler: invalid container");
     let mut direct=Builder::new("compile-direct",SemanticType::Bytes);
-    let native=direct.op(Operation::Subgraph("control-compile".into()),vec![(SourceEndpoint::GraphInput(0),SemanticType::Bytes)],SemanticType::Text);
+    let valid=direct.op(Operation::Subgraph("reader-container".into()),vec![(SourceEndpoint::GraphInput(0),SemanticType::Bytes)],SemanticType::Bool);
+    let native=direct.op(Operation::Select{when_true:"compile-direct-validated".into(),when_false:"invalid-container".into()},vec![(valid,SemanticType::Bool),(SourceEndpoint::GraphInput(0),SemanticType::Bytes)],SemanticType::Text);
+    let node=direct.graph.nodes.last_mut().unwrap();node.inputs[0].name="selector".into();node.inputs[1].name="p0".into();
+    let mut checked=Builder::new("compile-direct-validated",SemanticType::Bytes);
+    let domain=checked.op(Operation::Subgraph("control-domain".into()),vec![(SourceEndpoint::GraphInput(0),SemanticType::Bytes)],SemanticType::Bool);
+    let emitted=checked.op(Operation::Select{when_true:"control-compile".into(),when_false:"invalid-native-domain".into()},vec![(domain,SemanticType::Bool),(SourceEndpoint::GraphInput(0),SemanticType::Bytes)],SemanticType::Text);
+    let node=checked.graph.nodes.last_mut().unwrap();node.inputs[0].name="selector".into();node.inputs[1].name="p0".into();
+    let mut unsupported=Builder::new("invalid-native-domain",SemanticType::Bytes);let error=unsupported.text("G0 compiler: unsupported native profile");
+    let mut legacy=Builder::new("compile",SemanticType::Bytes);let wrapper=legacy.op(Operation::Subgraph("compile-wrapper".into()),vec![(SourceEndpoint::GraphInput(0),SemanticType::Bytes)],SemanticType::Text);
     let mut graphs = vec![
         entry.finish(result),
         main.finish(assembly),
         byte,
         invalid.finish(message),
         direct.finish(native),
+        checked.finish(emitted),
+        unsupported.finish(error),
+        legacy.finish(wrapper),
     ];
     graphs.extend(parser::graphs());
     ProgramDocument {

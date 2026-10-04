@@ -1,6 +1,25 @@
 use g0::{bootstrap_compiler::*, execution::Executor, program_binary::*, value::Value};
 #[path = "support/program_fixture.rs"]
 mod fixture;
+
+#[test]
+fn g0_direct_entry_rejects_legacy_container_without_host_decoder() {
+    let document = ProgramDocument {
+        entry_graph: "main".into(),
+        graphs: vec![g0::editor::GraphEditor::new().graph().clone()],
+        schemas: vec![],
+    };
+    let mut source = encode_program(&document).unwrap();
+    source[6..8].copy_from_slice(&2u16.to_le_bytes());
+    let compiler = compiler_document().validated_contract().unwrap();
+    let output = Executor::new(&compiler, compiler_limits())
+        .unwrap()
+        .run_graph("compile-direct", vec![Value::Bytes(source.into())])
+        .unwrap();
+    let [Value::Text(message)] = output.as_slice() else { panic!("compiler rejection") };
+    assert!(message.starts_with("G0 compiler:"), "{message}");
+    assert!(!message.contains(".text"));
+}
 #[test]
 fn g0_emitter_lowers_constant_graph_to_granular_native_calls() {
     let document = compiler_document();

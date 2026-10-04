@@ -13,17 +13,20 @@ those native facilities.
   with calls, selection and bounded loops compiled from files.
 - Native scalar GIR optimization, MIR, register allocation and x86-64 emission.
 - Integer arithmetic, comparisons, Boolean operations, checked conversion and
-  explicit truncation, subject to supported physical widths.
+  explicit truncation. The aggregate runtime preserves full signed i128 values;
+  checked Add/Sub/Mul return typed results on overflow.
 - Multi-graph composition and structured control through native files and the
   Rust bootstrap APIs.
 - Linux/x86-64 execution tests for generated assembly. Rust can build the
   compiler on Windows, but the emitted assembly uses ELF/System V conventions.
-- Native Win32/GDI graph editor with canonical save, validation, undo/redo and
-  bounded execution traces. The initial toolbox and UI limits are documented in
-  `editor-native.md`.
+- Native Win32/GDI graph editor with canonical save, operation/type/interface
+  forms, preserved port identities, undo/redo, persisted layout and live worker
+  debugging with pause, step, breakpoints, continue and cancellation. UI limits
+  are documented in `native-editor.md`.
 - Compiler graphs parse native program syntax, build offset-based ASTs, schedule
-  dependencies and emit primitive native graphs or a runtime wrapper. Full
-  semantic validation and structured control emission in G0 remain in progress; see
+  dependencies and emit native primitives, multiple graphs, calls, selection,
+  matching, loops and maps, or a runtime wrapper. Independent semantic validation
+  and native compiler self-hosting remain in progress; see
   `compiler-bootstrap.md` for reproducibility checks and remaining work.
 
 ## Native runtime
@@ -93,7 +96,7 @@ and `select.g0p` return 42; `loop.g0p` performs one state transition and returns
 
 ## Next milestone
 
-Expand the editor and G0 compiler beyond their initial profiles, then close the
-remaining runtime/profile integrations. The full
+Complete independent semantic validation and native self-hosting for the G0
+compiler, then finish the whole-branch review and verification. The full
 continuous checklist is in `docs/superpowers/plans/2026-10-04-language-runtime.md`.
 Policy sections remain host bindings, never authority obtained by decoding.
