@@ -6,6 +6,8 @@ mod typecheck;
 mod linkcheck;
 #[path = "bootstrap_compiler_wires.rs"]
 mod wires;
+#[path = "bootstrap_compiler_type_profile.rs"]
+mod type_profile;
 fn rows() -> SemanticType {
     SemanticType::Slice(Box::new(SemanticType::Slice(Box::new(int()))))
 }
@@ -436,5 +438,6 @@ pub(super) fn graphs() -> Vec<Graph> {
     graphs.extend(linkcheck::graphs());
     graphs.extend(operation_graphs());
     graphs.extend(wires::graphs());
+    graphs.extend(type_profile::graphs());
     graphs
 }

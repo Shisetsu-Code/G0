@@ -101,3 +101,17 @@ G0G 0.5 region integration: graph constructors create secret roots and scoped ch
 G0G 0.6 scoped tasks: owned child ResourceHost executes region effects; twice the child value quota reserves executor and resource allocations. Pure and scoped task kinds/capabilities remain distinct. Tests prove actual child read/write results, default-deny spawning, summary validation, child exhaustion and rejection of escaping child buffers. External effects remain explicit host-binding work.
 
 G0G 0.7 hosted tasks: explicit per-child factories receive only declared parent-held grants. StorageTaskFactory binds a fixed principal/scope/allowlist, stages a separate transaction and commits after valid output and cancellation checks. Real graph tests cover absent factories, denied delegation, durable success, staged-write discard after exhaustion and authority revocation at completion. Successful child commits remain independent of later parent failure; nested execution is rejected in this profile.
+
+Compiler optimization checkpoint: dense node/port lookup verifies candidate IDs
+before taking its fast path, and the scheduler preserves the general fallback
+for reordered dependencies. Independent wire review passed 13 semantic tests
+and 44 adversarial cases with duplicate/missing targets, sparse IDs and shuffled
+edges. Linux CI 37205459062 passed the four native aggregate tests, including
+actual full-width i128 C ABI execution, and twelve direct G0 control tests.
+Native compiler self-generation still exhausted its explicit 64-million-step
+reservation; tasks 8 and 9 remain open pending complete semantic validation and
+successful native generation comparison.
+Independent i128 decoder review verified 8,360 byte-pattern and boundary cases.
+Each valid word consumed 141 steps; static intervals prove every intermediate
+Mul/Add fits i128. A 16-byte slice rejects truncated and invalid-offset reads
+before decoding. The earlier loop exhausted a 180-step regression reservation.

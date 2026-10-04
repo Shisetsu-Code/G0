@@ -263,6 +263,8 @@ pub fn compiler_document() -> ProgramDocument {
     let domain=checked.op(Operation::And,vec![(domain,SemanticType::Bool),(names,SemanticType::Bool)],SemanticType::Bool);
     let references=checked.op(Operation::Subgraph("validator-program-references".into()),vec![(SourceEndpoint::GraphInput(0),SemanticType::Bytes)],SemanticType::Bool);
     let domain=checked.op(Operation::And,vec![(domain,SemanticType::Bool),(references,SemanticType::Bool)],SemanticType::Bool);
+    let schemas=checked.op(Operation::Subgraph("validator-empty-schemas".into()),vec![(SourceEndpoint::GraphInput(0),SemanticType::Bytes)],SemanticType::Bool);
+    let domain=checked.op(Operation::And,vec![(domain,SemanticType::Bool),(schemas,SemanticType::Bool)],SemanticType::Bool);
     let emitted=checked.op(Operation::Select{when_true:"control-compile".into(),when_false:"invalid-native-domain".into()},vec![(domain,SemanticType::Bool),(SourceEndpoint::GraphInput(0),SemanticType::Bytes)],SemanticType::Text);
     let node=checked.graph.nodes.last_mut().unwrap();node.inputs[0].name="selector".into();node.inputs[1].name="p0".into();
     let mut unsupported=Builder::new("invalid-native-domain",SemanticType::Bytes);let error=unsupported.text("G0 compiler: unsupported native profile");

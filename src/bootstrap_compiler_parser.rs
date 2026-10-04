@@ -11,6 +11,8 @@ mod bytes;
 mod schedule_fast;
 #[path = "bootstrap_compiler_lookup_fast.rs"]
 mod lookup_fast;
+#[path = "bootstrap_compiler_controlcheck.rs"]
+mod controlcheck;
 #[path = "bootstrap_compiler_operationcheck.rs"]
 mod operationcheck;
 #[path = "bootstrap_compiler_emitter.rs"]
@@ -447,6 +449,7 @@ pub(super) fn graphs() -> Vec<Graph> {
     syntax.extend(bytes::graphs());
     syntax.extend(schedule_fast::graphs());
     syntax.extend(lookup_fast::graphs());
+    syntax.extend(controlcheck::graphs());
     syntax.extend(operationcheck::graphs());
     syntax
 }
@@ -531,6 +534,7 @@ fn unique_identifier_list_graphs(name: &str) -> Vec<Graph> {
         int(),
         ids.clone(),
         SemanticType::Bool,
+        int(),
     ];
     let prefix = format!("reader-list-{name}");
     let mut condition = G::new(
@@ -549,11 +553,15 @@ fn unique_identifier_list_graphs(name: &str) -> Vec<Graph> {
     } else {
         word
     };
+    let above_maximum=body.compare(Operation::Gt,id.clone(),input(5));
+    let maximum=body.pick("reader-pick-offset",above_maximum.clone(),input(5),id.clone());
     let duplicate = body.op(
-        Operation::Subgraph("scheduler-contains".into()),
-        vec![(input(3), ids.clone()), (id.clone(), int())],
+        Operation::Select{when_true:format!("{prefix}-above-maximum"),when_false:"scheduler-contains".into()},
+        vec![(above_maximum,SemanticType::Bool),(input(3), ids.clone()), (id.clone(), int())],
         SemanticType::Bool,
     );
+    let node=body.b.graph.nodes.last_mut().unwrap();node.inputs[0].name="selector".into();node.inputs[1].name="p0".into();node.inputs[2].name="p1".into();
+    let mut fresh=G::new(&format!("{prefix}-above-maximum"),vec![ids.clone(),int()],vec![SemanticType::Bool]);let not_duplicate=fresh.bool(false);
     let unique = body.not(duplicate);
     let valid = body.and(input(4), unique);
     let singleton = body.op(Operation::MakeArray, vec![(id, int())], ids.clone());
@@ -570,15 +578,17 @@ fn unique_identifier_list_graphs(name: &str) -> Vec<Graph> {
     let start = main.advance(input(1), 4);
     let empty = main.op(Operation::MakeArray, vec![], ids);
     let initially_valid = main.bool(true);
+    let initial_maximum=main.n(0);
     let output = main.loop_node(
         &prefix,
         state,
-        vec![input(0), start, count, empty, initially_valid],
+        vec![input(0), start, count, empty, initially_valid,initial_maximum],
     );
     let end = main.guard(output[4].clone(), output[1].clone());
     vec![
         condition.finish(vec![test]),
-        body.finish(vec![input(0), next, remaining, seen, valid]),
+        body.finish(vec![input(0), next, remaining, seen, valid,maximum]),
+        fresh.finish(vec![not_duplicate]),
         main.finish(vec![end]),
     ]
 }
@@ -1126,7 +1136,7 @@ fn signed_integer_graphs() -> Vec<Graph> {
         vec![(added, result), (zero, full.clone())],
         full.clone(),
     );
-    let mut main = G::new("reader-i128", vec![SemanticType::Bytes, int()], vec![full]);
+    let mut main = G::new("reader-i128-word", vec![SemanticType::Bytes, int()], vec![full.clone()]);
     let high_at = main.advance(input(1), 15);
     let high = main.byte(high_at);
     let flip = main.n(128);
@@ -1154,16 +1164,39 @@ fn signed_integer_graphs() -> Vec<Graph> {
             max: 127,
         }),
     );
-    let count = main.n(15);
-    let loop_values = main.loop_node(
-        "reader-i128",
-        state,
-        vec![input(0), input(1), count, signed],
-    );
+    // Every intermediate prefix fits i128. Carry its exact static interval:
+    // [-128,127] * 256 + [0,255], repeated fifteen times, reaches precisely
+    // [i128::MIN,i128::MAX]. No checked-result loop or narrowing is needed.
+    let mut decoded = signed;
+    let mut range = IntegerType { min: -128, max: 127 };
+    let factor = main.n(256);
+    let factor_type = SemanticType::Integer(IntegerType { min: 256, max: 256 });
+    for offset in (0..15).rev() {
+        let at = main.advance(input(1), offset);
+        let byte = main.byte(at);
+        let multiplied_range = IntegerType { min: range.min * 256, max: range.max * 256 };
+        let multiplied = main.op(
+            Operation::Mul,
+            vec![(decoded, SemanticType::Integer(range)), (factor.clone(), factor_type.clone())],
+            SemanticType::Integer(multiplied_range.clone()),
+        );
+        range = IntegerType { min: multiplied_range.min, max: multiplied_range.max + 255 };
+        decoded = main.op(
+            Operation::Add,
+            vec![(multiplied, SemanticType::Integer(multiplied_range)), (byte, SemanticType::Integer(IntegerType { min: 0, max: 255 }))],
+            SemanticType::Integer(range.clone()),
+        );
+    }
+    let mut bounded = G::new("reader-i128", vec![SemanticType::Bytes, int()], vec![full.clone()]);
+    let length = bounded.n(16);
+    let word = bounded.op(Operation::BytesSlice, vec![(input(0),SemanticType::Bytes),(input(1),int()),(length,int())], SemanticType::Bytes);
+    let zero = bounded.n(0);
+    let decoded_word = bounded.op(Operation::Subgraph("reader-i128-word".into()), vec![(word,SemanticType::Bytes),(zero,int())], full);
     vec![
         condition.finish(vec![test]),
         body.finish(vec![input(0), input(1), remaining, value]),
-        main.finish(vec![loop_values[3].clone()]),
+        main.finish(vec![decoded]),
+        bounded.finish(vec![decoded_word]),
     ]
 }
 

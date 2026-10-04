@@ -1,6 +1,16 @@
 use g0::{bootstrap_compiler::*, execution::Executor, value::Value};
 
 #[test]
+fn g0_identifier_reader_skips_membership_scans_above_the_seen_maximum() {
+    let mut bytes=100u32.to_le_bytes().to_vec();
+    for id in 0u16..100 {bytes.extend(id.to_le_bytes());bytes.extend(1u32.to_le_bytes());bytes.push(b'x');bytes.push(0);}
+    let contract=compiler_document().validated_contract().unwrap();let mut limits=compiler_limits();limits.max_steps=25_000;
+    let len=bytes.len() as i128;
+    let output=Executor::new(&contract,limits).unwrap().run_graph("reader-list-reader-port",vec![Value::Bytes(bytes.into()),Value::Integer(0)]).unwrap();
+    assert_eq!(output,vec![Value::Integer(len)]);
+}
+
+#[test]
 fn g0_integer_assignment_uses_signed_byte_comparison_under_small_step_budget() {
     use g0::gir::*;
     let narrow=SemanticType::Integer(IntegerType{min:-7,max:42});

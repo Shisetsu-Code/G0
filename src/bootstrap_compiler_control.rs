@@ -406,7 +406,26 @@ fn operation_graphs() -> Vec<Graph> {
     let no_call = native_call(&mut select, no, count, 8);
     let otherwise = label(&mut select, "_else");
     let done = label(&mut select, "_done");
-    let select_code=template(&mut select,vec![Fragment::Text(start),Fragment::Literal("    movq %r12, %rdi\n    movq 0(%r15), %rsi\n    call g0_native_truth\n    testq %rax, %rax\n    jz "),Fragment::Text(otherwise.clone()),Fragment::Literal("\n"),Fragment::Text(yes_call),Fragment::Literal("    jmp "),Fragment::Text(done.clone()),Fragment::Literal("\n"),Fragment::Text(otherwise),Fragment::Literal(":\n"),Fragment::Text(no_call),Fragment::Text(done),Fragment::Literal(":\n")]);
+    let select_code = template(
+        &mut select,
+        vec![
+            Fragment::Text(start),
+            Fragment::Literal(
+                "    movq %r12, %rdi\n    movq 0(%r15), %rsi\n    call g0_native_truth\n    testq %rax, %rax\n    jz ",
+            ),
+            Fragment::Text(otherwise.clone()),
+            Fragment::Literal("\n"),
+            Fragment::Text(yes_call),
+            Fragment::Literal("    jmp "),
+            Fragment::Text(done.clone()),
+            Fragment::Literal("\n"),
+            Fragment::Text(otherwise),
+            Fragment::Literal(":\n"),
+            Fragment::Text(no_call),
+            Fragment::Text(done),
+            Fragment::Literal(":\n"),
+        ],
+    );
     let mut main = G::new(
         "control-operation",
         operation_types(),
@@ -624,7 +643,50 @@ fn loop_graphs() -> Vec<Graph> {
     let done = label(&mut main, "_done");
     let exceeded = label(&mut main, "_bound");
     let fail = failure(&mut main);
-    let loop_code=template(&mut main,vec![Fragment::Text(start),Fragment::Literal("    movq $0, -48(%rbp)\n"),Fragment::Text(head.clone()),Fragment::Literal(":\n    movq %r12, %rdi\n    call g0_native_tick\n    testq %rax, %rax\n    jz "),Fragment::Text(fail.clone()),Fragment::Literal("\n"),Fragment::Text(condition_call),Fragment::Literal("    testq %rax, %rax\n    jz "),Fragment::Text(fail.clone()),Fragment::Literal("\n    movq %r12, %rdi\n    movq %rax, %rsi\n    call g0_native_truth\n    testq %rax, %rax\n    jz "),Fragment::Text(done.clone()),Fragment::Literal("\n    movabsq $"),Fragment::Text(bound),Fragment::Literal(", %rax\n    cmpq %rax, -48(%rbp)\n    jae "),Fragment::Text(exceeded.clone()),Fragment::Literal("\n"),Fragment::Text(body_call),Fragment::Literal("    testq %rax, %rax\n    jz "),Fragment::Text(fail.clone()),Fragment::Literal("\n"),Fragment::Text(copies),Fragment::Literal("    incq -48(%rbp)\n    jmp "),Fragment::Text(head),Fragment::Literal("\n"),Fragment::Text(exceeded),Fragment::Literal(":\n    movq %r12, %rdi\n    movq $"),Fragment::Number(input(1)),Fragment::Literal(", %rsi\n    movq $"),Fragment::Number(input(2)),Fragment::Literal(", %rdx\n    call g0_native_loop_fail\n    jmp "),Fragment::Text(fail),Fragment::Literal("\n"),Fragment::Text(done),Fragment::Literal(":\n"),Fragment::Text(returned)]);
+    let loop_code = template(
+        &mut main,
+        vec![
+            Fragment::Text(start),
+            Fragment::Literal("    movq $0, -48(%rbp)\n"),
+            Fragment::Text(head.clone()),
+            Fragment::Literal(
+                ":\n    movq %r12, %rdi\n    call g0_native_tick\n    testq %rax, %rax\n    jz ",
+            ),
+            Fragment::Text(fail.clone()),
+            Fragment::Literal("\n"),
+            Fragment::Text(condition_call),
+            Fragment::Literal("    testq %rax, %rax\n    jz "),
+            Fragment::Text(fail.clone()),
+            Fragment::Literal(
+                "\n    movq %r12, %rdi\n    movq %rax, %rsi\n    call g0_native_truth\n    testq %rax, %rax\n    jz ",
+            ),
+            Fragment::Text(done.clone()),
+            Fragment::Literal("\n    movabsq $"),
+            Fragment::Text(bound),
+            Fragment::Literal(", %rax\n    cmpq %rax, -48(%rbp)\n    jae "),
+            Fragment::Text(exceeded.clone()),
+            Fragment::Literal("\n"),
+            Fragment::Text(body_call),
+            Fragment::Literal("    testq %rax, %rax\n    jz "),
+            Fragment::Text(fail.clone()),
+            Fragment::Literal("\n"),
+            Fragment::Text(copies),
+            Fragment::Literal("    incq -48(%rbp)\n    jmp "),
+            Fragment::Text(head),
+            Fragment::Literal("\n"),
+            Fragment::Text(exceeded),
+            Fragment::Literal(":\n    movq %r12, %rdi\n    movq $"),
+            Fragment::Number(input(1)),
+            Fragment::Literal(", %rsi\n    movq $"),
+            Fragment::Number(input(2)),
+            Fragment::Literal(", %rdx\n    call g0_native_loop_fail\n    jmp "),
+            Fragment::Text(fail),
+            Fragment::Literal("\n"),
+            Fragment::Text(done),
+            Fragment::Literal(":\n"),
+            Fragment::Text(returned),
+        ],
+    );
     let mut dispatch = G::new(
         "control-operation-loop-or",
         operation_types(),
@@ -685,7 +747,43 @@ fn map_graphs() -> Vec<Graph> {
     let checked = check_result(&mut main);
     let head = label(&mut main, "_head");
     let done = label(&mut main, "_done");
-    let code=template(&mut main,vec![Fragment::Text(start),Fragment::Literal("    movq 0(%r15), %rsi\n    movq %rsi, -72(%rbp)\n    movq %r12, %rdi\n    call g0_native_sequence_len\n    movq %rax, -48(%rbp)\n    movq %r12, %rdi\n    movq %rax, %rsi\n    call g0_native_map_begin\n"),Fragment::Text(checked.clone()),Fragment::Literal("    movq %rax, -56(%rbp)\n    movq $0, -64(%rbp)\n"),Fragment::Text(head.clone()),Fragment::Literal(":\n    movq -64(%rbp), %rax\n    cmpq -48(%rbp), %rax\n    jae "),Fragment::Text(done.clone()),Fragment::Literal("\n    movq %r12, %rdi\n    movq -72(%rbp), %rsi\n    movq %rax, %rdx\n    call g0_native_sequence_item\n"),Fragment::Text(checked.clone()),Fragment::Literal("    movq %rax, -80(%rbp)\n    movq %r12, %rdi\n    leaq -80(%rbp), %rsi\n    movq $1, %rdx\n    call "),Fragment::Text(symbol),Fragment::Literal("\n"),Fragment::Text(checked.clone()),Fragment::Literal("    movq %r12, %rdi\n    movq -56(%rbp), %rsi\n    movq %rax, %rdx\n    call g0_native_map_push\n"),Fragment::Text(checked),Fragment::Literal("    incq -64(%rbp)\n    jmp "),Fragment::Text(head),Fragment::Literal("\n"),Fragment::Text(done),Fragment::Literal(":\n    movq %r12, %rdi\n    movq $"),Fragment::Number(input(1)),Fragment::Literal(", %rsi\n    movq $"),Fragment::Number(input(2)),Fragment::Literal(", %rdx\n    movq -56(%rbp), %rcx\n    call g0_native_map_finish\n")]);
+    let code = template(
+        &mut main,
+        vec![
+            Fragment::Text(start),
+            Fragment::Literal(
+                "    movq 0(%r15), %rsi\n    movq %rsi, -72(%rbp)\n    movq %r12, %rdi\n    call g0_native_sequence_len\n    movq %rax, -48(%rbp)\n    movq %r12, %rdi\n    movq %rax, %rsi\n    call g0_native_map_begin\n",
+            ),
+            Fragment::Text(checked.clone()),
+            Fragment::Literal("    movq %rax, -56(%rbp)\n    movq $0, -64(%rbp)\n"),
+            Fragment::Text(head.clone()),
+            Fragment::Literal(":\n    movq -64(%rbp), %rax\n    cmpq -48(%rbp), %rax\n    jae "),
+            Fragment::Text(done.clone()),
+            Fragment::Literal(
+                "\n    movq %r12, %rdi\n    movq -72(%rbp), %rsi\n    movq %rax, %rdx\n    call g0_native_sequence_item\n",
+            ),
+            Fragment::Text(checked.clone()),
+            Fragment::Literal(
+                "    movq %rax, -80(%rbp)\n    movq %r12, %rdi\n    leaq -80(%rbp), %rsi\n    movq $1, %rdx\n    call ",
+            ),
+            Fragment::Text(symbol),
+            Fragment::Literal("\n"),
+            Fragment::Text(checked.clone()),
+            Fragment::Literal(
+                "    movq %r12, %rdi\n    movq -56(%rbp), %rsi\n    movq %rax, %rdx\n    call g0_native_map_push\n",
+            ),
+            Fragment::Text(checked),
+            Fragment::Literal("    incq -64(%rbp)\n    jmp "),
+            Fragment::Text(head),
+            Fragment::Literal("\n"),
+            Fragment::Text(done),
+            Fragment::Literal(":\n    movq %r12, %rdi\n    movq $"),
+            Fragment::Number(input(1)),
+            Fragment::Literal(", %rsi\n    movq $"),
+            Fragment::Number(input(2)),
+            Fragment::Literal(", %rdx\n    movq -56(%rbp), %rcx\n    call g0_native_map_finish\n"),
+        ],
+    );
     let mut dispatch = G::new(
         "control-operation-map-or",
         operation_types(),
@@ -928,7 +1026,21 @@ fn output_graphs() -> Vec<Graph> {
     );
     let stores = join(&mut pack, out[8].clone());
     let fail = failure(&mut pack);
-    let pack_code=template(&mut pack,vec![Fragment::Literal("    movq %rax, -40(%rbp)\n    movq %r12, %rdi\n    movq $"),Fragment::Number(input(1)),Fragment::Literal(", %rsi\n    movq $"),Fragment::Number(input(2)),Fragment::Literal(", %rdx\n    movq %rax, %rcx\n    call g0_native_pack_check\n    testq %rax, %rax\n    jz "),Fragment::Text(fail),Fragment::Literal("\n"),Fragment::Text(stores)]);
+    let pack_code = template(
+        &mut pack,
+        vec![
+            Fragment::Literal("    movq %rax, -40(%rbp)\n    movq %r12, %rdi\n    movq $"),
+            Fragment::Number(input(1)),
+            Fragment::Literal(", %rsi\n    movq $"),
+            Fragment::Number(input(2)),
+            Fragment::Literal(
+                ", %rdx\n    movq %rax, %rcx\n    call g0_native_pack_check\n    testq %rax, %rax\n    jz ",
+            ),
+            Fragment::Text(fail),
+            Fragment::Literal("\n"),
+            Fragment::Text(stores),
+        ],
+    );
     let mut main = G::new(
         "control-store-outputs",
         output_types(),
@@ -1329,7 +1441,28 @@ fn graph_emission_graphs() -> Vec<Graph> {
             Fragment::Literal("_return"),
         ],
     );
-    let prologue=template(&mut main,vec![Fragment::Literal(".text\n.type "),Fragment::Text(symbol.clone()),Fragment::Literal(", @function\n"),Fragment::Text(symbol.clone()),Fragment::Literal(":\n    pushq %rbp\n    movq %rsp, %rbp\n    pushq %r12\n    pushq %r13\n    pushq %r14\n    pushq %r15\n    movq %rdi, %r12\n    movq %rsi, %r13\n    movq %rdx, %rcx\n    movq %r13, %rdx\n    movq $"),Fragment::Number(input(1)),Fragment::Literal(", %rsi\n    call g0_native_graph_enter\n    testq %rax, %rax\n    jz "),Fragment::Text(early.clone()),Fragment::Literal("\n    subq $"),Fragment::Number(allocation.clone()),Fragment::Literal(", %rsp\n    movq %rsp, %r14\n    leaq "),Fragment::Number(slot_bytes),Fragment::Literal("(%rsp), %r15\n")]);
+    let prologue = template(
+        &mut main,
+        vec![
+            Fragment::Literal(".text\n.type "),
+            Fragment::Text(symbol.clone()),
+            Fragment::Literal(", @function\n"),
+            Fragment::Text(symbol.clone()),
+            Fragment::Literal(
+                ":\n    pushq %rbp\n    movq %rsp, %rbp\n    pushq %r12\n    pushq %r13\n    pushq %r14\n    pushq %r15\n    movq %rdi, %r12\n    movq %rsi, %r13\n    movq %rdx, %rcx\n    movq %r13, %rdx\n    movq $",
+            ),
+            Fragment::Number(input(1)),
+            Fragment::Literal(
+                ", %rsi\n    call g0_native_graph_enter\n    testq %rax, %rax\n    jz ",
+            ),
+            Fragment::Text(early.clone()),
+            Fragment::Literal("\n    subq $"),
+            Fragment::Number(allocation.clone()),
+            Fragment::Literal(", %rsp\n    movq %rsp, %r14\n    leaq "),
+            Fragment::Number(slot_bytes),
+            Fragment::Literal("(%rsp), %r15\n"),
+        ],
+    );
     let body = call(
         &mut main,
         "control-graph-nodes",
@@ -1362,7 +1495,36 @@ fn graph_emission_graphs() -> Vec<Graph> {
         vec![input(0), input(1), outputs],
         SemanticType::Text,
     );
-    let footer=template(&mut main,vec![Fragment::Text(result),Fragment::Text(validate),Fragment::Literal("    movq %rax, %r13\n    jmp "),Fragment::Text(leave.clone()),Fragment::Literal("\n"),Fragment::Text(fail),Fragment::Literal(":\n    xorq %r13, %r13\n"),Fragment::Text(leave),Fragment::Literal(":\n    movq %r12, %rdi\n    call g0_native_leave\n    movq %r13, %rax\n    addq $"),Fragment::Number(allocation),Fragment::Literal(", %rsp\n    jmp "),Fragment::Text(return_label.clone()),Fragment::Literal("\n"),Fragment::Text(early),Fragment::Literal(":\n    xorq %rax, %rax\n"),Fragment::Text(return_label),Fragment::Literal(":\n    popq %r15\n    popq %r14\n    popq %r13\n    popq %r12\n    popq %rbp\n    ret\n.size "),Fragment::Text(symbol.clone()),Fragment::Literal(", .-"),Fragment::Text(symbol),Fragment::Literal("\n")]);
+    let footer = template(
+        &mut main,
+        vec![
+            Fragment::Text(result),
+            Fragment::Text(validate),
+            Fragment::Literal("    movq %rax, %r13\n    jmp "),
+            Fragment::Text(leave.clone()),
+            Fragment::Literal("\n"),
+            Fragment::Text(fail),
+            Fragment::Literal(":\n    xorq %r13, %r13\n"),
+            Fragment::Text(leave),
+            Fragment::Literal(
+                ":\n    movq %r12, %rdi\n    call g0_native_leave\n    movq %r13, %rax\n    addq $",
+            ),
+            Fragment::Number(allocation),
+            Fragment::Literal(", %rsp\n    jmp "),
+            Fragment::Text(return_label.clone()),
+            Fragment::Literal("\n"),
+            Fragment::Text(early),
+            Fragment::Literal(":\n    xorq %rax, %rax\n"),
+            Fragment::Text(return_label),
+            Fragment::Literal(
+                ":\n    popq %r15\n    popq %r14\n    popq %r13\n    popq %r12\n    popq %rbp\n    ret\n.size ",
+            ),
+            Fragment::Text(symbol.clone()),
+            Fragment::Literal(", .-"),
+            Fragment::Text(symbol),
+            Fragment::Literal("\n"),
+        ],
+    );
     let code = template(
         &mut main,
         vec![
@@ -1434,8 +1596,32 @@ fn program_emission_graphs() -> Vec<Graph> {
         SemanticType::Text,
     );
     let length = main.length(input(0));
-    let bridge=template(&mut main,vec![Fragment::Literal(".text\n.globl g0_compiled_entry\ng0_compiled_entry:\n    xorl %r9d, %r9d\n    movq %rsi, %rcx\n    movq %rdi, %rdx\n    leaq "),Fragment::Text(entry.clone()),Fragment::Literal("(%rip), %r8\n    leaq .Lg0_program(%rip), %rdi\n    movq $"),Fragment::Number(length.clone()),Fragment::Literal(", %rsi\n    jmp g0_native_invoke\n.globl g0_compiled_entry_with_limits\ng0_compiled_entry_with_limits:\n    movq %rdx, %r9\n    movq %rsi, %rcx\n    movq %rdi, %rdx\n    leaq "),Fragment::Text(entry),Fragment::Literal("(%rip), %r8\n    leaq .Lg0_program(%rip), %rdi\n    movq $"),Fragment::Number(length),Fragment::Literal(", %rsi\n    jmp g0_native_invoke\n.section .rodata\n.Lg0_program:\n.byte ")]);
-    let data = call(&mut main,"emit-program-byte-values",vec![input(0)],SemanticType::Text);
+    let bridge = template(
+        &mut main,
+        vec![
+            Fragment::Literal(
+                ".text\n.globl g0_compiled_entry\ng0_compiled_entry:\n    xorl %r9d, %r9d\n    movq %rsi, %rcx\n    movq %rdi, %rdx\n    leaq ",
+            ),
+            Fragment::Text(entry.clone()),
+            Fragment::Literal("(%rip), %r8\n    leaq .Lg0_program(%rip), %rdi\n    movq $"),
+            Fragment::Number(length.clone()),
+            Fragment::Literal(
+                ", %rsi\n    jmp g0_native_invoke\n.globl g0_compiled_entry_with_limits\ng0_compiled_entry_with_limits:\n    movq %rdx, %r9\n    movq %rsi, %rcx\n    movq %rdi, %rdx\n    leaq ",
+            ),
+            Fragment::Text(entry),
+            Fragment::Literal("(%rip), %r8\n    leaq .Lg0_program(%rip), %rdi\n    movq $"),
+            Fragment::Number(length),
+            Fragment::Literal(
+                ", %rsi\n    jmp g0_native_invoke\n.section .rodata\n.Lg0_program:\n.byte ",
+            ),
+        ],
+    );
+    let data = call(
+        &mut main,
+        "emit-program-byte-values",
+        vec![input(0)],
+        SemanticType::Text,
+    );
     let code = template(
         &mut main,
         vec![
@@ -1701,6 +1887,14 @@ fn domain_graphs() -> Vec<Graph> {
     let ordered = pb.compare(Operation::Gt, port_id.clone(), input(3));
     let ordered = pb.logic(Operation::Or, ordered, input(5));
     let port_valid = pb.and(input(4), ordered);
+    let name_at = pb.advance(input(1), 2);
+    let type_at = pb.skip_blob(name_at);
+    let supported = pb.op(
+        Operation::Subgraph("validator-type-profile".into()),
+        vec![(input(0), SemanticType::Bytes), (type_at, int())],
+        SemanticType::Bool,
+    );
+    let port_valid = pb.and(port_valid, supported);
     let port_next = pb.call("reader-port-layout", input(1));
     let one = pb.n(1);
     let left = pb.arithmetic(Operation::Sub, input(2), one);

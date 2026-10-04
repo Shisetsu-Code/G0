@@ -30,8 +30,7 @@ The default output remains an interpreter-backed native wrapper. It embeds
 the document and invokes the linked G0 runtime. The Rust bootstrap host still
 decodes and semantically validates source before invoking this entry. The G0
 reader does not yet replace the complete semantic validator, including control
-contracts, call cycles, schema references, versioned type availability and
-linearity.
+call cycles, schema references and complete linearity proofs.
 Reproducing the wrapper compiler through multiple stages does not establish
 full compiler self-hosting.
 

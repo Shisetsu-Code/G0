@@ -343,6 +343,47 @@ fn g0_control_domain_accepts_control_graphs_and_rejects_effect_operations() {
     );
 }
 
+#[test]
+fn g0_control_domain_checks_nested_port_type_profiles() {
+    use g0::gir::{IntegerType, Port, SemanticType};
+    let integer = SemanticType::Integer(IntegerType::new(0, 100).unwrap());
+    for (ty, accepted) in [
+        (SemanticType::Array(Box::new(integer.clone()), 2), true),
+        (
+            SemanticType::Result(Box::new(SemanticType::Bytes), Box::new(SemanticType::Bool)),
+            true,
+        ),
+        (
+            SemanticType::Option(Box::new(SemanticType::Unique(Box::new(integer)))),
+            false,
+        ),
+        (
+            SemanticType::Slice(Box::new(SemanticType::Shared(Box::new(
+                SemanticType::Bytes,
+            )))),
+            false,
+        ),
+        (SemanticType::Secret(Box::new(SemanticType::Bytes)), false),
+    ] {
+        let mut graph = g0::editor::GraphEditor::new().graph().clone();
+        graph.inputs.push(Port {
+            id: 0,
+            name: "profile".into(),
+            ty,
+        });
+        let source = g0::program_binary::encode_program(&g0::program_binary::ProgramDocument {
+            entry_graph: "main".into(),
+            graphs: vec![graph],
+            schemas: vec![],
+        })
+        .unwrap();
+        assert_eq!(
+            run("control-domain", vec![Value::Bytes(source.into())]),
+            vec![Value::Bool(accepted)]
+        );
+    }
+}
+
 fn sparse(
     mut document: g0::program_binary::ProgramDocument,
 ) -> g0::program_binary::ProgramDocument {
