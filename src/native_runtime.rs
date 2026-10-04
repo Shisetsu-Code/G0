@@ -1,6 +1,6 @@
 //! Explicit bounded ABI for generated native wrappers. No ambient capabilities.
 use crate::{
-    execution::{Executor, RuntimeError},
+    execution::RuntimeError,
     gir::SemanticType,
     program_binary::{ProgramBinaryIssue, decode_program},
     value::Value,
@@ -43,10 +43,13 @@ pub fn execute_embedded(
         ],
         _ => return Err(NativeRuntimeError::EntryInterface),
     };
-    let mut executor = Executor::new(&program, crate::bootstrap_compiler::compiler_limits())
-        .map_err(NativeRuntimeError::Runtime)?;
-    executor
-        .run_graph(&document.entry_graph, args)
+    let mut host = crate::resource_host::ResourceHost::new(
+        std::sync::Arc::new(program),
+        crate::bootstrap_compiler::compiler_limits(),
+        Default::default(),
+    )
+    .map_err(NativeRuntimeError::Runtime)?;
+    host.run_graph(&document.entry_graph, args)
         .map_err(NativeRuntimeError::Runtime)
 }
 

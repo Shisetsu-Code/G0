@@ -1,6 +1,4 @@
-use crate::gir::{
-    Edge, Graph, Port, SourceEndpoint, TargetEndpoint,
-};
+use crate::gir::{Edge, Graph, Port, SourceEndpoint, TargetEndpoint};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GraphFormatVersion {
@@ -9,7 +7,7 @@ pub struct GraphFormatVersion {
 }
 
 impl GraphFormatVersion {
-    pub const BOOTSTRAP: Self = Self { major: 0, minor: 2 };
+    pub const BOOTSTRAP: Self = Self { major: 0, minor: 3 };
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,14 +50,7 @@ fn edge_key(edge: &Edge) -> (u8, u32, u16, u8, u32, u16) {
         TargetEndpoint::GraphOutput(port) => (1, 0, port),
     };
 
-    (
-        source.0,
-        source.1,
-        source.2,
-        target.0,
-        target.1,
-        target.2,
-    )
+    (source.0, source.1, source.2, target.0, target.1, target.2)
 }
 
 pub fn structurally_equal(a: &Graph, b: &Graph) -> bool {
@@ -74,8 +65,7 @@ pub enum CanonicalGraphIssue {
 pub fn validated_canonical_graph(
     graph: &Graph,
 ) -> Result<CanonicalGraphDocument, CanonicalGraphIssue> {
-    crate::gir_validate::validate(graph)
-        .map_err(|_| CanonicalGraphIssue::InvalidGraph)?;
+    crate::gir_validate::validate(graph).map_err(|_| CanonicalGraphIssue::InvalidGraph)?;
     Ok(canonicalize_graph(graph))
 }
 
@@ -84,9 +74,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-    use crate::gir::{
-        AuthorityMode, IntegerType, Literal, Node, Operation, SemanticType,
-    };
+    use crate::gir::{AuthorityMode, IntegerType, Literal, Node, Operation, SemanticType};
 
     fn node(id: u32, value: i128) -> Node {
         Node {
@@ -96,9 +84,7 @@ mod tests {
             outputs: vec![Port {
                 id: 0,
                 name: "out".into(),
-                ty: SemanticType::Integer(
-                    IntegerType::new(value, value).unwrap(),
-                ),
+                ty: SemanticType::Integer(IntegerType::new(value, value).unwrap()),
             }],
             effects: BTreeSet::new(),
             required_capabilities: BTreeSet::new(),

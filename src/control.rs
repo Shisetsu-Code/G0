@@ -82,6 +82,13 @@ pub fn validate_control_graphs(graphs: &[Graph]) -> Result<(), Vec<ControlIssue>
     for graph in graphs {
         for node in &graph.nodes {
             match &node.operation {
+                Operation::TaskSpawn { body, .. } | Operation::TaskJoin { body } => {
+                    validate_task(graph, node, body, &by_name, &mut issues);
+                    references
+                        .entry(graph.name.clone())
+                        .or_default()
+                        .insert(body.clone());
+                }
                 Operation::Map { body } => {
                     validate_map(graph, node, body, &by_name, &mut issues);
                     references
@@ -146,6 +153,9 @@ pub fn control_references(graph: &Graph) -> BTreeSet<String> {
     let mut result = BTreeSet::new();
     for node in &graph.nodes {
         match &node.operation {
+            Operation::TaskSpawn { body, .. } | Operation::TaskJoin { body } => {
+                result.insert(body.clone());
+            }
             Operation::Map { body } => {
                 result.insert(body.clone());
             }
@@ -170,6 +180,74 @@ pub fn control_references(graph: &Graph) -> BTreeSet<String> {
         }
     }
     result
+}
+
+fn validate_task(
+    owner: &Graph,
+    node: &Node,
+    target: &str,
+    by_name: &BTreeMap<&str, &Graph>,
+    issues: &mut Vec<ControlIssue>,
+) {
+    let Some(body) = by_name.get(target).copied() else {
+        issues.push(ControlIssue::UnknownGraph {
+            owner: owner.name.clone(),
+            node: node.id,
+            target: target.into(),
+        });
+        return;
+    };
+    let task_type = SemanticType::Unique(Box::new(SemanticType::Reference(format!(
+        "g0.task:{target}"
+    ))));
+    let (valid, action) = match &node.operation {
+        Operation::TaskSpawn {
+            max_steps,
+            max_value_bytes,
+            ..
+        } => (
+            *max_steps > 0
+                && *max_value_bytes > 0
+                && sequenced_interface(&node.inputs, &body.inputs)
+                && (1..=2).contains(&node.outputs.len())
+                && node.outputs[0].ty == task_type
+                && (node.outputs.len() == 1 || node.outputs[1].ty == SemanticType::Bool),
+            "spawn",
+        ),
+        Operation::TaskJoin { .. } => (
+            (1..=2).contains(&node.inputs.len())
+                && node.inputs[0].ty == task_type
+                && (node.inputs.len() == 1 || node.inputs[1].ty == SemanticType::Bool)
+                && sequenced_interface(&node.outputs, &body.outputs),
+            "join",
+        ),
+        _ => return,
+    };
+    let cap = Capability::new(
+        crate::gir::CapabilityClass::LocalExecution,
+        action,
+        target,
+        "tasks",
+    );
+    let (effects, capabilities) = graph_effect_summary(body);
+    if !valid
+        || !effects.is_empty()
+        || !capabilities.is_empty()
+        || node.effects != BTreeSet::from([Effect::LocalExecution])
+        || node.required_capabilities != BTreeSet::from([cap])
+    {
+        issues.push(ControlIssue::EffectSummaryMismatch {
+            owner: owner.name.clone(),
+            node: node.id,
+        });
+    }
+}
+
+fn sequenced_interface(actual: &[Port], payload: &[Port]) -> bool {
+    (actual.len() == payload.len() || actual.len() == payload.len() + 1)
+        && same_interface(&actual[..payload.len()], payload)
+        && (actual.len() == payload.len()
+            || actual.last().is_some_and(|p| p.ty == SemanticType::Bool))
 }
 
 fn validate_map(

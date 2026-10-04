@@ -42,8 +42,14 @@ Task 1: complete — cargo test: 301 passed; cargo clippy --all-targets -- -D wa
 
 Tasks 2..6: initial native profiles implemented — 324 tests passed; clippy all-targets clean. One real typed record traversed authenticated TLS, GIR storage effects, a durable commit and store reopen.
 Ruling: Ship explicit initial storage/transport profiles and reject advanced unsupported requirements — preserves security instead of treating validation as implementation — cost if wrong: extend the profiles before applications requiring protected fields, relations, migration or multiplexing can run.
-- [ ] Remaining runtime integration: GIR region/task handles; aggregate x86 lowering; protected fields/credentials and relations; migration/rollback witnesses; advanced transport profiles.
+- [x] GIR region/buffer handles and pure task spawn/join, including canonical files and native hosts.
+- [x] Persistent relations, cardinality, authorized delete plans and GIR set/traverse operations.
+- [ ] Remaining runtime integration: aggregate x86 lowering; protected fields/credentials; migration/rollback witnesses; advanced transport profiles; child/secret regions and effectful child task profiles in GIR.
 
 Task 7: initial Win32/GDI editor implemented and smoke-tested on Windows: create/connect/save/execute 42 + 7 = 49, native canvas rendered to BMP. Canonical editing model, undo/redo and bounded graph/node trace tested. Full toolbox constructors, persisted screen layout and live breakpoints remain. Collection Map/TextJoin operations added for compiler construction; order, empty input, wrong body types and execution limits tested.
 
 Task 8: executable G0 native-wrapper backend added with canonical compiler source, typed G0P 0.3 entry arguments, opaque native runtime ABI and atomic CLI output. Its graph source compiles itself reproducibly through the runtime; Linux CI additionally links and compares three stages. Direct native optimizing lowering and a G0 implementation of decoding/validation remain; the interpreter-backed wrapper is explicitly not marked full self-hosting.
+
+Runtime integration: G0G 0.3 resource operations now execute through opaque host-bound linear handles. Tests cover region lifetime, bounds, foreign/stale handles, schema-contained linear fan-out, explicit task permissions, ordered concurrent spawning, one-time join and child error propagation. Native wrappers, CLI, editor and graph services route these operations to the actual resource scope. Linux and Windows CI succeeded for the preceding 336-test editor/compiler checkpoint (run 37193464436).
+
+Storage relations: actual encrypted row metadata, serializable updates, scope/resource/cardinality enforcement and authorized Restrict/Detach/Cascade deletion implemented. Cascades are bounded to 128 entities before recursive planning. G0S 0.1 fixture read and G0S 0.2 commit/reopen upgrade verified; GIR set/traverse executes within the same storage transaction. Full suite: 345 tests pass.

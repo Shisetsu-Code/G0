@@ -16,6 +16,7 @@ pub enum ValidationCode {
     TypeMismatch,
     MissingInputDriver,
     MultipleInputDrivers,
+    LinearFanout,
     MissingGraphOutputDriver,
     RawCycle,
     OperationShape,
@@ -103,10 +104,19 @@ pub fn validate(graph: &Graph) -> Result<(), ValidationReport> {
 
     let mut driver_count: BTreeMap<TargetEndpoint, usize> = BTreeMap::new();
     let mut adjacency: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
+    let mut linear_sources = BTreeSet::new();
 
     for edge in &graph.edges {
         let source_ty = resolve_source_type(graph, &edge.from);
         let target_ty = resolve_target_type(graph, &edge.to);
+        if source_ty.is_some_and(|ty| contains_unique(ty, 0))
+            && !linear_sources.insert(edge.from.clone())
+        {
+            report.push(
+                ValidationCode::LinearFanout,
+                format!("linear source {:?} has more than one consumer", edge.from),
+            );
+        }
 
         if source_ty.is_none() {
             report.push(
@@ -248,6 +258,28 @@ fn validate_port_set(label: &str, ports: &[Port], report: &mut ValidationReport)
     }
 }
 
+fn contains_unique(ty: &SemanticType, depth: usize) -> bool {
+    if depth >= 128 {
+        return true;
+    }
+    match ty {
+        SemanticType::Unique(_) => true,
+        SemanticType::Array(t, _)
+        | SemanticType::Vector(t, _)
+        | SemanticType::Slice(t)
+        | SemanticType::Option(t)
+        | SemanticType::Secret(t)
+        | SemanticType::Credential(t)
+        | SemanticType::State(t)
+        | SemanticType::Atomic(t)
+        | SemanticType::Versioned(t) => contains_unique(t, depth + 1),
+        SemanticType::Result(a, b) => {
+            contains_unique(a, depth + 1) || contains_unique(b, depth + 1)
+        }
+        _ => false,
+    }
+}
+
 fn resolve_source_type<'a>(graph: &'a Graph, source: &SourceEndpoint) -> Option<&'a SemanticType> {
     match source {
         SourceEndpoint::GraphInput(port) => {
@@ -278,6 +310,18 @@ fn resolve_target_type<'a>(graph: &'a Graph, target: &TargetEndpoint) -> Option<
 
 fn validate_operation(node: &Node, report: &mut ValidationReport) {
     match &node.operation {
+        Operation::RegionOpen
+        | Operation::RegionAllocate
+        | Operation::RegionWrite
+        | Operation::RegionRead
+        | Operation::RegionClose => {
+            if let Err(message) = crate::resource_host::validate_node(node) {
+                report.push(
+                    ValidationCode::OperationShape,
+                    format!("node {}: {message}", node.id),
+                );
+            }
+        }
         Operation::Const(literal) => {
             require_shape(node, 0, 1, report);
             if let Some(output) = node.outputs.first()
@@ -367,7 +411,9 @@ fn validate_operation(node: &Node, report: &mut ValidationReport) {
         | Operation::StoreCreate { .. }
         | Operation::StoreUpdate { .. }
         | Operation::StoreDelete { .. }
-        | Operation::StoreEnumerate { .. } => {
+        | Operation::StoreEnumerate { .. }
+        | Operation::StoreSetRelation { .. }
+        | Operation::StoreTraverse { .. } => {
             require_storage(node, report);
         }
         Operation::LocalExecute(_) => {
@@ -389,6 +435,8 @@ fn validate_operation(node: &Node, report: &mut ValidationReport) {
             );
         }
         Operation::Select { .. }
+        | Operation::TaskSpawn { .. }
+        | Operation::TaskJoin { .. }
         | Operation::Map { .. }
         | Operation::Match { .. }
         | Operation::Loop { .. }

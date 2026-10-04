@@ -141,10 +141,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn execute(program: &g0::program::ProgramContract) -> Result<(), Box<dyn std::error::Error>> {
-    let mut runtime = g0::execution::Executor::new(program, Default::default())
-        .map_err(|issue| format!("runtime validation failed: {issue:?}"))?;
+    let mut runtime = g0::resource_host::ResourceHost::new(
+        std::sync::Arc::new(program.clone()),
+        Default::default(),
+        Default::default(),
+    )
+    .map_err(|issue| format!("runtime validation failed: {issue:?}"))?;
     let values = runtime
-        .run_entry()
+        .run_graph(
+            program.entry_graph.as_deref().ok_or("missing entry")?,
+            vec![],
+        )
         .map_err(|issue| format!("execution failed: {issue:?}"))?;
     for value in values {
         println!("{value:?}");

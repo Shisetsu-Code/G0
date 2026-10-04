@@ -35,6 +35,7 @@ impl<'a> StorageHost<'a> {
             StoreError::AlreadyExists => "already-exists",
             StoreError::TypeMismatch => "type",
             StoreError::AuthorityChanged => "authority-changed",
+            StoreError::RelationConstraint => "relation-constraint",
             _ => "storage-failed",
         };
         RuntimeError::EffectFailure {
@@ -51,6 +52,8 @@ impl EffectHost for StorageHost<'_> {
             Operation::StoreUpdate { resource, .. } => ("update", resource),
             Operation::StoreDelete { resource } => ("delete", resource),
             Operation::StoreEnumerate { resource } => ("enumerate", resource),
+            Operation::StoreSetRelation { resource, .. } => ("link", resource),
+            Operation::StoreTraverse { resource, .. } => ("traverse", resource),
             _ => {
                 return Err(RuntimeError::Unsupported {
                     graph: String::new(),
@@ -69,6 +72,49 @@ impl EffectHost for StorageHost<'_> {
         };
         let failure = |error| Self::failure(node, error);
         match &node.operation {
+            Operation::StoreSetRelation { relation, .. } => {
+                if !(2..=3).contains(&inputs.len())
+                    || (inputs.len() == 3 && !matches!(inputs[2], Value::Integer(_)))
+                {
+                    return Err(bad());
+                }
+                let (Value::Text(id), Value::Array(ids)) = (&inputs[0], &inputs[1]) else {
+                    return Err(bad());
+                };
+                let ids = ids
+                    .iter()
+                    .map(|v| match v {
+                        Value::Text(id) => Ok(id.to_string()),
+                        _ => Err(bad()),
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                self.store
+                    .set_relation(&mut self.transaction, resource, id, relation, ids)
+                    .map_err(failure)?;
+                Ok(vec![Value::Integer(i128::from(
+                    self.transaction.prospective_version().ok_or_else(bad)?,
+                ))])
+            }
+            Operation::StoreTraverse { relation, .. } => {
+                if !(1..=2).contains(&inputs.len())
+                    || (inputs.len() == 2 && !matches!(inputs[1], Value::Integer(_)))
+                {
+                    return Err(bad());
+                }
+                let Value::Text(id) = &inputs[0] else {
+                    return Err(bad());
+                };
+                let rows = self
+                    .store
+                    .traverse(&self.transaction, resource, id, relation)
+                    .map_err(failure)?;
+                Ok(vec![Value::Array(
+                    rows.into_iter()
+                        .map(|row| row.value)
+                        .collect::<Vec<_>>()
+                        .into(),
+                )])
+            }
             Operation::StoreRead { fields, .. } => {
                 if !(1..=2).contains(&inputs.len()) {
                     return Err(bad());

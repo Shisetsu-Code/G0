@@ -138,3 +138,4 @@ pub fn compile_source(source: &str) -> Result<String, CompileError> {
 }
 pub mod bootstrap_compiler;
 pub mod native_runtime;
+pub mod resource_host;

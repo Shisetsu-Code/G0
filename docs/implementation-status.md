@@ -35,10 +35,19 @@ service maps authenticated certificate fingerprints to scoped principals.
 Integration tests prove the same record survives storage reopen and a real
 encrypted loopback round trip.
 
-Aggregate x86 lowering, GIR region/task handles, protected-field/credential
-storage profiles, relations, migrations, trusted anti-rollback witnesses and
+GIR also executes opaque linear region/buffer handles and bounded pure child
+tasks through `ResourceHost`, including CLI/editor/native-wrapper/service
+hosting. See `graph-resources.md` for the current interfaces and profiles.
+
+Aggregate x86 lowering, protected-field/credential
+storage profiles, migrations, trusted anti-rollback witnesses and
 advanced scheduling/remote-execution profiles still require implementation.
 Current profiles reject unsupported requirements instead of weakening them.
+
+Persistent relations execute cardinality, referential/scope integrity and
+authorized Restrict/Detach/Cascade deletion, including GIR link/traversal nodes.
+Encrypted snapshots preserve legacy reads and upgrade their relation-aware
+envelope on commit. See `store-relations.md` for bounded cascade behavior.
 
 ## Current native-file boundary
 

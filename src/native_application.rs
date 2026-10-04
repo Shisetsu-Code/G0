@@ -84,13 +84,27 @@ impl GraphService {
             .receive(&entry.inputs[0].ty, &self.program.schemas)
             .map_err(ApplicationError::Transport)?;
         let mut host = StorageHost::new(store, principal.clone());
+        let mut resources = crate::resource_host::ResourceHost::new(
+            self.program.clone(),
+            self.limits,
+            self.grants.clone(),
+        )
+        .map_err(ApplicationError::Runtime)?;
         let mut runtime =
             Executor::new(&self.program, self.limits).map_err(ApplicationError::Runtime)?;
+        runtime.set_cancellation(resources.cancellation());
         for grant in &self.grants {
             runtime.grant(grant.clone());
         }
         let mut outputs = runtime
-            .run_with_host(&self.graph, vec![value], &mut host)
+            .run_with_host(
+                &self.graph,
+                vec![value],
+                &mut crate::resource_host::ChainedHost {
+                    resources: &mut resources,
+                    fallback: &mut host,
+                },
+            )
             .map_err(ApplicationError::Runtime)?;
         let output = outputs.pop().ok_or(ApplicationError::InvalidInterface)?;
         // Durability before acknowledgment. A failed send does not retry or

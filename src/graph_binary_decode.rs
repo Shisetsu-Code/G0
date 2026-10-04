@@ -8,7 +8,7 @@ use crate::gir::{
 
 const MAGIC: &[u8; 4] = b"G0G\0";
 const FORMAT_MAJOR: u16 = 0;
-const FORMAT_MINOR: u16 = 2;
+const FORMAT_MINOR: u16 = 3;
 const MAX_TYPE_DEPTH: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,7 +55,7 @@ pub fn decode_graph(bytes: &[u8]) -> Result<Graph, BinaryDecodeIssue> {
     let mut nodes = Vec::with_capacity(node_count);
     for _ in 0..node_count {
         let id = reader.u32()?;
-        let operation = read_operation(&mut reader)?;
+        let operation = read_operation(&mut reader, minor)?;
         let node_inputs = read_ports(&mut reader)?;
         let node_outputs = read_ports(&mut reader)?;
 
@@ -223,8 +223,20 @@ fn read_type(reader: &mut Reader<'_>, depth: usize) -> Result<SemanticType, Bina
     })
 }
 
-fn read_operation(reader: &mut Reader<'_>) -> Result<Operation, BinaryDecodeIssue> {
-    Ok(match reader.u8()? {
+fn read_operation(reader: &mut Reader<'_>, minor: u16) -> Result<Operation, BinaryDecodeIssue> {
+    let tag = reader.u8()?;
+    let maximum = match minor {
+        1 => 29,
+        2 => 48,
+        _ => 57,
+    };
+    if tag > maximum {
+        return Err(BinaryDecodeIssue::InvalidTag {
+            domain: "operation version",
+            tag,
+        });
+    }
+    Ok(match tag {
         0 => Operation::Const(read_literal(reader)?),
         1 => Operation::Add,
         2 => Operation::Sub,
@@ -272,6 +284,27 @@ fn read_operation(reader: &mut Reader<'_>) -> Result<Operation, BinaryDecodeIssu
             body: reader.string()?,
         },
         48 => Operation::TextJoin,
+        49 => Operation::RegionOpen,
+        50 => Operation::RegionAllocate,
+        51 => Operation::RegionWrite,
+        52 => Operation::RegionRead,
+        53 => Operation::RegionClose,
+        56 => Operation::StoreSetRelation {
+            resource: reader.string()?,
+            relation: reader.string()?,
+        },
+        57 => Operation::StoreTraverse {
+            resource: reader.string()?,
+            relation: reader.string()?,
+        },
+        54 => Operation::TaskSpawn {
+            body: reader.string()?,
+            max_steps: reader.u64()?,
+            max_value_bytes: reader.u64()?,
+        },
+        55 => Operation::TaskJoin {
+            body: reader.string()?,
+        },
         29 => {
             let bits = reader.u16()?;
             let signed = match reader.u8()? {

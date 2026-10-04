@@ -28,6 +28,7 @@ use std::{
 
 const MAX_BYTES: usize = 64 * 1024 * 1024;
 const MAX_ROWS: usize = 100_000;
+const MAX_LINKS: usize = 100_000;
 static INSTANCE: AtomicU64 = AtomicU64::new(1);
 type Key = (String, String, String); // scope, resource kind, ID
 #[derive(Debug)]
@@ -45,6 +46,7 @@ pub enum StoreError {
     Entropy,
     Limit,
     UniqueConstraint,
+    RelationConstraint,
     UnsupportedProfile,
     RecoveryRequired,
     CommitUncertain,
@@ -92,6 +94,7 @@ struct Row {
     context: ResourceContext,
     value: Value,
     version: u64,
+    relations: BTreeMap<String, BTreeSet<Key>>,
 }
 #[derive(Clone, Default)]
 struct Snapshot {
@@ -157,11 +160,10 @@ impl NativeStore {
             }
             // Profiles not implemented by this engine are rejected rather than
             // silently turning off field protection or referential integrity.
-            if !resource.relations.is_empty()
-                || resource
-                    .fields
-                    .iter()
-                    .any(|f| f.protection != FieldProtection::Public)
+            if resource
+                .fields
+                .iter()
+                .any(|f| f.protection != FieldProtection::Public)
                 || resource.managed_fields.iter().any(|m| {
                     matches!(
                         m.source,
@@ -400,6 +402,7 @@ impl NativeStore {
         let row = Row {
             context,
             value,
+            relations: BTreeMap::new(),
             version: tx
                 .snapshot
                 .generation
@@ -449,6 +452,7 @@ impl NativeStore {
         let row = Row {
             value,
             context: row.context.clone(),
+            relations: row.relations.clone(),
             version: tx
                 .snapshot
                 .generation
@@ -461,15 +465,221 @@ impl NativeStore {
         tx.writes.insert(key, Some(row));
         Ok(())
     }
+    fn materialize(&self, tx: &Transaction) -> Snapshot {
+        let mut next = (*tx.snapshot).clone();
+        for (key, row) in &tx.writes {
+            if let Some(row) = row {
+                next.rows.insert(key.clone(), row.clone());
+            } else {
+                next.rows.remove(key);
+            }
+        }
+        next
+    }
+    fn relation_snapshot(&self, snapshot: &Snapshot) -> crate::storage_integrity::StoreSnapshot {
+        use crate::storage_integrity::{EntityInstance, RelationInstance, StoreSnapshot};
+        StoreSnapshot {
+            entities: snapshot
+                .rows
+                .iter()
+                .map(|(key, row)| {
+                    let key = entity_key(key);
+                    let entity = EntityInstance {
+                        key: key.clone(),
+                        relations: row
+                            .relations
+                            .iter()
+                            .map(|(name, targets)| RelationInstance {
+                                name: name.clone(),
+                                targets: targets.iter().map(entity_key).collect(),
+                            })
+                            .collect(),
+                    };
+                    (key, entity)
+                })
+                .collect(),
+        }
+    }
+    fn check_relations(&self, snapshot: &Snapshot) -> Result<(), StoreError> {
+        let links = snapshot
+            .rows
+            .values()
+            .flat_map(|r| r.relations.values())
+            .try_fold(0usize, |n, targets| n.checked_add(targets.len()))
+            .ok_or(StoreError::Limit)?;
+        if links > MAX_LINKS {
+            return Err(StoreError::Limit);
+        }
+        for ((_, kind, _), row) in &snapshot.rows {
+            let resource = self
+                .schema
+                .resource(kind)
+                .ok_or(StoreError::InvalidSchema)?;
+            for relation in &resource.relations {
+                if relation.cardinality == crate::storage::Cardinality::One
+                    && row
+                        .relations
+                        .get(&relation.name)
+                        .is_none_or(|targets| targets.len() != 1)
+                {
+                    return Err(StoreError::RelationConstraint);
+                }
+            }
+        }
+        crate::storage_integrity::validate_snapshot(&self.schema, &self.relation_snapshot(snapshot))
+            .map_err(|_| StoreError::RelationConstraint)
+    }
+    pub fn set_relation(
+        &self,
+        tx: &mut Transaction,
+        kind: &str,
+        id: &str,
+        name: &str,
+        target_ids: Vec<String>,
+    ) -> Result<(), StoreError> {
+        self.check(tx)?;
+        if target_ids.len() > MAX_LINKS {
+            return Err(StoreError::Limit);
+        }
+        let key = self.key(&tx.principal, kind, id)?;
+        let row = self.visible(tx, &key).ok_or(StoreError::NotFound)?;
+        self.authorize(
+            &tx.principal,
+            row,
+            StoreOperation::Update { fields: vec![] },
+        )?;
+        let relation = self
+            .schema
+            .resource(kind)
+            .and_then(|r| r.relations.iter().find(|r| r.name == name))
+            .ok_or(StoreError::InvalidSchema)?;
+        let mut targets = BTreeSet::new();
+        for id in target_ids {
+            let target = self.key(&tx.principal, &relation.target_resource, &id)?;
+            let target_row = self.visible(tx, &target).ok_or(StoreError::NotFound)?;
+            self.authorize(
+                &tx.principal,
+                target_row,
+                StoreOperation::Read { fields: vec![] },
+            )?;
+            if !targets.insert(target) {
+                return Err(StoreError::RelationConstraint);
+            }
+        }
+        let mut row = row.clone();
+        row.relations.insert(name.into(), targets);
+        row.version = tx.prospective_version().ok_or(StoreError::Limit)?;
+        if tx.writes.len() >= MAX_ROWS && !tx.writes.contains_key(&key) {
+            return Err(StoreError::Limit);
+        }
+        tx.writes.insert(key, Some(row));
+        Ok(())
+    }
+    pub fn traverse(
+        &self,
+        tx: &Transaction,
+        kind: &str,
+        id: &str,
+        name: &str,
+    ) -> Result<Vec<StoredValue>, StoreError> {
+        self.check(tx)?;
+        let key = self.key(&tx.principal, kind, id)?;
+        let row = self.visible(tx, &key).ok_or(StoreError::NotFound)?;
+        self.authorize(&tx.principal, row, StoreOperation::Read { fields: vec![] })?;
+        if !self
+            .schema
+            .resource(kind)
+            .is_some_and(|r| r.relations.iter().any(|r| r.name == name))
+        {
+            return Err(StoreError::InvalidSchema);
+        }
+        row.relations
+            .get(name)
+            .into_iter()
+            .flatten()
+            .map(|target| {
+                if self.key(&tx.principal, &target.1, &target.2)? != *target {
+                    return Err(StoreError::Denied);
+                }
+                self.read(tx, &target.1, &target.2)
+            })
+            .collect()
+    }
     pub fn delete(&self, tx: &mut Transaction, kind: &str, id: &str) -> Result<(), StoreError> {
         self.check(tx)?;
         let key = self.key(&tx.principal, kind, id)?;
         let row = self.visible(tx, &key).ok_or(StoreError::NotFound)?;
         self.authorize(&tx.principal, row, StoreOperation::Delete)?;
-        if tx.writes.len() >= MAX_ROWS {
+        let metadata = self.relation_snapshot(&self.materialize(tx));
+        let target = entity_key(&key);
+        // Bound the recursive contract planner before it can recurse. The store
+        // profile deliberately limits each cascade to 128 entities.
+        let mut closure = BTreeSet::new();
+        let mut pending = vec![target.clone()];
+        while let Some(target) = pending.pop() {
+            if !closure.insert(target.clone()) {
+                continue;
+            }
+            if closure.len() > 128 {
+                return Err(StoreError::Limit);
+            }
+            for entity in metadata.entities.values() {
+                for relation in &entity.relations {
+                    if relation.targets.contains(&target)
+                        && self
+                            .schema
+                            .resource(&entity.key.resource)
+                            .and_then(|r| r.relations.iter().find(|r| r.name == relation.name))
+                            .is_some_and(|r| r.on_delete == crate::storage::DeleteRule::Cascade)
+                    {
+                        pending.push(entity.key.clone());
+                    }
+                }
+            }
+        }
+        let plan = crate::storage_delete::plan_delete(&self.schema, &metadata, &target)
+            .map_err(|_| StoreError::RelationConstraint)?;
+        let mut writes: BTreeMap<Key, Option<Row>> = BTreeMap::new();
+        for entity in &plan.delete {
+            let key = store_key(entity);
+            let row = self.visible(tx, &key).ok_or(StoreError::NotFound)?;
+            self.authorize(&tx.principal, row, StoreOperation::Delete)?;
+            writes.insert(key, None);
+        }
+        for detach in &plan.detach {
+            if plan.delete.contains(&detach.source) {
+                continue;
+            }
+            let key = store_key(&detach.source);
+            let original = self.visible(tx, &key).ok_or(StoreError::NotFound)?;
+            self.authorize(
+                &tx.principal,
+                original,
+                StoreOperation::Update { fields: vec![] },
+            )?;
+            let mut row = writes
+                .get(&key)
+                .and_then(|r| r.as_ref())
+                .unwrap_or(original)
+                .clone();
+            row.relations
+                .get_mut(&detach.relation)
+                .ok_or(StoreError::Integrity)?
+                .remove(&store_key(&detach.target));
+            row.version = tx.prospective_version().ok_or(StoreError::Limit)?;
+            writes.insert(key, Some(row));
+        }
+        if tx
+            .writes
+            .keys()
+            .chain(writes.keys())
+            .collect::<BTreeSet<_>>()
+            .len()
+            > MAX_ROWS
+        {
             return Err(StoreError::Limit);
         }
-        tx.writes.insert(key, None);
+        tx.writes.extend(writes);
         Ok(())
     }
     pub fn enumerate(&self, tx: &Transaction, kind: &str) -> Result<Vec<StoredValue>, StoreError> {
@@ -522,6 +732,7 @@ impl NativeStore {
             return Err(StoreError::Limit);
         }
         self.check_indexes(&next)?;
+        self.check_relations(&next)?;
         let bytes = self.encode_snapshot(&next)?;
         match atomic_snapshot(&self.root, &bytes) {
             Ok(()) => self.snapshot = Arc::new(next),
@@ -577,6 +788,16 @@ impl NativeStore {
                 },
             )?;
             writer.blob(&bytes)?;
+            writer.count(row.relations.len())?;
+            for (name, targets) in &row.relations {
+                writer.string(name)?;
+                writer.count(targets.len())?;
+                for (scope, kind, id) in targets {
+                    writer.string(scope)?;
+                    writer.string(kind)?;
+                    writer.string(id)?;
+                }
+            }
         }
         let mut nonce = [0; 12];
         SystemRandom::new()
@@ -586,30 +807,39 @@ impl NativeStore {
         self.cipher
             .seal_in_place_append_tag(
                 aead::Nonce::assume_unique_for_key(nonce),
-                aead::Aad::from(self.aad()),
+                aead::Aad::from(self.aad(2)),
                 &mut bytes,
             )
             .map_err(|_| StoreError::Integrity)?;
-        let mut framed = b"G0S\0\0\0\x01\0".to_vec();
+        let mut framed = b"G0S\0\0\0\x02\0".to_vec();
         framed.extend_from_slice(&nonce);
         framed.extend_from_slice(&bytes);
         Ok(framed)
     }
-    fn aad(&self) -> Vec<u8> {
-        let mut aad = b"g0.store.snapshot.v1\0".to_vec();
+    fn aad(&self, version: u8) -> Vec<u8> {
+        let mut aad = if version == 1 {
+            b"g0.store.snapshot.v1\0".to_vec()
+        } else {
+            b"g0.store.snapshot.v2\0".to_vec()
+        };
         aad.extend_from_slice(self.root.to_string_lossy().as_bytes());
         aad
     }
     fn decode_snapshot(&self, mut bytes: Vec<u8>) -> Result<Snapshot, StoreError> {
-        if bytes.len() < 36 || &bytes[..8] != b"G0S\0\0\0\x01\0" {
+        if bytes.len() < 36
+            || &bytes[..6] != b"G0S\0\0\0"
+            || !(1..=2).contains(&bytes[6])
+            || bytes[7] != 0
+        {
             return Err(StoreError::Integrity);
         }
         let nonce: [u8; 12] = bytes[8..20].try_into().unwrap();
+        let format_version = bytes[6];
         let plaintext = self
             .cipher
             .open_in_place(
                 aead::Nonce::assume_unique_for_key(nonce),
-                aead::Aad::from(self.aad()),
+                aead::Aad::from(self.aad(format_version)),
                 &mut bytes[20..],
             )
             .map_err(|_| StoreError::Integrity)?;
@@ -621,6 +851,7 @@ impl NativeStore {
         }
         let mut rows = BTreeMap::new();
         let mut previous = None;
+        let mut link_total = 0usize;
         for _ in 0..count {
             let scope = reader.string()?;
             let kind = reader.string()?;
@@ -652,6 +883,40 @@ impl NativeStore {
                 &self.registry,
                 CodecLimits::default(),
             )?;
+            let mut relations = BTreeMap::new();
+            if format_version >= 2 {
+                let count = reader.count()?;
+                if count > resource.relations.len() || count > reader.0.len() / 8 {
+                    return Err(StoreError::Integrity);
+                }
+                let mut previous_name: Option<String> = None;
+                for _ in 0..count {
+                    let name = reader.string()?;
+                    if previous_name.as_ref().is_some_and(|p| p >= &name) {
+                        return Err(StoreError::Integrity);
+                    }
+                    previous_name = Some(name.clone());
+                    let count = reader.count()?;
+                    link_total = link_total
+                        .checked_add(count)
+                        .filter(|n| *n <= MAX_LINKS)
+                        .ok_or(StoreError::Limit)?;
+                    if count > reader.0.len() / 12 {
+                        return Err(StoreError::Integrity);
+                    }
+                    let mut targets = BTreeSet::new();
+                    let mut previous_target = None;
+                    for _ in 0..count {
+                        let key = (reader.string()?, reader.string()?, reader.string()?);
+                        if previous_target.as_ref().is_some_and(|p| p >= &key) {
+                            return Err(StoreError::Integrity);
+                        }
+                        previous_target = Some(key.clone());
+                        targets.insert(key);
+                    }
+                    relations.insert(name, targets);
+                }
+            }
             let mut context = ResourceContext::new(kind, id, scope);
             context.owner = Some(PrincipalId::new(owner));
             rows.insert(
@@ -660,6 +925,7 @@ impl NativeStore {
                     context,
                     value,
                     version,
+                    relations,
                 },
             );
         }
@@ -668,8 +934,20 @@ impl NativeStore {
         }
         let snapshot = Snapshot { generation, rows };
         self.check_indexes(&snapshot)?;
+        self.check_relations(&snapshot)?;
         Ok(snapshot)
     }
+}
+
+fn entity_key(key: &Key) -> crate::storage_integrity::EntityKey {
+    crate::storage_integrity::EntityKey {
+        scope: key.0.clone(),
+        resource: key.1.clone(),
+        id: key.2.clone(),
+    }
+}
+fn store_key(key: &crate::storage_integrity::EntityKey) -> Key {
+    (key.scope.clone(), key.resource.clone(), key.id.clone())
 }
 
 struct Writer(Vec<u8>);

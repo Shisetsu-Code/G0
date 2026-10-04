@@ -342,6 +342,9 @@ impl TaskGroup {
     pub fn cancel(&self) {
         self.cancel.cancel();
     }
+    pub fn cancellation(&self) -> Cancellation {
+        self.cancel.clone()
+    }
     pub fn spawn(
         &mut self,
         program: Arc<ProgramContract>,

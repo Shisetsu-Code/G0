@@ -271,6 +271,19 @@ pub enum Operation {
         body: String,
     },
     TextJoin,
+    RegionOpen,
+    RegionAllocate,
+    RegionWrite,
+    RegionRead,
+    RegionClose,
+    TaskSpawn {
+        body: String,
+        max_steps: u64,
+        max_value_bytes: u64,
+    },
+    TaskJoin {
+        body: String,
+    },
     Truncate {
         bits: u16,
         signed: bool,
@@ -308,6 +321,14 @@ pub enum Operation {
     },
     StoreEnumerate {
         resource: String,
+    },
+    StoreSetRelation {
+        resource: String,
+        relation: String,
+    },
+    StoreTraverse {
+        resource: String,
+        relation: String,
     },
     LocalExecute(String),
     RemoteExecute {

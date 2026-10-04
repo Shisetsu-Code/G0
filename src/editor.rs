@@ -330,9 +330,16 @@ impl GraphEditor {
         let contract = self.contract()?;
         let mut runtime =
             Executor::new(&contract, Default::default()).map_err(EditorError::Runtime)?;
+        let mut resources = crate::resource_host::ResourceHost::new(
+            std::sync::Arc::new(contract.clone()),
+            Default::default(),
+            Default::default(),
+        )
+        .map_err(EditorError::Runtime)?;
+        runtime.set_cancellation(resources.cancellation());
         runtime.enable_trace(10_000).map_err(EditorError::Runtime)?;
         let values = runtime
-            .run_graph(&self.graph().name, vec![])
+            .run_with_host(&self.graph().name, vec![], &mut resources)
             .map_err(EditorError::Runtime)?;
         Ok(EditorRun {
             values,

@@ -116,6 +116,7 @@ fn referenced_graphs(operation: &Operation) -> Vec<String> {
     match operation {
         Operation::Subgraph(name) => vec![name.clone()],
         Operation::Map { body } => vec![body.clone()],
+        Operation::TaskSpawn { body, .. } | Operation::TaskJoin { body } => vec![body.clone()],
         Operation::Select {
             when_true,
             when_false,

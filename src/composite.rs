@@ -4,7 +4,7 @@ use crate::{
     data_format::{DataSchema, FieldRequirement},
     gir::*,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 pub fn validate_node(node: &Node, schemas: Option<&[DataSchema]>) -> Result<(), String> {
     let mut inputs: Vec<_> = node.inputs.iter().collect();
@@ -193,6 +193,30 @@ pub fn validate_program(graphs: &[Graph], schemas: &[DataSchema]) -> Vec<Composi
         }
     }
     for graph in graphs {
+        let mut linear_sources = BTreeMap::new();
+        for port in &graph.inputs {
+            linear_sources.insert(
+                SourceEndpoint::GraphInput(port.id),
+                contains_linear(&port.ty, schemas, &mut BTreeSet::new(), 0),
+            );
+        }
+        for node in &graph.nodes {
+            for port in &node.outputs {
+                linear_sources.insert(
+                    SourceEndpoint::NodeOutput {
+                        node: node.id,
+                        port: port.id,
+                    },
+                    contains_linear(&port.ty, schemas, &mut BTreeSet::new(), 0),
+                );
+            }
+        }
+        let mut used = BTreeSet::new();
+        for edge in &graph.edges {
+            if linear_sources.get(&edge.from) == Some(&true) && !used.insert(edge.from.clone()) {
+                issues.push(CompositeIssue{graph:graph.name.clone(),node:None,message:"linear value, including handles nested in a named type, has more than one consumer".into()});
+            }
+        }
         for port in graph.inputs.iter().chain(&graph.outputs).chain(
             graph
                 .nodes
@@ -229,6 +253,46 @@ pub fn validate_program(graphs: &[Graph], schemas: &[DataSchema]) -> Vec<Composi
         }
     }
     issues
+}
+
+fn contains_linear(
+    ty: &SemanticType,
+    schemas: &[DataSchema],
+    path: &mut BTreeSet<String>,
+    depth: usize,
+) -> bool {
+    if depth >= 128 {
+        return true;
+    }
+    match ty {
+        SemanticType::Unique(_) => true,
+        SemanticType::Record(name) | SemanticType::Variant(name) => {
+            if !path.insert(name.clone()) {
+                return false;
+            }
+            let linear = schemas.iter().find(|s| &s.name == name).is_some_and(|s| {
+                s.fields
+                    .iter()
+                    .any(|f| contains_linear(&f.ty, schemas, path, depth + 1))
+            });
+            path.remove(name);
+            linear
+        }
+        SemanticType::Array(t, _)
+        | SemanticType::Vector(t, _)
+        | SemanticType::Slice(t)
+        | SemanticType::Option(t)
+        | SemanticType::Secret(t)
+        | SemanticType::Credential(t)
+        | SemanticType::State(t)
+        | SemanticType::Atomic(t)
+        | SemanticType::Versioned(t) => contains_linear(t, schemas, path, depth + 1),
+        SemanticType::Result(a, b) => {
+            contains_linear(a, schemas, path, depth + 1)
+                || contains_linear(b, schemas, path, depth + 1)
+        }
+        _ => false,
+    }
 }
 
 fn references_exist(ty: &SemanticType, names: &BTreeSet<&String>, depth: usize) -> bool {

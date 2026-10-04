@@ -98,10 +98,15 @@ An uncertain commit requires reopening before further operations.
 
 The initial store profile supports public application fields protected by store
 encryption, and principal/scope-managed fields. Protected-field/credential
-profiles, relation integrity and generated/clock-managed fields are rejected
+profiles and generated/clock-managed fields are rejected
 until their executable implementations are supplied. Snapshot authentication
 detects modification; protection against restoring an older valid snapshot
 requires a separately trusted monotonic witness and is not yet implemented.
+
+Persistent relations now enforce target/scope/cardinality constraints and
+authorized Restrict/Detach/Cascade deletion. GIR can set and traverse relations
+in its storage transaction. G0S 0.2 preserves G0S 0.1 reading and upgrades on
+commit. See `store-relations.md` for interfaces and resource limits.
 
 Native transport uses a separately selected platform profile. The pinned
 cryptography dependencies are bootstrap platform implementations, not G0 Core
