@@ -2,7 +2,7 @@
 
 G0 is an experimental graph-first programming language and compiler.
 
-The source of truth is a typed computation graph, not textual control flow. The text format in this repository is **Graph Assembly**, a bootstrap/import/export representation for constructing graphs until the native graph tooling exists.
+The source of truth is a typed computation graph, not textual control flow. The text format in this repository is **Graph Assembly**, a bootstrap/import/export representation. The native Windows editor authors and debugs canonical graphs directly.
 
 ## Current principles
 
@@ -12,7 +12,7 @@ The source of truth is a typed computation graph, not textual control flow. The 
 - No hidden allocation or garbage collector.
 - No `null` or `undefined`.
 - Checked behavior is preferred over silent overflow.
-- Effects and capabilities will be explicit.
+- Effects and capabilities are explicit.
 - Dependencies define legal parallelism.
 - Modern hardware baseline; bootstrap target: `x86_64-v3`.
 - Legacy/insecure protocols will not enter the core platform.
@@ -167,7 +167,9 @@ The Windows native editor runs with `cargo run --bin g0-editor`. The initial G0
 compiler backend is checked in as `compiler/native-wrapper.g0p`; use
 `cargo run -- bootstrap input.g0p -o output.s` to generate its interpreter-backed
 native wrapper. See [`docs/native-editor.md`](docs/native-editor.md) and
-[`docs/compiler-bootstrap.md`](docs/compiler-bootstrap.md) for verified behavior
-and the remaining compiler validation/self-hosting work.
+[`docs/compiler-bootstrap.md`](docs/compiler-bootstrap.md) for the explicit
+direct native profile. Its G0 parser, validator, scheduler and emitter compile
+the compiler's own definition; linked Linux generations produce identical
+assembly. The default bootstrap entry remains the runtime wrapper.
 
 See `docs/architecture.md` for the architectural constraints.

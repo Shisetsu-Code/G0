@@ -58,8 +58,12 @@ and Match interfaces. A subtree stack enforces the 128-level type limit independ
 tree width. Nested reference, ownership, permission and secret types remain
 outside this pure profile and are rejected before emission.
 The Rust bootstrap host still validates source as an additional guard. Independent
-validation and full native self-compilation remain under verification; the latest
-linked self-compilation probes exhausted their step budgets.
+raw-input tests exercise the G0 validation without that source guard. Linux CI
+37215110870 verifies native self-compilation for this pure profile: Rust creates
+stage zero, then the linked G0 compiler generates stage one and stage one
+generates identical assembly byte for byte. Both generations fit the explicit
+256-million-step/32-GiB allocation reservation. The value primitives remain
+provided by the linked Rust runtime.
 
 ```sh
 cargo run --example bootstrap_compiler -- direct input.g0p > target/program.s
@@ -91,9 +95,9 @@ cmp target/compiler-stage2.s target/compiler-stage3.s
 ```
 
 CI runs the linked stages and compares assembly. These checks establish wrapper
-reproducibility. Fully native self-compilation requires the G0 backend to cover
-the compiler's own control graphs and to validate source semantics independently
-of the Rust bootstrap host.
+reproducibility; the separate control-suite test establishes native compiler
+self-generation for the documented pure profile. Wrapper reproduction alone
+does not establish that proof.
 
 ## Host limits and ABI
 
@@ -101,8 +105,8 @@ Compiler hosting accepts at most four MiB of source or compiler document. Rust
 bootstrap hosting uses 32 million steps; linked compiler drivers explicitly
 reserve up to 256 million steps. The full compile-direct definition measured
 209,834,144 steps in the diagnostic interpreter, motivating this explicit
-reservation; native generation and its allocation must also pass the linked
-tests. Both reserve thirty-two GiB of cumulative logical allocation
+reservation. Native generations pass the linked tests within this reservation.
+Both reserve thirty-two GiB of cumulative logical allocation
 and call depth 128. Logical accounting includes repeated graph metadata and
 forwarded shared values; it is not an estimate of resident memory.
 

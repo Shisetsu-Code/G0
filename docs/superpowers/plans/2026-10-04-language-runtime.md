@@ -29,8 +29,8 @@ Malformed and cyclic inputs; resource exhaustion before allocations; nested call
 - [x] 5. Native secure transport: maintained cryptographic platform profile, authentication, framing, replay rejection and loopback integration tests.
 - [x] 6. End-to-end native application: same typed structure through execution, storage, transport and client; integration test proves real behavior.
 - [x] 7. Native graphical graph editor/debugger: create/open/edit/save canonical graphs, diagnostics and source attribution. Verify native UI and saved documents.
-- [ ] 8. Compiler implemented in G0: executable compiler graphs, staged bootstrap and reproducible output comparison. Scope of implemented language must be documented, then expanded to cover the compiler itself.
-- [ ] 9. Whole-branch review, full tests/clippy, Linux native execution CI, update PR and deliver patches and implementation report.
+- [x] 8. Compiler implemented in G0: executable compiler graphs, staged bootstrap and reproducible output comparison. The documented pure profile covers the compiler itself; Linux CI 37215110870 links successive G0 generations and compares their assembly byte for byte.
+- [x] 9. Whole-branch review, full tests/clippy, Linux native execution CI, update PR and deliver patches and implementation report. CI 37215110870 passes all three jobs; the delivery records the verified code checkpoint and documentation-only closure.
 
 ## Execution ledger
 
@@ -235,3 +235,25 @@ Fresh all-target Clippy with warnings denied is clean. Independent read-only
 review found no metrics ABI, snapshot, quota/default or stdout contamination
 issues. Native stage-zero/one comparison at 256 million steps and 32 GiB is
 still pending; the ordinary one-million-step/64-MiB defaults are unchanged.
+
+Linux native-compiler job 111473922754 in CI 37215110870 now passes: four
+aggregate CLI tests, seven signed-codec tests, eight unsigned-codec tests, two
+phase tests and fourteen control tests. The linked full compiler self-generates
+stage one, which self-generates the identical assembly in stage two. Both native
+generations fit 256 million steps and 32 GiB; native step/allocation metrics for
+the isolated phases are recorded in the CI logs. A fresh independent static
+review found no supported compiler/bridge/cache/metrics correctness findings.
+The final Windows editor smoke saved, executed, rendered and debugged a graph;
+its canonical file passes CLI validation and returns 49. Twenty-five patches
+apply from main base 21d3c1d in a clean checkout and reproduce the published
+4b4ef6d8 tree exactly. The broader Linux bootstrap job remains in progress.
+
+CI 37215110870 is now completely green: Windows editor, Linux bootstrap and
+native compiler. Linux all-target tests pass 578 tests in 68 suites, Clippy has
+no warnings, native arithmetic examples execute, and three wrapper generations
+compare exactly. The separate native compiler comparison proves the pure G0
+compiler self-generates. This closes the agreed nine-item implementation list
+within its documented profiles; unsupported advanced profiles remain explicitly
+listed in implementation-status rather than claimed as executable. Final
+closure changes only README/documentation; the verified code checkpoint is
+local f7df37e / remote 4f76a328. Mosca is excluded and the PR stays unmerged.

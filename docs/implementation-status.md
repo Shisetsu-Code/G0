@@ -26,8 +26,9 @@ those native facilities.
 - Compiler graphs parse native program syntax, build offset-based ASTs, schedule
   dependencies and emit native primitives, multiple graphs, calls, selection,
   matching, loops and maps, or a runtime wrapper. Independent semantic validation
-  and native compiler self-hosting remain in progress; see
-  `compiler-bootstrap.md` for reproducibility checks and remaining work.
+  for the closed pure profile and native compiler self-generation are verified
+  by raw-input tests and Linux linked stages. The default entry remains a runtime
+  wrapper; see `compiler-bootstrap.md` for the supported profile and proof.
 
 ## Native runtime
 
@@ -94,9 +95,9 @@ The checked-in `examples/truncate.g0g` returns 31. Program examples `call.g0p`
 and `select.g0p` return 42; `loop.g0p` performs one state transition and returns
 0. CLI integration tests assemble and execute these examples on Linux.
 
-## Next milestone
+## Verified milestone
 
-Complete independent semantic validation and native self-hosting for the G0
-compiler, then finish the whole-branch review and verification. The full
-continuous checklist is in `docs/superpowers/plans/2026-10-04-language-runtime.md`.
+Native self-generation of the pure G0 compiler has passed Linux linked-stage
+comparison. Whole-branch verification and delivery are recorded in the full
+continuous checklist at `docs/superpowers/plans/2026-10-04-language-runtime.md`.
 Policy sections remain host bindings, never authority obtained by decoding.
