@@ -498,6 +498,13 @@ impl NativeContext {
                 let bytes: [u8; 16] = bytes.as_ref().try_into().map_err(|_| bounds())?;
                 Value::Integer(i128::from_le_bytes(bytes))
             }
+            Operation::DecodeUnsigned32Le => {
+                let Value::Bytes(bytes) = &args[0] else {
+                    return Err(bad());
+                };
+                let bytes: [u8; 4] = bytes.as_ref().try_into().map_err(|_| bounds())?;
+                Value::Integer(i128::from(u32::from_le_bytes(bytes)))
+            }
             Operation::FormatInteger => {
                 self.reserve(40)?;
                 Value::Text(integer(0)?.to_string().into())

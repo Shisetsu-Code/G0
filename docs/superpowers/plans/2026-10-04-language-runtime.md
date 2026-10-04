@@ -199,3 +199,19 @@ Lazy native graph frame/port metadata is charged once when eligible and uses
 the previous path under tight budgets. Fresh verification passes 21 tests in
 six focused suites (23.55 seconds) and all-target Clippy. Full native
 self-generation remains pending.
+
+The completed observer diagnostic identified 36,482,481 reader-u32 node visits
+out of 84,405,216 reader steps (about 43%). Observer materialization adds logical
+allocation, so its 137,013,184,627-byte charge is not a baseline memory metric.
+The next definition uses GIR 0.11 DecodeUnsigned32Le (opcode 75): exactly four
+Bytes decode to Integer[0,u32.MAX], with no effects or capabilities. Reader-u32
+uses a guarded codec path and retains its zero-padding fallback, including the
+offset 2^48-3 boundary. Its 1,032 patterns fit fifteen steps. Core/editor/codec
+verification passes 52 tests; independent review passes 512 random words,
+lengths 0..12, source-handle preservation and cumulative cached-value charging.
+The compiler's directed regressions and Clippy pass. The new canonical source
+is 2,050,623 bytes, SHA-256
+5B719AA7B740C0C6F023480308C68CBBCD2F1665D859254A98BED5CA54F6BE9A.
+Full local and native checks for this frozen definition are pending. An
+intermediate local all-target run encountered an intentionally failing test
+executable replaced by concurrent TDD work; it is not counted as verification.

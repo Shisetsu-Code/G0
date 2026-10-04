@@ -255,6 +255,7 @@ pub enum Operation {
     EncodeUtf8,
     DecodeUtf8,
     DecodeInteger128Le,
+    DecodeUnsigned32Le,
     FormatInteger,
     MakeRecord {
         schema: String,

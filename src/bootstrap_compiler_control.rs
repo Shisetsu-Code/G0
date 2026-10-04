@@ -2002,7 +2002,7 @@ fn domain_graphs() -> Vec<Graph> {
     let middle_end = nb.compare(Operation::Le, tag.clone(), forty_eight);
     let middle = nb.and(middle_start, middle_end);
     let sixty_six = nb.n(66);
-    let seventy_three = nb.n(74);
+    let seventy_three = nb.n(75);
     let late_start = nb.compare(Operation::Ge, tag.clone(), sixty_six);
     let late_end = nb.compare(Operation::Le, tag, seventy_three);
     let late = nb.and(late_start, late_end);

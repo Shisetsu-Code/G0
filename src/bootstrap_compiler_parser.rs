@@ -136,6 +136,37 @@ impl G {
         )
     }
     fn u32_definition(&mut self, at: SourceEndpoint) -> SourceEndpoint {
+        let length = self.length(input(0));
+        let four = self.n(4);
+        let four_type = self.ty(&four);
+        let end = self.op(
+            Operation::Add,
+            vec![(at.clone(), int()), (four, four_type)],
+            SemanticType::Integer(IntegerType {
+                min: 0,
+                max: (1_i128 << 48) + 4,
+            }),
+        );
+        let complete = self.compare(Operation::Le, end, length);
+        let result = self.op(
+            Operation::Select {
+                when_true: "reader-u32-codec".into(),
+                when_false: "reader-u32-padding".into(),
+            },
+            vec![
+                (complete, SemanticType::Bool),
+                (input(0), SemanticType::Bytes),
+                (at, int()),
+            ],
+            int(),
+        );
+        let node = self.b.graph.nodes.last_mut().unwrap();
+        node.inputs[0].name = "selector".into();
+        node.inputs[1].name = "p0".into();
+        node.inputs[2].name = "p1".into();
+        result
+    }
+    fn u32_padding_definition(&mut self, at: SourceEndpoint) -> SourceEndpoint {
         let mut value = self.n(0);
         for offset in 0..4 {
             let delta = self.n(offset);
@@ -365,6 +396,37 @@ pub(super) fn graphs() -> Vec<Graph> {
     let mut word = G::new("reader-u32", vec![SemanticType::Bytes, int()], vec![int()]);
     let value = word.u32_definition(input(1));
     let word = word.finish(vec![value]);
+    let mut padded = G::new(
+        "reader-u32-padding",
+        vec![SemanticType::Bytes, int()],
+        vec![int()],
+    );
+    let value = padded.u32_padding_definition(input(1));
+    syntax.push(padded.finish(vec![value]));
+    let mut codec = G::new(
+        "reader-u32-codec",
+        vec![SemanticType::Bytes, int()],
+        vec![int()],
+    );
+    let four = codec.n(4);
+    let bytes = codec.op(
+        Operation::BytesSlice,
+        vec![
+            (input(0), SemanticType::Bytes),
+            (input(1), int()),
+            (four, int()),
+        ],
+        SemanticType::Bytes,
+    );
+    let value = codec.op(
+        Operation::DecodeUnsigned32Le,
+        vec![(bytes, SemanticType::Bytes)],
+        SemanticType::Integer(IntegerType {
+            min: 0,
+            max: u32::MAX as i128,
+        }),
+    );
+    syntax.push(codec.finish(vec![value]));
     let state = vec![SemanticType::Bytes, int(), int()];
     let mut cond = G::new(
         "reader-blobs-condition",
@@ -789,7 +851,7 @@ fn syntax_graphs() -> Vec<Graph> {
             (3, "reader-blob"),
         ],
     ));
-    let operations: Vec<_> = (0..=74)
+    let operations: Vec<_> = (0..=75)
         .map(|tag| {
             let parser = match tag {
                 0 => "reader-literal",
@@ -949,7 +1011,7 @@ fn syntax_graphs() -> Vec<Graph> {
     let magic_ok = graph.compare(Operation::Eq, magic, expected);
     let version_at = graph.advance(input(1), 4);
     let version = graph.u32(version_at);
-    let expected = graph.n(0x000a0000);
+    let expected = graph.n(0x000b0000);
     let version_ok = graph.compare(Operation::Le, version.clone(), expected);
     let lowest = graph.n(0x00010000);
     let version_low = graph.compare(Operation::Ge, version.clone(), lowest);
@@ -1198,7 +1260,7 @@ fn integer_bounds_graph() -> Graph {
 fn version_validation_graphs() -> Vec<Graph> {
     let mut graphs = Vec::new();
     let parameters = vec![SemanticType::Bytes, int()];
-    for (index, maximum) in [29, 48, 57, 59, 61, 63, 65, 69, 73, 74]
+    for (index, maximum) in [29, 48, 57, 59, 61, 63, 65, 69, 73, 74, 75]
         .into_iter()
         .enumerate()
     {
@@ -1246,7 +1308,7 @@ fn version_validation_graphs() -> Vec<Graph> {
     let mut checked = cursor_graph("reader-operation-checked");
     let header = checked.n(4);
     let version = checked.u32(header);
-    let maximum = checked.call("validator-version-limit-10", version);
+    let maximum = checked.call("validator-version-limit-11", version);
     let tag = checked.byte(input(1));
     let valid = checked.compare(Operation::Le, tag, maximum);
     let end = checked.call("reader-operation", input(1));

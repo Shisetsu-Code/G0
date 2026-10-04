@@ -709,6 +709,7 @@ impl GraphEditor {
             Operation::BytesConcat => (vec![SemanticType::Bytes; 2], SemanticType::Bytes),
             Operation::EncodeUtf8 => (vec![SemanticType::Text], SemanticType::Bytes),
             Operation::DecodeInteger128Le => (vec![SemanticType::Bytes], range(i128::MIN, i128::MAX)),
+            Operation::DecodeUnsigned32Le => (vec![SemanticType::Bytes], range(0, u32::MAX as i128)),
             Operation::DecodeUtf8 => (
                 vec![SemanticType::Bytes],
                 SemanticType::Result(Box::new(SemanticType::Text), Box::new(SemanticType::Bytes)),

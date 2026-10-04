@@ -381,6 +381,7 @@ fn validate_operation(node: &Node, report: &mut ValidationReport) {
         | Operation::EncodeUtf8
         | Operation::DecodeUtf8
         | Operation::DecodeInteger128Le
+        | Operation::DecodeUnsigned32Le
         | Operation::FormatInteger
         | Operation::MakeRecord { .. }
         | Operation::Field { .. }

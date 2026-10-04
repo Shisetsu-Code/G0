@@ -19,7 +19,9 @@ inverted signed i128 bounds, zero decimal precision, and big-float precision
 below two bits. It validates endpoint existence, nested type assignment, exact
 input wiring, and local pure operation contracts, including literal bounds and
 checked arithmetic interval proofs. G0 slices signed words and uses the generic
-`DecodeInteger128Le` binary codec; G0 compares decoded bounds. Wiring uses target slot prefixes and a byte bitmap;
+`DecodeInteger128Le` binary codec; G0 compares decoded bounds. Complete four-byte words use
+`DecodeUnsigned32Le`; the G0 reader retains zero padding for truncated low-level reads.
+Wiring uses target slot prefixes and a byte bitmap;
 already ordered node tables bypass the general dependency scheduler.
 Separate G0 reader graphs construct program, node and edge offset tables. A G0 scheduler
 orders dependencies before their users and detects cycles when a complete pass

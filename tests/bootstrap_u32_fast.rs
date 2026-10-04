@@ -14,7 +14,7 @@ fn unsigned_word_decoding_preserves_all_bits_with_bounded_work() {
         }
     }
     let limits = ExecutionLimits {
-        max_steps: 40,
+        max_steps: 15,
         max_value_bytes: 1 << 20,
         ..ExecutionLimits::default()
     };
@@ -32,7 +32,7 @@ fn unsigned_word_decoding_preserves_all_bits_with_bounded_work() {
                 .unwrap(),
             vec![Value::Integer(value as i128)]
         );
-        assert!(executor.steps_used() <= 40);
+        assert!(executor.steps_used() <= 15);
     }
 }
 
@@ -45,8 +45,11 @@ fn unsigned_word_helper_retains_zero_padding_for_missing_bytes() {
         (vec![], 0, 0),
         (vec![255], 0, 255),
         (vec![1, 2], 0, 513),
+        (vec![1, 2, 3], 0, 197121),
+        (vec![9, 1, 2, 3], 1, 197121),
         (vec![7, 255], 1, 255),
         (vec![1, 2, 3], 9, 0),
+        (vec![], (1_i128 << 48) - 3, 0),
     ] {
         let mut executor = Executor::new(&program, ExecutionLimits::default()).unwrap();
         assert_eq!(

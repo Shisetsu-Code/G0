@@ -399,6 +399,7 @@ fn emit_graph(
             | Operation::EncodeUtf8
             | Operation::DecodeUtf8
             | Operation::DecodeInteger128Le
+            | Operation::DecodeUnsigned32Le
             | Operation::FormatInteger
             | Operation::TextJoin
             | Operation::MakeRecord { .. }

@@ -97,6 +97,7 @@ jobs:
           cargo build --lib
           cargo test --test native_aggregate_cli
           cargo test --test integer128_codec
+          cargo test --test unsigned32_codec
           cargo test --test bootstrap_native_phases -- --nocapture
           cargo test --test bootstrap_control
 

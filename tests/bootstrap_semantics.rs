@@ -267,6 +267,31 @@ fn g0_raw_parser_checks_integer_codec_minor_version() {
 }
 
 #[test]
+fn g0_raw_parser_checks_unsigned_word_codec_minor_version() {
+    let document = compiler_document();
+    let graph = document
+        .graphs
+        .iter()
+        .find(|graph| graph.name == "reader-u32-codec")
+        .unwrap();
+    let source = g0::graph_binary::encode_graph(graph).unwrap();
+    let contract = document.validated_contract().unwrap();
+    let mut executor = Executor::new(&contract, compiler_limits()).unwrap();
+    for minor in [10u16, 11] {
+        let mut bytes = source.clone();
+        bytes[6..8].copy_from_slice(&minor.to_le_bytes());
+        let result = executor.run_graph(
+            "reader-graph",
+            vec![Value::Bytes(bytes.into()), Value::Integer(0)],
+        );
+        assert_eq!(
+            matches!(result, Ok(ref values) if values == &vec![Value::Integer(source.len() as i128)]),
+            minor == 11
+        );
+    }
+}
+
+#[test]
 fn g0_semantic_compiler_reads_its_own_definition_with_bounded_hosting() {
     let source = g0::program_binary::encode_program(&compiler_document()).unwrap();
     let assembly = compile_with(&source, &source).unwrap();

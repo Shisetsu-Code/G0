@@ -111,6 +111,14 @@ The pure operation uses the existing execution budgets and cancellation checks,
 including the native backend's generic primitive dispatch. Versions 0.1..0.9
 reject opcode 74; their existing operations remain accepted by the 0.10 decoder.
 
+G0G 0.11 adds `DecodeUnsigned32Le` (opcode 75, no operation payload).
+It consumes exactly four Bytes in little-endian order and produces an Integer
+whose declared range is exactly 0 through u32.MAX (4294967295). High bits remain
+unsigned. Other lengths fail with `Bounds`; narrow or signed output ranges fail
+validation. The pure codec inherits execution budgets and cancellation, uses
+the native generic primitive dispatch and rejects declared effects/capabilities.
+Versions 0.1..0.10 reject opcode 75; the 0.11 decoder accepts their old operations.
+
 G0P 0.2 appends a schema registry after the graph list. It consists of a u32 count;
 each schema has a u32-length UTF-8 name, u32 version and u32 field count. Each field
 has u32 tag, u32-length UTF-8 name, u32-length semantic type encoding and a one-byte
