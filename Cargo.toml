@@ -4,14 +4,29 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 description = "Bootstrap compiler for the G0 graph programming language"
+default-run = "g0c"
+
+[dependencies]
+ring = "=0.17.14"
+zeroize = "=1.9.0"
+rustls = { version = "=0.23.43", default-features = false, features = ["std", "ring", "aws_lc_rs"] }
+aws-lc-rs = { version = "=1.16.3", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_UI_WindowsAndMessaging", "Win32_UI_Controls_Dialogs"] }
 
 [lib]
 name = "g0"
 path = "src/lib.rs"
+crate-type = ["rlib", "staticlib"]
 
 [[bin]]
 name = "g0c"
 path = "src/main.rs"
+
+[[bin]]
+name = "g0-editor"
+path = "src/editor_main.rs"
 
 [profile.release]
 lto = "fat"

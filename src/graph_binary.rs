@@ -1,13 +1,19 @@
 use crate::gir::{
-    AuthorityMode, Capability, CapabilityClass, Effect, Graph, Literal,
-    Operation, Port, SemanticType, SourceEndpoint, TargetEndpoint,
+    AuthorityMode, Capability, CapabilityClass, Effect, Graph, Literal, Operation, Port,
+    SemanticType, SourceEndpoint, TargetEndpoint,
 };
 use crate::graph_format::canonicalize_graph;
 
 const MAGIC: &[u8; 4] = b"G0G\0";
 const FORMAT_MAJOR: u16 = 0;
-const FORMAT_MINOR: u16 = 1;
+const FORMAT_MINOR: u16 = 11;
 const MAX_TYPE_DEPTH: usize = 128;
+
+pub fn encode_semantic_type(ty: &SemanticType) -> Result<Vec<u8>, BinaryGraphIssue> {
+    let mut out = Vec::new();
+    put_type(&mut out, ty, 0)?;
+    Ok(out)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BinaryGraphIssue {
@@ -16,11 +22,8 @@ pub enum BinaryGraphIssue {
     TypeDepthExceeded,
 }
 
-pub fn encode_graph(
-    graph: &Graph,
-) -> Result<Vec<u8>, BinaryGraphIssue> {
-    crate::gir_validate::validate(graph)
-        .map_err(|_| BinaryGraphIssue::InvalidGraph)?;
+pub fn encode_graph(graph: &Graph) -> Result<Vec<u8>, BinaryGraphIssue> {
+    crate::gir_validate::validate(graph).map_err(|_| BinaryGraphIssue::InvalidGraph)?;
 
     let document = canonicalize_graph(graph);
     let graph = &document.graph;
@@ -92,10 +95,7 @@ pub fn diagnostic_fingerprint64(bytes: &[u8]) -> u64 {
     })
 }
 
-fn put_ports(
-    out: &mut Vec<u8>,
-    ports: &[Port],
-) -> Result<(), BinaryGraphIssue> {
+fn put_ports(out: &mut Vec<u8>, ports: &[Port]) -> Result<(), BinaryGraphIssue> {
     put_len(out, ports.len())?;
     for port in ports {
         put_u16(out, port.id);
@@ -105,11 +105,7 @@ fn put_ports(
     Ok(())
 }
 
-fn put_type(
-    out: &mut Vec<u8>,
-    ty: &SemanticType,
-    depth: usize,
-) -> Result<(), BinaryGraphIssue> {
+fn put_type(out: &mut Vec<u8>, ty: &SemanticType, depth: usize) -> Result<(), BinaryGraphIssue> {
     if depth > MAX_TYPE_DEPTH {
         return Err(BinaryGraphIssue::TypeDepthExceeded);
     }
@@ -149,8 +145,7 @@ fn put_type(
             put_u8(out, 9);
             put_u64(
                 out,
-                u64::try_from(*len)
-                    .map_err(|_| BinaryGraphIssue::LengthOverflow)?,
+                u64::try_from(*len).map_err(|_| BinaryGraphIssue::LengthOverflow)?,
             );
             put_type(out, inner, next)?;
         }
@@ -162,8 +157,7 @@ fn put_type(
             put_u8(out, 11);
             put_u64(
                 out,
-                u64::try_from(*len)
-                    .map_err(|_| BinaryGraphIssue::LengthOverflow)?,
+                u64::try_from(*len).map_err(|_| BinaryGraphIssue::LengthOverflow)?,
             );
             put_type(out, inner, next)?;
         }
@@ -225,10 +219,7 @@ fn put_type(
     Ok(())
 }
 
-fn put_operation(
-    out: &mut Vec<u8>,
-    operation: &Operation,
-) -> Result<(), BinaryGraphIssue> {
+fn put_operation(out: &mut Vec<u8>, operation: &Operation) -> Result<(), BinaryGraphIssue> {
     match operation {
         Operation::Const(literal) => {
             put_u8(out, 0);
@@ -249,6 +240,124 @@ fn put_operation(
         Operation::Xor => put_u8(out, 24),
         Operation::Not => put_u8(out, 25),
         Operation::ConvertChecked => put_u8(out, 28),
+        Operation::MakeArray => put_u8(out, 30),
+        Operation::Index => put_u8(out, 31),
+        Operation::Length => put_u8(out, 32),
+        Operation::TextConcat => put_u8(out, 33),
+        Operation::BytesConcat => put_u8(out, 34),
+        Operation::BytesSlice => put_u8(out, 66),
+        Operation::ArrayConcat => put_u8(out, 67),
+        Operation::Range => put_u8(out, 68),
+        Operation::BytesFromArray => put_u8(out, 69),
+        Operation::CheckedAdd => put_u8(out, 70),
+        Operation::CheckedSub => put_u8(out, 71),
+        Operation::CheckedMul => put_u8(out, 72),
+        Operation::ResultIsOk => put_u8(out, 73),
+        Operation::DecodeInteger128Le => put_u8(out, 74),
+        Operation::DecodeUnsigned32Le => put_u8(out, 75),
+        Operation::EncodeUtf8 => put_u8(out, 35),
+        Operation::DecodeUtf8 => put_u8(out, 36),
+        Operation::FormatInteger => put_u8(out, 37),
+        Operation::MakeRecord { schema, fields } => {
+            put_u8(out, 38);
+            put_string(out, schema)?;
+            put_strings(out, fields)?;
+        }
+        Operation::Field { name } => {
+            put_u8(out, 39);
+            put_string(out, name)?;
+        }
+        Operation::MakeVariant { schema, tag } => {
+            put_u8(out, 40);
+            put_string(out, schema)?;
+            put_string(out, tag)?;
+        }
+        Operation::VariantPayload { tag } => {
+            put_u8(out, 41);
+            put_string(out, tag)?;
+        }
+        Operation::Some => put_u8(out, 42),
+        Operation::None => put_u8(out, 43),
+        Operation::Ok => put_u8(out, 44),
+        Operation::Err => put_u8(out, 45),
+        Operation::UnwrapOr => put_u8(out, 46),
+        Operation::Map { body } => {
+            put_u8(out, 47);
+            put_string(out, body)?;
+        }
+        Operation::TextJoin => put_u8(out, 48),
+        Operation::RegionOpen => put_u8(out, 49),
+        Operation::RegionOpenSecret => put_u8(out, 60),
+        Operation::RegionOpenChild { secret } => {
+            put_u8(out, 61);
+            put_u8(out, u8::from(*secret));
+        }
+        Operation::RegionAllocate => put_u8(out, 50),
+        Operation::RegionWrite => put_u8(out, 51),
+        Operation::RegionRead => put_u8(out, 52),
+        Operation::RegionClose => put_u8(out, 53),
+        Operation::StoreSetRelation { resource, relation } => {
+            put_u8(out, 56);
+            put_string(out, resource)?;
+            put_string(out, relation)?;
+        }
+        Operation::StoreSetCredential { resource, field } => {
+            put_u8(out, 58);
+            put_string(out, resource)?;
+            put_string(out, field)?;
+        }
+        Operation::StoreVerifyCredential { resource, field } => {
+            put_u8(out, 59);
+            put_string(out, resource)?;
+            put_string(out, field)?;
+        }
+        Operation::StoreTraverse { resource, relation } => {
+            put_u8(out, 57);
+            put_string(out, resource)?;
+            put_string(out, relation)?;
+        }
+        Operation::TaskSpawn {
+            body,
+            max_steps,
+            max_value_bytes,
+        } => {
+            put_u8(out, 54);
+            put_string(out, body)?;
+            put_u64(out, *max_steps);
+            put_u64(out, *max_value_bytes);
+        }
+        Operation::TaskJoin { body } => {
+            put_u8(out, 55);
+            put_string(out, body)?;
+        }
+        Operation::TaskSpawnScoped {
+            body,
+            max_steps,
+            max_value_bytes,
+        } => {
+            put_u8(out, 62);
+            put_string(out, body)?;
+            put_u64(out, *max_steps);
+            put_u64(out, *max_value_bytes);
+        }
+        Operation::TaskJoinScoped { body } => {
+            put_u8(out, 63);
+            put_string(out, body)?;
+        }
+        Operation::TaskSpawnHosted {
+            body,
+            max_steps,
+            max_value_bytes,
+        } => {
+            put_u8(out, 64);
+            put_string(out, body)?;
+            put_u64(out, *max_steps);
+            put_u64(out, *max_value_bytes);
+        }
+        Operation::TaskJoinHosted { body } => {
+            put_u8(out, 65);
+            put_string(out, body)?;
+        }
         Operation::Truncate { bits, signed } => {
             put_u8(out, 29);
             put_u16(out, *bits);
@@ -280,7 +389,7 @@ fn put_operation(
             put_string(out, condition)?;
             put_string(out, body)?;
             put_u64(out, *max_iterations);
-        },
+        }
         Operation::Subgraph(name) => {
             put_u8(out, 7);
             put_string(out, name)?;
@@ -329,10 +438,7 @@ fn put_operation(
     Ok(())
 }
 
-fn put_literal(
-    out: &mut Vec<u8>,
-    literal: &Literal,
-) -> Result<(), BinaryGraphIssue> {
+fn put_literal(out: &mut Vec<u8>, literal: &Literal) -> Result<(), BinaryGraphIssue> {
     match literal {
         Literal::Bool(value) => {
             put_u8(out, 0);
@@ -355,10 +461,7 @@ fn put_literal(
     Ok(())
 }
 
-fn put_capability(
-    out: &mut Vec<u8>,
-    capability: &Capability,
-) -> Result<(), BinaryGraphIssue> {
+fn put_capability(out: &mut Vec<u8>, capability: &Capability) -> Result<(), BinaryGraphIssue> {
     put_u8(out, capability_tag(capability.class));
     put_string(out, &capability.action)?;
     put_string(out, &capability.resource)?;
@@ -366,10 +469,7 @@ fn put_capability(
     Ok(())
 }
 
-fn put_strings(
-    out: &mut Vec<u8>,
-    values: &[String],
-) -> Result<(), BinaryGraphIssue> {
+fn put_strings(out: &mut Vec<u8>, values: &[String]) -> Result<(), BinaryGraphIssue> {
     put_len(out, values.len())?;
     for value in values {
         put_string(out, value)?;
@@ -377,18 +477,14 @@ fn put_strings(
     Ok(())
 }
 
-fn put_string(
-    out: &mut Vec<u8>,
-    value: &str,
-) -> Result<(), BinaryGraphIssue> {
+fn put_string(out: &mut Vec<u8>, value: &str) -> Result<(), BinaryGraphIssue> {
     put_len(out, value.len())?;
     out.extend_from_slice(value.as_bytes());
     Ok(())
 }
 
 fn put_len(out: &mut Vec<u8>, value: usize) -> Result<(), BinaryGraphIssue> {
-    let value =
-        u32::try_from(value).map_err(|_| BinaryGraphIssue::LengthOverflow)?;
+    let value = u32::try_from(value).map_err(|_| BinaryGraphIssue::LengthOverflow)?;
     put_u32(out, value);
     Ok(())
 }
@@ -470,9 +566,7 @@ mod tests {
             outputs: vec![Port {
                 id: 0,
                 name: "out".into(),
-                ty: SemanticType::Integer(
-                    IntegerType::new(value, value).unwrap(),
-                ),
+                ty: SemanticType::Integer(IntegerType::new(value, value).unwrap()),
             }],
             effects: BTreeSet::new(),
             required_capabilities: BTreeSet::new(),

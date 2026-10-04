@@ -1,0 +1,311 @@
+//! Exactly-once wiring via bounded target slots and an immutable byte bitmap.
+use super::*;
+fn seq() -> SemanticType {
+    SemanticType::Slice(Box::new(int()))
+}
+fn choose_integer(
+    g: &mut G,
+    yes: &str,
+    no: &str,
+    test: SourceEndpoint,
+    args: Vec<SourceEndpoint>,
+) -> SourceEndpoint {
+    let mut values = vec![(test, SemanticType::Bool)];
+    values.extend(args.into_iter().map(|a| {
+        let ty = match g.ty(&a) {
+            SemanticType::Integer(_) => int(),
+            t => t,
+        };
+        (a, ty)
+    }));
+    let out = g.op(
+        Operation::Select {
+            when_true: yes.into(),
+            when_false: no.into(),
+        },
+        values,
+        int(),
+    );
+    let n = g.b.graph.nodes.last_mut().unwrap();
+    n.inputs[0].name = "selector".into();
+    for (i, p) in n.inputs.iter_mut().skip(1).enumerate() {
+        p.name = format!("p{i}");
+    }
+    out
+}
+pub(super) fn graphs() -> Vec<Graph> {
+    let prefix_state = vec![SemanticType::Bytes, rows(), int(), int(), seq()];
+    let mut pc = G::new(
+        "validator-wire-prefix-condition",
+        prefix_state.clone(),
+        vec![SemanticType::Bool],
+    );
+    let len = pc.length(input(1));
+    let prefix_more = pc.compare(Operation::Lt, input(2), len);
+    let mut pb = G::new(
+        "validator-wire-prefix-body",
+        prefix_state.clone(),
+        prefix_state.clone(),
+    );
+    let node = pb.index(input(1), input(2));
+    let ports = pb.field(node, 3);
+    let count = pb.u32(ports);
+    let prefix_total = pb.arithmetic(Operation::Add, input(3), count);
+    let one = pb.n(1);
+    let cursor = pb.arithmetic(Operation::Add, input(2), one);
+    let singleton = pb.op(Operation::MakeArray, vec![(input(3), int())], seq());
+    let prefix_values = pb.op(
+        Operation::ArrayConcat,
+        vec![(input(4), seq()), (singleton, seq())],
+        seq(),
+    );
+    let mut prefix = G::new(
+        "validator-wire-prefix",
+        vec![SemanticType::Bytes, rows()],
+        vec![seq(), int()],
+    );
+    let zero = prefix.n(0);
+    let empty = prefix.op(Operation::MakeArray, vec![], seq());
+    let prefix_out = prefix.loop_node(
+        "validator-wire-prefix",
+        prefix_state,
+        vec![input(0), input(1), zero.clone(), zero, empty],
+    );
+    let key_args = vec![
+        SemanticType::Bytes,
+        rows(),
+        seq(),
+        int(),
+        int(),
+        int(),
+        int(),
+        int(),
+    ];
+    let mut nk = G::new("validator-wire-node-key", key_args.clone(), vec![int()]);
+    let index = call(
+        &mut nk,
+        "validator-node-index-fast",
+        vec![input(1), input(6)],
+        int(),
+    );
+    let offset = nk.index(input(2), index.clone());
+    let node = nk.index(input(1), index);
+    let list = nk.field(node, 3);
+    let rank = call(
+        &mut nk,
+        "validator-port-rank-fast",
+        vec![input(0), list, input(7)],
+        int(),
+    );
+    let node_key = nk.arithmetic(Operation::Add, offset, rank);
+    let mut gk = G::new("validator-wire-graph-key", key_args.clone(), vec![int()]);
+    let rank = call(
+        &mut gk,
+        "validator-port-rank-fast",
+        vec![input(0), input(4), input(7)],
+        int(),
+    );
+    let graph_key = gk.arithmetic(Operation::Add, input(3), rank);
+    let mut key = G::new("validator-wire-key", key_args, vec![int()]);
+    let zero = key.n(0);
+    let is_node = key.compare(Operation::Eq, input(5), zero);
+    let key_slot = choose_integer(
+        &mut key,
+        "validator-wire-node-key",
+        "validator-wire-graph-key",
+        is_node,
+        (0..8).map(input).collect(),
+    );
+    let byte = SemanticType::Integer(IntegerType { min: 0, max: 255 });
+    let byte_seq = SemanticType::Slice(Box::new(byte.clone()));
+    let mut zero_byte = G::new("validator-wire-zero-byte", vec![int()], vec![byte.clone()]);
+    let z = zero_byte.n(0);
+    let mut mark = G::new(
+        "validator-wire-mark",
+        vec![SemanticType::Bytes, int()],
+        vec![SemanticType::Bytes],
+    );
+    let zero = mark.n(0);
+    let before = mark.op(
+        Operation::BytesSlice,
+        vec![
+            (input(0), SemanticType::Bytes),
+            (zero, int()),
+            (input(1), int()),
+        ],
+        SemanticType::Bytes,
+    );
+    let next = mark.advance(input(1), 1);
+    let len = mark.length(input(0));
+    let remaining = mark.arithmetic(Operation::Sub, len, next.clone());
+    let after = mark.op(
+        Operation::BytesSlice,
+        vec![
+            (input(0), SemanticType::Bytes),
+            (next, int()),
+            (remaining, int()),
+        ],
+        SemanticType::Bytes,
+    );
+    let one = mark.op(
+        Operation::Const(Literal::Bytes(vec![1])),
+        vec![],
+        SemanticType::Bytes,
+    );
+    let first = mark.op(
+        Operation::BytesConcat,
+        vec![(before, SemanticType::Bytes), (one, SemanticType::Bytes)],
+        SemanticType::Bytes,
+    );
+    let marked = mark.op(
+        Operation::BytesConcat,
+        vec![(first, SemanticType::Bytes), (after, SemanticType::Bytes)],
+        SemanticType::Bytes,
+    );
+    let state = vec![
+        SemanticType::Bytes,
+        rows(),
+        rows(),
+        int(),
+        int(),
+        seq(),
+        int(),
+        int(),
+        SemanticType::Bytes,
+        SemanticType::Bool,
+    ];
+    let mut cond = G::new(
+        "validator-wire-visit-condition",
+        state.clone(),
+        vec![SemanticType::Bool],
+    );
+    let len = cond.length(input(2));
+    let more = cond.compare(Operation::Lt, input(7), len);
+    let visit_more = cond.and(more, input(9));
+    let mut body = G::new("validator-wire-visit-body", state.clone(), state.clone());
+    let edge = body.index(input(2), input(7));
+    let kind = body.field(edge.clone(), 3);
+    let node = body.field(edge.clone(), 4);
+    let endpoint_port = body.field(edge, 5);
+    let slot = call(
+        &mut body,
+        "validator-wire-key",
+        vec![
+            input(0),
+            input(1),
+            input(5),
+            input(6),
+            input(4),
+            kind,
+            node,
+            endpoint_port,
+        ],
+        int(),
+    );
+    let optional = SemanticType::Option(Box::new(byte.clone()));
+    let seen = body.op(
+        Operation::Index,
+        vec![(input(8), SemanticType::Bytes), (slot.clone(), int())],
+        optional.clone(),
+    );
+    let occupied = body.n(1);
+    let seen = body.op(
+        Operation::UnwrapOr,
+        vec![(seen, optional), (occupied, byte.clone())],
+        byte,
+    );
+    let zero = body.n(0);
+    let unused = body.compare(Operation::Eq, seen, zero);
+    let visit_valid = body.and(input(9), unused);
+    let marked_seen = call(
+        &mut body,
+        "validator-wire-mark",
+        vec![input(8), slot],
+        SemanticType::Bytes,
+    );
+    let visit_next = body.advance(input(7), 1);
+    let mut main = G::new(
+        "validator-wire-complete",
+        vec![SemanticType::Bytes, rows(), rows(), int(), int()],
+        vec![SemanticType::Bool],
+    );
+    let prefix_id = main.b.graph.nodes.len() as u32 + 1;
+    main.op(
+        Operation::Subgraph("validator-wire-prefix".into()),
+        vec![(input(0), SemanticType::Bytes), (input(1), rows())],
+        seq(),
+    );
+    main.b.graph.nodes.last_mut().unwrap().outputs = vec![port(0, seq()), port(1, int())];
+    let prefixes = SourceEndpoint::NodeOutput {
+        node: prefix_id,
+        port: 0,
+    };
+    let total = SourceEndpoint::NodeOutput {
+        node: prefix_id,
+        port: 1,
+    };
+    let output_count = main.u32(input(4));
+    let slots = main.arithmetic(Operation::Add, total.clone(), output_count);
+    let count = main.length(input(2));
+    let count_valid = main.compare(Operation::Eq, count, slots.clone());
+    let indices = main.op(Operation::Range, vec![(slots, int())], seq());
+    let zeros = main.op(
+        Operation::Map {
+            body: "validator-wire-zero-byte".into(),
+        },
+        vec![(indices, seq())],
+        byte_seq.clone(),
+    );
+    let bitmap = main.op(
+        Operation::BytesFromArray,
+        vec![(zeros, byte_seq)],
+        SemanticType::Bytes,
+    );
+    let zero = main.n(0);
+    let visits = main.loop_node(
+        "validator-wire-visit",
+        state,
+        vec![
+            input(0),
+            input(1),
+            input(2),
+            input(3),
+            input(4),
+            prefixes,
+            total,
+            zero,
+            bitmap,
+            count_valid,
+        ],
+    );
+    vec![
+        pc.finish(vec![prefix_more]),
+        pb.finish(vec![
+            input(0),
+            input(1),
+            cursor,
+            prefix_total,
+            prefix_values,
+        ]),
+        prefix.finish(vec![prefix_out[4].clone(), prefix_out[3].clone()]),
+        nk.finish(vec![node_key]),
+        gk.finish(vec![graph_key]),
+        key.finish(vec![key_slot]),
+        zero_byte.finish(vec![z]),
+        mark.finish(vec![marked]),
+        cond.finish(vec![visit_more]),
+        body.finish(vec![
+            input(0),
+            input(1),
+            input(2),
+            input(3),
+            input(4),
+            input(5),
+            input(6),
+            visit_next,
+            marked_seen,
+            visit_valid,
+        ]),
+        main.finish(vec![visits[9].clone()]),
+    ]
+}

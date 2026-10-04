@@ -1,15 +1,11 @@
 use std::collections::BTreeMap;
 
 use crate::abi::graph_symbol;
-use crate::call_graph::{
-    build_call_graph, reachable_program_graphs, CallGraphIssue,
-};
-use crate::compiler::{compile_graph, CompiledGraph, PipelineIssue};
+use crate::call_graph::{CallGraphIssue, build_call_graph, reachable_program_graphs};
+use crate::compiler::{CompiledGraph, PipelineIssue, compile_graph};
 use crate::machine::MachineProfile;
-use crate::program::{validate_program, PlatformContract, ProgramContract, ProgramIssue};
-use crate::x86_codegen::{
-    emit_entry_wrapper, emit_x86_64_named, X86CodegenIssue,
-};
+use crate::program::{PlatformContract, ProgramContract, ProgramIssue, validate_program};
+use crate::x86_codegen::{X86CodegenIssue, emit_entry_wrapper, emit_x86_64_named};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompiledProgram {
@@ -22,6 +18,10 @@ pub struct CompiledProgram {
 pub enum ProgramCompileIssue {
     Program(Vec<ProgramIssue>),
     MissingEntry,
+    EntryInterface {
+        inputs: usize,
+        outputs: usize,
+    },
     CallGraph(Vec<CallGraphIssue>),
     ExternalSubgraphsNotLinked,
     Graph {
@@ -33,6 +33,27 @@ pub enum ProgramCompileIssue {
         issues: Vec<X86CodegenIssue>,
     },
     EntryWrapper(X86CodegenIssue),
+    Aggregate(crate::native_aggregate::AggregateCompileIssue),
+}
+
+pub fn requires_aggregate_values(graph: &crate::gir::Graph) -> bool {
+    graph
+        .inputs
+        .iter()
+        .chain(&graph.outputs)
+        .chain(
+            graph
+                .nodes
+                .iter()
+                .flat_map(|node| node.inputs.iter().chain(&node.outputs)),
+        )
+        .any(|port| match &port.ty {
+            crate::gir::SemanticType::Bool => false,
+            crate::gir::SemanticType::Integer(t) => {
+                t.min < i128::from(i64::MIN) || t.max > i128::from(i64::MAX)
+            }
+            _ => true,
+        })
 }
 
 pub fn compile_program(
@@ -40,8 +61,7 @@ pub fn compile_program(
     platform: &PlatformContract,
     machine: MachineProfile,
 ) -> Result<CompiledProgram, ProgramCompileIssue> {
-    validate_program(program, platform)
-        .map_err(ProgramCompileIssue::Program)?;
+    validate_program(program, platform).map_err(ProgramCompileIssue::Program)?;
 
     let entry = program
         .entry_graph
@@ -49,17 +69,39 @@ pub fn compile_program(
         .ok_or(ProgramCompileIssue::MissingEntry)?
         .clone();
 
+    let entry_graph = program
+        .graphs
+        .iter()
+        .find(|graph| graph.name == entry)
+        .expect("validated entry");
+    if !entry_graph.inputs.is_empty() || entry_graph.outputs.len() != 1 {
+        return Err(ProgramCompileIssue::EntryInterface {
+            inputs: entry_graph.inputs.len(),
+            outputs: entry_graph.outputs.len(),
+        });
+    }
+
     if !program.external_subgraphs.is_empty() {
         return Err(ProgramCompileIssue::ExternalSubgraphsNotLinked);
     }
 
-    let call_graph = build_call_graph(
-        &program.graphs,
-        &program.external_subgraphs,
-    )
-    .map_err(ProgramCompileIssue::CallGraph)?;
-    let reachable =
-        reachable_program_graphs(&call_graph, &program.graphs, &entry);
+    let call_graph = build_call_graph(&program.graphs, &program.external_subgraphs)
+        .map_err(ProgramCompileIssue::CallGraph)?;
+    let reachable = reachable_program_graphs(&call_graph, &program.graphs, &entry);
+
+    if program
+        .graphs
+        .iter()
+        .any(|graph| reachable.contains(&graph.name) && requires_aggregate_values(graph))
+    {
+        let compiled = crate::native_aggregate::compile_program(program)
+            .map_err(ProgramCompileIssue::Aggregate)?;
+        return Ok(CompiledProgram {
+            entry_graph: entry,
+            assembly: compiled.assembly,
+            graphs: BTreeMap::new(),
+        });
+    }
 
     let mut graphs = BTreeMap::new();
     let mut assembly = String::new();
@@ -71,23 +113,20 @@ pub fn compile_program(
             .find(|graph| graph.name == *graph_name)
             .expect("validated reachable graph");
 
-        let mut compiled = compile_graph(graph, machine).map_err(|issue| {
-            ProgramCompileIssue::Graph {
+        let mut compiled =
+            compile_graph(graph, machine).map_err(|issue| ProgramCompileIssue::Graph {
                 graph: graph.name.clone(),
                 issue,
-            }
-        })?;
+            })?;
 
         let symbol = graph_symbol(&graph.name);
-        compiled.assembly = emit_x86_64_named(
-            &compiled.machine_ir,
-            &symbol,
-            false,
-        )
-        .map_err(|issues| ProgramCompileIssue::Codegen {
-            graph: graph.name.clone(),
-            issues,
-        })?;
+        compiled.assembly =
+            emit_x86_64_named(&compiled.machine_ir, &symbol, false).map_err(|issues| {
+                ProgramCompileIssue::Codegen {
+                    graph: graph.name.clone(),
+                    issues,
+                }
+            })?;
 
         assembly.push_str(&compiled.assembly);
         assembly.push('\n');
@@ -95,10 +134,8 @@ pub fn compile_program(
     }
 
     let entry_symbol = graph_symbol(&entry);
-    assembly.push_str(
-        &emit_entry_wrapper(&entry_symbol)
-            .map_err(ProgramCompileIssue::EntryWrapper)?,
-    );
+    assembly
+        .push_str(&emit_entry_wrapper(&entry_symbol).map_err(ProgramCompileIssue::EntryWrapper)?);
     assembly.push_str(".section .note.GNU-stack,\"\" ,@progbits\n");
 
     Ok(CompiledProgram {
@@ -114,8 +151,8 @@ mod tests {
 
     use super::*;
     use crate::gir::{
-        Edge, Graph, IntegerType, Literal, Node, Operation, Port,
-        SemanticType, SourceEndpoint, TargetEndpoint,
+        Edge, Graph, IntegerType, Literal, Node, Operation, Port, SemanticType, SourceEndpoint,
+        TargetEndpoint,
     };
 
     fn int(min: i128, max: i128) -> SemanticType {
@@ -239,10 +276,7 @@ mod tests {
         graph
     }
 
-    fn constant_branch(
-        name: &str,
-        value: i128,
-    ) -> Graph {
+    fn constant_branch(name: &str, value: i128) -> Graph {
         let mut graph = Graph::new(name);
         graph.outputs = vec![Port {
             id: 0,
@@ -374,12 +408,7 @@ mod tests {
         };
 
         let platform = PlatformContract::bootstrap_x86_64_v3();
-        let compiled = compile_program(
-            &program,
-            &platform,
-            MachineProfile::x86_64_v3(),
-        )
-        .unwrap();
+        let compiled = compile_program(&program, &platform, MachineProfile::x86_64_v3()).unwrap();
 
         assert!(compiled.assembly.contains("loop_0_head"));
         assert!(compiled.assembly.contains("loop_0_bound"));
@@ -452,12 +481,7 @@ mod tests {
         };
 
         let platform = PlatformContract::bootstrap_x86_64_v3();
-        let compiled = compile_program(
-            &program,
-            &platform,
-            MachineProfile::x86_64_v3(),
-        )
-        .unwrap();
+        let compiled = compile_program(&program, &platform, MachineProfile::x86_64_v3()).unwrap();
 
         assert!(compiled.assembly.contains("select_0_false"));
         assert!(compiled.assembly.contains(&graph_symbol("branch_yes")));
@@ -470,21 +494,12 @@ mod tests {
     fn only_reachable_graphs_are_emitted() {
         let program = ProgramContract {
             entry_graph: Some("main".into()),
-            graphs: vec![
-                main_graph(),
-                worker(),
-                Graph::new("dead_library_graph"),
-            ],
+            graphs: vec![main_graph(), worker(), Graph::new("dead_library_graph")],
             ..ProgramContract::default()
         };
 
         let platform = PlatformContract::bootstrap_x86_64_v3();
-        let compiled = compile_program(
-            &program,
-            &platform,
-            MachineProfile::x86_64_v3(),
-        )
-        .unwrap();
+        let compiled = compile_program(&program, &platform, MachineProfile::x86_64_v3()).unwrap();
 
         assert!(compiled.graphs.contains_key("main"));
         assert!(compiled.graphs.contains_key("worker"));

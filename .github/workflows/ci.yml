@@ -10,6 +10,9 @@ permissions:
 jobs:
   bootstrap:
     runs-on: ubuntu-latest
+    env:
+      CARGO_PROFILE_DEV_OPT_LEVEL: 2
+      CARGO_PROFILE_TEST_OPT_LEVEL: 2
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -21,12 +24,27 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
       - name: Test
-        run: cargo test --all-targets
+        run: |
+          cargo build --lib
+          cargo test --all-targets
       - name: Compile legacy bootstrap example
         run: |
           cargo run --release -- compile examples/answer.g0 -o target/answer.s
           cc -c target/answer.s -o target/answer.o
           file target/answer.o
+      - name: Compile G0 backend and compare bootstrap stages
+        run: |
+          cargo build --release --lib
+          cargo run --release -- bootstrap compiler/native-wrapper.g0p -o target/compiler-stage1.s
+          cc target/compiler-stage1.s tests/support/bootstrap_driver.c target/release/libg0.a -ldl -lpthread -lm -o target/compiler-stage1
+          ./target/compiler-stage1 compiler/native-wrapper.g0p > target/compiler-stage2.s
+          cmp target/compiler-stage1.s target/compiler-stage2.s
+          cc target/compiler-stage2.s tests/support/bootstrap_driver.c target/release/libg0.a -ldl -lpthread -lm -o target/compiler-stage2
+          ./target/compiler-stage2 compiler/native-wrapper.g0p > target/compiler-stage3.s
+          cmp target/compiler-stage2.s target/compiler-stage3.s
+          python -c "from pathlib import Path; b=bytearray(Path('compiler/native-wrapper.g0p').read_bytes()); b[6:8]=(2).to_bytes(2,'little'); Path('target/compiler-legacy.g0p').write_bytes(b)"
+          if ./target/compiler-stage2 target/compiler-legacy.g0p > target/compiler-invalid.s; then exit 1; fi
+          test ! -s target/compiler-invalid.s
       - name: Compile and execute GIR pipeline example
         run: |
           cargo run --release --example gir_answer > target/gir_answer.s
@@ -71,3 +89,36 @@ jobs:
           EOF
           cc target/native_convert.s target/native_convert_harness.c -o target/native_convert
           ./target/native_convert
+
+  native-compiler:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_PROFILE_DEV_OPT_LEVEL: 2
+      CARGO_PROFILE_TEST_OPT_LEVEL: 2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Execute direct G0 compiler and native bootstrap stages
+        run: |
+          cargo build --lib
+          cargo test --test native_aggregate_cli
+          cargo test --test integer128_codec
+          cargo test --test unsigned32_codec
+          cargo test --test bootstrap_native_phases -- --nocapture
+          cargo test --test bootstrap_control
+
+  windows-editor:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - name: Verify native Windows editor
+        run: |
+          cargo test --test editor --test execution --test bootstrap_compiler
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo run --bin g0-editor -- --smoke-test target/editor-native.bmp target/editor-native.g0g
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo run -- check target/editor-native.g0g
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

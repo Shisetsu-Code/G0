@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use crate::gir::{
-    type_assignable, CapabilityClass, Effect, Graph, IntegerType, Literal, Node,
-    NodeId, Operation, Port, SemanticType, SourceEndpoint, TargetEndpoint,
+    CapabilityClass, Effect, Graph, IntegerType, Literal, Node, NodeId, Operation, Port,
+    SemanticType, SourceEndpoint, TargetEndpoint, type_assignable,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,6 +16,7 @@ pub enum ValidationCode {
     TypeMismatch,
     MissingInputDriver,
     MultipleInputDrivers,
+    LinearFanout,
     MissingGraphOutputDriver,
     RawCycle,
     OperationShape,
@@ -103,10 +104,19 @@ pub fn validate(graph: &Graph) -> Result<(), ValidationReport> {
 
     let mut driver_count: BTreeMap<TargetEndpoint, usize> = BTreeMap::new();
     let mut adjacency: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
+    let mut linear_sources = BTreeSet::new();
 
     for edge in &graph.edges {
         let source_ty = resolve_source_type(graph, &edge.from);
         let target_ty = resolve_target_type(graph, &edge.to);
+        if source_ty.is_some_and(|ty| contains_unique(ty, 0))
+            && !linear_sources.insert(edge.from.clone())
+        {
+            report.push(
+                ValidationCode::LinearFanout,
+                format!("linear source {:?} has more than one consumer", edge.from),
+            );
+        }
 
         if source_ty.is_none() {
             report.push(
@@ -248,6 +258,28 @@ fn validate_port_set(label: &str, ports: &[Port], report: &mut ValidationReport)
     }
 }
 
+fn contains_unique(ty: &SemanticType, depth: usize) -> bool {
+    if depth >= 128 {
+        return true;
+    }
+    match ty {
+        SemanticType::Unique(_) => true,
+        SemanticType::Array(t, _)
+        | SemanticType::Vector(t, _)
+        | SemanticType::Slice(t)
+        | SemanticType::Option(t)
+        | SemanticType::Secret(t)
+        | SemanticType::Credential(t)
+        | SemanticType::State(t)
+        | SemanticType::Atomic(t)
+        | SemanticType::Versioned(t) => contains_unique(t, depth + 1),
+        SemanticType::Result(a, b) => {
+            contains_unique(a, depth + 1) || contains_unique(b, depth + 1)
+        }
+        _ => false,
+    }
+}
+
 fn resolve_source_type<'a>(graph: &'a Graph, source: &SourceEndpoint) -> Option<&'a SemanticType> {
     match source {
         SourceEndpoint::GraphInput(port) => {
@@ -278,6 +310,20 @@ fn resolve_target_type<'a>(graph: &'a Graph, target: &TargetEndpoint) -> Option<
 
 fn validate_operation(node: &Node, report: &mut ValidationReport) {
     match &node.operation {
+        Operation::RegionOpen
+        | Operation::RegionOpenSecret
+        | Operation::RegionOpenChild { .. }
+        | Operation::RegionAllocate
+        | Operation::RegionWrite
+        | Operation::RegionRead
+        | Operation::RegionClose => {
+            if let Err(message) = crate::resource_host::validate_node(node) {
+                report.push(
+                    ValidationCode::OperationShape,
+                    format!("node {}: {message}", node.id),
+                );
+            }
+        }
         Operation::Const(literal) => {
             require_shape(node, 0, 1, report);
             if let Some(output) = node.outputs.first()
@@ -286,27 +332,19 @@ fn validate_operation(node: &Node, report: &mut ValidationReport) {
                 report.push(
                     ValidationCode::OperationShape,
                     format!(
-                        "node {} constant {:?} is incompatible with output type {:?}",
-                        node.id, literal, output.ty
+                        "node {} constant is incompatible with output type {:?}",
+                        node.id, output.ty
                     ),
                 );
             }
             require_pure(node, report);
         }
-        Operation::Add
-        | Operation::Sub
-        | Operation::Mul
-        | Operation::Div
-        | Operation::Rem => {
+        Operation::Add | Operation::Sub | Operation::Mul | Operation::Div | Operation::Rem => {
             require_shape(node, 2, 1, report);
             require_pure(node, report);
             validate_integer_arithmetic(node, report);
         }
-        Operation::Eq
-        | Operation::Lt
-        | Operation::Le
-        | Operation::Gt
-        | Operation::Ge => {
+        Operation::Eq | Operation::Lt | Operation::Le | Operation::Gt | Operation::Ge => {
             require_shape(node, 2, 1, report);
             require_pure(node, report);
             validate_integer_comparison(node, report);
@@ -325,6 +363,42 @@ fn validate_operation(node: &Node, report: &mut ValidationReport) {
             require_shape(node, 1, 1, report);
             require_pure(node, report);
             validate_checked_conversion(node, report);
+        }
+        Operation::MakeArray
+        | Operation::Index
+        | Operation::Length
+        | Operation::TextConcat
+        | Operation::TextJoin
+        | Operation::BytesConcat
+        | Operation::BytesSlice
+        | Operation::ArrayConcat
+        | Operation::Range
+        | Operation::BytesFromArray
+        | Operation::CheckedAdd
+        | Operation::CheckedSub
+        | Operation::CheckedMul
+        | Operation::ResultIsOk
+        | Operation::EncodeUtf8
+        | Operation::DecodeUtf8
+        | Operation::DecodeInteger128Le
+        | Operation::DecodeUnsigned32Le
+        | Operation::FormatInteger
+        | Operation::MakeRecord { .. }
+        | Operation::Field { .. }
+        | Operation::MakeVariant { .. }
+        | Operation::VariantPayload { .. }
+        | Operation::Some
+        | Operation::None
+        | Operation::Ok
+        | Operation::Err
+        | Operation::UnwrapOr => {
+            require_pure(node, report);
+            if let Err(message) = crate::composite::validate_node(node, None) {
+                report.push(
+                    ValidationCode::OperationShape,
+                    format!("node {}: {message}", node.id),
+                );
+            }
         }
         Operation::Truncate { bits, signed } => {
             require_shape(node, 1, 1, report);
@@ -349,8 +423,33 @@ fn validate_operation(node: &Node, report: &mut ValidationReport) {
         | Operation::StoreCreate { .. }
         | Operation::StoreUpdate { .. }
         | Operation::StoreDelete { .. }
-        | Operation::StoreEnumerate { .. } => {
+        | Operation::StoreEnumerate { .. }
+        | Operation::StoreSetRelation { .. }
+        | Operation::StoreTraverse { .. } => {
             require_storage(node, report);
+        }
+        Operation::StoreSetCredential { .. } | Operation::StoreVerifyCredential { .. } => {
+            require_storage(node, report);
+            let credential = node.inputs.get(1).is_some_and(|p| matches!(&p.ty, SemanticType::Credential(t) if matches!(t.as_ref(), SemanticType::Text | SemanticType::Bytes)));
+            let shape = (2..=3).contains(&node.inputs.len())
+                && node.outputs.len() == 1
+                && node
+                    .inputs
+                    .first()
+                    .is_some_and(|p| p.ty == SemanticType::Text)
+                && credential
+                && (node.inputs.len() == 2
+                    || matches!(node.inputs[2].ty, SemanticType::Integer(_)))
+                && node.outputs.first().is_some_and(|p| {
+                    if matches!(node.operation, Operation::StoreVerifyCredential { .. }) {
+                        p.ty == SemanticType::Bool
+                    } else {
+                        matches!(p.ty, SemanticType::Integer(_))
+                    }
+                });
+            if !shape {
+                report.push(ValidationCode::OperationShape, format!("credential node {} requires ID, typed credential, optional mutation version and one result", node.id));
+            }
         }
         Operation::LocalExecute(_) => {
             require_execution(
@@ -371,6 +470,13 @@ fn validate_operation(node: &Node, report: &mut ValidationReport) {
             );
         }
         Operation::Select { .. }
+        | Operation::TaskSpawn { .. }
+        | Operation::TaskJoin { .. }
+        | Operation::TaskSpawnScoped { .. }
+        | Operation::TaskJoinScoped { .. }
+        | Operation::TaskSpawnHosted { .. }
+        | Operation::TaskJoinHosted { .. }
+        | Operation::Map { .. }
         | Operation::Match { .. }
         | Operation::Loop { .. }
         | Operation::Subgraph(_)
@@ -383,9 +489,8 @@ fn require_shape(node: &Node, inputs: usize, outputs: usize, report: &mut Valida
         report.push(
             ValidationCode::OperationShape,
             format!(
-                "node {} {:?} requires {} input(s) and {} output(s), got {} and {}",
+                "node {} requires {} input(s) and {} output(s), got {} and {}",
                 node.id,
-                node.operation,
                 inputs,
                 outputs,
                 node.inputs.len(),
@@ -399,19 +504,13 @@ fn require_pure(node: &Node, report: &mut ValidationReport) {
     if !node.effects.is_empty() {
         report.push(
             ValidationCode::PureNodeHasEffects,
-            format!(
-                "pure node {} {:?} declares effects",
-                node.id, node.operation
-            ),
+            format!("pure node {} declares effects", node.id),
         );
     }
     if !node.required_capabilities.is_empty() {
         report.push(
             ValidationCode::PureNodeHasCapabilities,
-            format!(
-                "pure node {} {:?} requests capabilities",
-                node.id, node.operation
-            ),
+            format!("pure node {} requests capabilities", node.id),
         );
     }
 }
@@ -428,12 +527,7 @@ fn literal_fits(literal: &Literal, ty: &SemanticType) -> bool {
     }
 }
 
-fn validate_truncate(
-    node: &Node,
-    bits: u16,
-    signed: bool,
-    report: &mut ValidationReport,
-) {
+fn validate_truncate(node: &Node, bits: u16, signed: bool, report: &mut ValidationReport) {
     if node.inputs.len() != 1 || node.outputs.len() != 1 {
         return;
     }
@@ -471,10 +565,7 @@ fn validate_truncate(
     }
 }
 
-fn truncate_integer_range(
-    bits: u16,
-    signed: bool,
-) -> Option<IntegerType> {
+fn truncate_integer_range(bits: u16, signed: bool) -> Option<IntegerType> {
     if bits == 0 || bits > 64 {
         return None;
     }
@@ -494,10 +585,7 @@ fn truncate_integer_range(
     }
 }
 
-fn validate_checked_conversion(
-    node: &Node,
-    report: &mut ValidationReport,
-) {
+fn validate_checked_conversion(node: &Node, report: &mut ValidationReport) {
     if node.inputs.len() != 1 || node.outputs.len() != 1 {
         return;
     }
@@ -515,10 +603,7 @@ fn validate_checked_conversion(
     }
 }
 
-fn validate_integer_comparison(
-    node: &Node,
-    report: &mut ValidationReport,
-) {
+fn validate_integer_comparison(node: &Node, report: &mut ValidationReport) {
     if node.inputs.len() != 2 || node.outputs.len() != 1 {
         return;
     }
@@ -541,17 +626,12 @@ fn validate_integer_comparison(
     }
 }
 
-fn validate_boolean_operation(
-    node: &Node,
-    expected_inputs: usize,
-    report: &mut ValidationReport,
-) {
+fn validate_boolean_operation(node: &Node, expected_inputs: usize, report: &mut ValidationReport) {
     if node.inputs.len() != expected_inputs || node.outputs.len() != 1 {
         return;
     }
 
-    let inputs_are_bool =
-        node.inputs.iter().all(|port| port.ty == SemanticType::Bool);
+    let inputs_are_bool = node.inputs.iter().all(|port| port.ty == SemanticType::Bool);
     let output_is_bool = node.outputs[0].ty == SemanticType::Bool;
 
     if !inputs_are_bool || !output_is_bool {
@@ -685,11 +765,7 @@ fn range_rem(a: &IntegerType, b: &IntegerType) -> Option<IntegerType> {
     if b.min == 0 && b.max == 0 {
         return None;
     }
-    if a.min == i128::MIN
-        && a.max == i128::MIN
-        && b.min == -1
-        && b.max == -1
-    {
+    if a.min == i128::MIN && a.max == i128::MIN && b.min == -1 && b.max == -1 {
         return None;
     }
 
@@ -827,11 +903,7 @@ fn transitive_reachability(
     result
 }
 
-fn reaches(
-    reachability: &BTreeMap<NodeId, BTreeSet<NodeId>>,
-    from: NodeId,
-    to: NodeId,
-) -> bool {
+fn reaches(reachability: &BTreeMap<NodeId, BTreeSet<NodeId>>, from: NodeId, to: NodeId) -> bool {
     reachability
         .get(&from)
         .is_some_and(|nodes| nodes.contains(&to))

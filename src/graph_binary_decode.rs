@@ -1,14 +1,14 @@
 use std::collections::BTreeSet;
 
 use crate::gir::{
-    AuthorityMode, BigFloatType, Capability, CapabilityClass, DecimalType,
-    Edge, Effect, FloatType, Graph, IntegerType, Literal, MatchArm, Node,
-    Operation, Port, SemanticType, SourceEndpoint, TargetEndpoint,
+    AuthorityMode, BigFloatType, Capability, CapabilityClass, DecimalType, Edge, Effect, FloatType,
+    Graph, IntegerType, Literal, MatchArm, Node, Operation, Port, SemanticType, SourceEndpoint,
+    TargetEndpoint,
 };
 
 const MAGIC: &[u8; 4] = b"G0G\0";
 const FORMAT_MAJOR: u16 = 0;
-const FORMAT_MINOR: u16 = 1;
+const FORMAT_MINOR: u16 = 11;
 const MAX_TYPE_DEPTH: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -19,6 +19,7 @@ pub enum BinaryDecodeIssue {
     InvalidUtf8,
     InvalidTag { domain: &'static str, tag: u8 },
     LengthOverflow,
+    LengthExceedsInput,
     TypeDepthExceeded,
     TrailingBytes,
     InvalidGraph,
@@ -32,7 +33,7 @@ pub fn decode_graph(bytes: &[u8]) -> Result<Graph, BinaryDecodeIssue> {
     }
     let major = reader.u16()?;
     let minor = reader.u16()?;
-    if major != FORMAT_MAJOR || minor != FORMAT_MINOR {
+    if major != FORMAT_MAJOR || !(1..=FORMAT_MINOR).contains(&minor) {
         return Err(BinaryDecodeIssue::UnsupportedVersion { major, minor });
     }
 
@@ -43,7 +44,7 @@ pub fn decode_graph(bytes: &[u8]) -> Result<Graph, BinaryDecodeIssue> {
             return Err(BinaryDecodeIssue::InvalidTag {
                 domain: "authority",
                 tag,
-            })
+            });
         }
     };
 
@@ -54,7 +55,7 @@ pub fn decode_graph(bytes: &[u8]) -> Result<Graph, BinaryDecodeIssue> {
     let mut nodes = Vec::with_capacity(node_count);
     for _ in 0..node_count {
         let id = reader.u32()?;
-        let operation = read_operation(&mut reader)?;
+        let operation = read_operation(&mut reader, minor)?;
         let node_inputs = read_ports(&mut reader)?;
         let node_outputs = read_ports(&mut reader)?;
 
@@ -93,7 +94,7 @@ pub fn decode_graph(bytes: &[u8]) -> Result<Graph, BinaryDecodeIssue> {
                 return Err(BinaryDecodeIssue::InvalidTag {
                     domain: "source endpoint",
                     tag,
-                })
+                });
             }
         };
         let to = match reader.u8()? {
@@ -106,7 +107,7 @@ pub fn decode_graph(bytes: &[u8]) -> Result<Graph, BinaryDecodeIssue> {
                 return Err(BinaryDecodeIssue::InvalidTag {
                     domain: "target endpoint",
                     tag,
-                })
+                });
             }
         };
         edges.push(Edge { from, to });
@@ -125,9 +126,17 @@ pub fn decode_graph(bytes: &[u8]) -> Result<Graph, BinaryDecodeIssue> {
         authority,
     };
 
-    crate::gir_validate::validate(&graph)
-        .map_err(|_| BinaryDecodeIssue::InvalidGraph)?;
+    crate::gir_validate::validate(&graph).map_err(|_| BinaryDecodeIssue::InvalidGraph)?;
     Ok(graph)
+}
+
+pub fn decode_semantic_type(bytes: &[u8]) -> Result<SemanticType, BinaryDecodeIssue> {
+    let mut reader = Reader::new(bytes);
+    let ty = read_type(&mut reader, 0)?;
+    if !reader.done() {
+        return Err(BinaryDecodeIssue::TrailingBytes);
+    }
+    Ok(ty)
 }
 
 fn read_ports(reader: &mut Reader<'_>) -> Result<Vec<Port>, BinaryDecodeIssue> {
@@ -143,10 +152,7 @@ fn read_ports(reader: &mut Reader<'_>) -> Result<Vec<Port>, BinaryDecodeIssue> {
     Ok(ports)
 }
 
-fn read_type(
-    reader: &mut Reader<'_>,
-    depth: usize,
-) -> Result<SemanticType, BinaryDecodeIssue> {
+fn read_type(reader: &mut Reader<'_>, depth: usize) -> Result<SemanticType, BinaryDecodeIssue> {
     if depth > MAX_TYPE_DEPTH {
         return Err(BinaryDecodeIssue::TypeDepthExceeded);
     }
@@ -171,7 +177,7 @@ fn read_type(
                     return Err(BinaryDecodeIssue::InvalidTag {
                         domain: "float optional error",
                         tag,
-                    })
+                    });
                 }
             };
             SemanticType::Float(FloatType {
@@ -179,26 +185,19 @@ fn read_type(
             })
         }
         6 => SemanticType::BigFloat(
-            BigFloatType::new(reader.u32()?)
-                .map_err(|_| BinaryDecodeIssue::InvalidType)?,
+            BigFloatType::new(reader.u32()?).map_err(|_| BinaryDecodeIssue::InvalidType)?,
         ),
         7 => SemanticType::Text,
         8 => SemanticType::Bytes,
         9 => {
             let len = reader.usize_u64()?;
-            SemanticType::Array(
-                Box::new(read_type(reader, next)?),
-                len,
-            )
-        },
+            SemanticType::Array(Box::new(read_type(reader, next)?), len)
+        }
         10 => SemanticType::Slice(Box::new(read_type(reader, next)?)),
         11 => {
             let len = reader.usize_u64()?;
-            SemanticType::Vector(
-                Box::new(read_type(reader, next)?),
-                len,
-            )
-        },
+            SemanticType::Vector(Box::new(read_type(reader, next)?), len)
+        }
         12 => SemanticType::Record(reader.string()?),
         13 => SemanticType::Variant(reader.string()?),
         14 => SemanticType::Option(Box::new(read_type(reader, next)?)),
@@ -219,13 +218,33 @@ fn read_type(
             return Err(BinaryDecodeIssue::InvalidTag {
                 domain: "semantic type",
                 tag,
-            })
+            });
         }
     })
 }
 
-fn read_operation(reader: &mut Reader<'_>) -> Result<Operation, BinaryDecodeIssue> {
-    Ok(match reader.u8()? {
+fn read_operation(reader: &mut Reader<'_>, minor: u16) -> Result<Operation, BinaryDecodeIssue> {
+    let tag = reader.u8()?;
+    let maximum = match minor {
+        1 => 29,
+        2 => 48,
+        3 => 57,
+        4 => 59,
+        5 => 61,
+        6 => 63,
+        7 => 65,
+        8 => 69,
+        9 => 73,
+        10 => 74,
+        _ => 75,
+    };
+    if tag > maximum {
+        return Err(BinaryDecodeIssue::InvalidTag {
+            domain: "operation version",
+            tag,
+        });
+    }
+    Ok(match tag {
         0 => Operation::Const(read_literal(reader)?),
         1 => Operation::Add,
         2 => Operation::Sub,
@@ -242,6 +261,105 @@ fn read_operation(reader: &mut Reader<'_>) -> Result<Operation, BinaryDecodeIssu
         24 => Operation::Xor,
         25 => Operation::Not,
         28 => Operation::ConvertChecked,
+        30 => Operation::MakeArray,
+        31 => Operation::Index,
+        32 => Operation::Length,
+        33 => Operation::TextConcat,
+        34 => Operation::BytesConcat,
+        66 => Operation::BytesSlice,
+        67 => Operation::ArrayConcat,
+        68 => Operation::Range,
+        69 => Operation::BytesFromArray,
+        70 => Operation::CheckedAdd,
+        71 => Operation::CheckedSub,
+        72 => Operation::CheckedMul,
+        73 => Operation::ResultIsOk,
+        74 => Operation::DecodeInteger128Le,
+        75 => Operation::DecodeUnsigned32Le,
+        35 => Operation::EncodeUtf8,
+        36 => Operation::DecodeUtf8,
+        37 => Operation::FormatInteger,
+        38 => Operation::MakeRecord {
+            schema: reader.string()?,
+            fields: reader.strings()?,
+        },
+        39 => Operation::Field {
+            name: reader.string()?,
+        },
+        40 => Operation::MakeVariant {
+            schema: reader.string()?,
+            tag: reader.string()?,
+        },
+        41 => Operation::VariantPayload {
+            tag: reader.string()?,
+        },
+        42 => Operation::Some,
+        43 => Operation::None,
+        44 => Operation::Ok,
+        45 => Operation::Err,
+        46 => Operation::UnwrapOr,
+        47 => Operation::Map {
+            body: reader.string()?,
+        },
+        48 => Operation::TextJoin,
+        49 => Operation::RegionOpen,
+        60 => Operation::RegionOpenSecret,
+        61 => Operation::RegionOpenChild {
+            secret: match reader.u8()? {
+                0 => false,
+                1 => true,
+                tag => {
+                    return Err(BinaryDecodeIssue::InvalidTag {
+                        domain: "child region secrecy",
+                        tag,
+                    });
+                }
+            },
+        },
+        50 => Operation::RegionAllocate,
+        51 => Operation::RegionWrite,
+        52 => Operation::RegionRead,
+        53 => Operation::RegionClose,
+        56 => Operation::StoreSetRelation {
+            resource: reader.string()?,
+            relation: reader.string()?,
+        },
+        58 => Operation::StoreSetCredential {
+            resource: reader.string()?,
+            field: reader.string()?,
+        },
+        59 => Operation::StoreVerifyCredential {
+            resource: reader.string()?,
+            field: reader.string()?,
+        },
+        57 => Operation::StoreTraverse {
+            resource: reader.string()?,
+            relation: reader.string()?,
+        },
+        54 => Operation::TaskSpawn {
+            body: reader.string()?,
+            max_steps: reader.u64()?,
+            max_value_bytes: reader.u64()?,
+        },
+        55 => Operation::TaskJoin {
+            body: reader.string()?,
+        },
+        62 => Operation::TaskSpawnScoped {
+            body: reader.string()?,
+            max_steps: reader.u64()?,
+            max_value_bytes: reader.u64()?,
+        },
+        63 => Operation::TaskJoinScoped {
+            body: reader.string()?,
+        },
+        64 => Operation::TaskSpawnHosted {
+            body: reader.string()?,
+            max_steps: reader.u64()?,
+            max_value_bytes: reader.u64()?,
+        },
+        65 => Operation::TaskJoinHosted {
+            body: reader.string()?,
+        },
         29 => {
             let bits = reader.u16()?;
             let signed = match reader.u8()? {
@@ -309,7 +427,7 @@ fn read_operation(reader: &mut Reader<'_>) -> Result<Operation, BinaryDecodeIssu
             return Err(BinaryDecodeIssue::InvalidTag {
                 domain: "operation",
                 tag,
-            })
+            });
         }
     })
 }
@@ -323,7 +441,7 @@ fn read_literal(reader: &mut Reader<'_>) -> Result<Literal, BinaryDecodeIssue> {
                 return Err(BinaryDecodeIssue::InvalidTag {
                     domain: "bool literal",
                     tag,
-                })
+                });
             }
         },
         1 => Literal::Integer(reader.i128()?),
@@ -336,7 +454,7 @@ fn read_literal(reader: &mut Reader<'_>) -> Result<Literal, BinaryDecodeIssue> {
             return Err(BinaryDecodeIssue::InvalidTag {
                 domain: "literal",
                 tag,
-            })
+            });
         }
     })
 }
@@ -358,14 +476,12 @@ fn read_effect(reader: &mut Reader<'_>) -> Result<Effect, BinaryDecodeIssue> {
             return Err(BinaryDecodeIssue::InvalidTag {
                 domain: "effect",
                 tag,
-            })
+            });
         }
     })
 }
 
-fn read_capability(
-    reader: &mut Reader<'_>,
-) -> Result<Capability, BinaryDecodeIssue> {
+fn read_capability(reader: &mut Reader<'_>) -> Result<Capability, BinaryDecodeIssue> {
     let class = match reader.u8()? {
         0 => CapabilityClass::Resource,
         1 => CapabilityClass::Storage,
@@ -382,7 +498,7 @@ fn read_capability(
             return Err(BinaryDecodeIssue::InvalidTag {
                 domain: "capability class",
                 tag,
-            })
+            });
         }
     };
 
@@ -466,20 +582,23 @@ impl<'a> Reader<'a> {
     }
 
     fn len(&mut self) -> Result<usize, BinaryDecodeIssue> {
-        usize::try_from(self.u32()?)
-            .map_err(|_| BinaryDecodeIssue::LengthOverflow)
+        let length = usize::try_from(self.u32()?).map_err(|_| BinaryDecodeIssue::LengthOverflow)?;
+        // Counts and byte lengths both require at least one encoded byte per
+        // element. Reject impossible lengths before Vec::with_capacity.
+        if length > self.bytes.len() - self.cursor {
+            return Err(BinaryDecodeIssue::LengthExceedsInput);
+        }
+        Ok(length)
     }
 
     fn usize_u64(&mut self) -> Result<usize, BinaryDecodeIssue> {
-        usize::try_from(self.u64()?)
-            .map_err(|_| BinaryDecodeIssue::LengthOverflow)
+        usize::try_from(self.u64()?).map_err(|_| BinaryDecodeIssue::LengthOverflow)
     }
 
     fn string(&mut self) -> Result<String, BinaryDecodeIssue> {
         let len = self.len()?;
         let bytes = self.take(len)?;
-        let value = std::str::from_utf8(bytes)
-            .map_err(|_| BinaryDecodeIssue::InvalidUtf8)?;
+        let value = std::str::from_utf8(bytes).map_err(|_| BinaryDecodeIssue::InvalidUtf8)?;
         Ok(value.to_owned())
     }
 
@@ -508,9 +627,7 @@ mod tests {
         graph.outputs = vec![Port {
             id: 0,
             name: "answer".into(),
-            ty: SemanticType::Integer(
-                IntegerType::new(42, 42).unwrap(),
-            ),
+            ty: SemanticType::Integer(IntegerType::new(42, 42).unwrap()),
         }];
         graph.nodes.push(Node {
             id: 1,
@@ -537,18 +654,13 @@ mod tests {
             Port {
                 id: 0,
                 name: "array".into(),
-                ty: SemanticType::Array(
-                    Box::new(SemanticType::Bool),
-                    7,
-                ),
+                ty: SemanticType::Array(Box::new(SemanticType::Bool), 7),
             },
             Port {
                 id: 1,
                 name: "vector".into(),
                 ty: SemanticType::Vector(
-                    Box::new(SemanticType::Integer(
-                        IntegerType::new(0, 255).unwrap(),
-                    )),
+                    Box::new(SemanticType::Integer(IntegerType::new(0, 255).unwrap())),
                     8,
                 ),
             },
@@ -559,17 +671,10 @@ mod tests {
         assert!(structurally_equal(&graph, &decoded));
     }
 
-    fn valid_operation_graph(
-        name: &str,
-        operation: Operation,
-    ) -> Graph {
+    fn valid_operation_graph(name: &str, operation: Operation) -> Graph {
         let comparison = matches!(
             operation,
-            Operation::Eq
-                | Operation::Lt
-                | Operation::Le
-                | Operation::Gt
-                | Operation::Ge
+            Operation::Eq | Operation::Lt | Operation::Le | Operation::Gt | Operation::Ge
         );
         let unary = matches!(operation, Operation::Not);
 
@@ -635,8 +740,7 @@ mod tests {
         .into_iter()
         .enumerate()
         {
-            let graph =
-                valid_operation_graph(&format!("op-{index}"), operation);
+            let graph = valid_operation_graph(&format!("op-{index}"), operation);
             let bytes = encode_graph(&graph).unwrap();
             let decoded = decode_graph(&bytes).unwrap();
             assert!(structurally_equal(&graph, &decoded));
@@ -689,8 +793,7 @@ mod tests {
 
     #[test]
     fn trailing_bytes_are_rejected() {
-        let bytes = crate::graph_binary::encode_graph(&Graph::new("g"))
-            .unwrap();
+        let bytes = crate::graph_binary::encode_graph(&Graph::new("g")).unwrap();
         let mut corrupted = bytes;
         corrupted.push(0);
 
