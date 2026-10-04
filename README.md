@@ -20,7 +20,48 @@ The source of truth is a typed computation graph, not textual control flow. The 
 
 ## Bootstrap compiler
 
-`g0c` currently implements the smallest complete path:
+`g0c check` and `g0c compile` accept native canonical graph files (`.g0g`).
+The existing `.g0` Graph Assembly path remains bootstrap tooling.
+
+The native path is:
+
+```
+canonical binary graph (.g0g)
+      |
+      v
+ decoder + graph/program validation
+      |
+      v
+ constant folding + invariant checks
+      |
+      v
+ MIR -> register allocation -> MachineIR
+      |
+      v
+ x86-64 assembly
+```
+
+Native scalar compilation supports integer arithmetic, checked division and
+remainder, integer comparisons, Boolean operations, checked conversion and
+explicit bit truncation. Rust APIs also support composing multiple graphs and
+structured control flow. A `.g0g` CLI input currently contains one graph;
+references to definitions absent from that file are rejected.
+
+Try the checked-in native example without running a Rust graph generator:
+
+```sh
+cargo run --release -- check examples/truncate.g0g
+cargo run --release -- compile examples/truncate.g0g -o target/truncate.s
+```
+
+The example explicitly truncates 511 to an unsigned 5-bit integer and returns
+31 through `g0_machine_main`. Native magic is recognized independently of the
+filename extension; the `.g0g` extension also ensures damaged native files are
+reported as native decoding errors. `check` validates semantics and references;
+`compile` additionally requires implemented machine lowering for every value
+and operation. A structurally valid graph is not necessarily executable yet.
+
+The original bootstrap text path is:
 
 ```
 Graph Assembly
@@ -41,7 +82,7 @@ Graph Assembly
  direct x86-64 assembly emitter
 ```
 
-Supported graph operations in 0.1:
+Supported operations in the bootstrap text format:
 
 - `const i64`
 - `add`
@@ -85,17 +126,19 @@ g0c v2: G0 self-hosting
 
 The compiler currently uses no third-party Rust crates.
 
-## Near-term roadmap
+## Current development priorities
 
-1. Freeze Graph IR invariants and binary canonical format.
-2. Add explicit integer overflow semantics.
-3. Add graph inputs/outputs and callable subgraphs.
-4. Add comparisons, selection and graph-native iteration.
-5. Add ownership/lifetime regions and explicit effects.
-6. Add a real machine IR and register allocator.
-7. Add SIMD/vector nodes and dependency-driven scheduling.
-8. Add native graph editor/tooling.
-9. Add capability-based filesystem/network/runtime APIs.
-10. Self-host the compiler.
+Finish the language and its runtime before adding Mosca integration:
+
+1. Native program files containing multiple graph definitions and an explicit entry.
+2. Executable record/variant layouts, text, bytes, collections and memory operations.
+3. Runtime ownership/regions, task execution and capability enforcement.
+4. Native persistent storage, transactions and secure transport implementations.
+5. End-to-end applications with one structural model across runtime boundaries.
+6. Native graph authoring/debugging tools and eventual self-hosting.
+
+Many policy, storage, crypto and runtime modules currently define and validate
+contracts. Their presence does not mean a persistent database, encrypted network
+connection or task executor has been implemented. See `docs/implementation-status.md`.
 
 See `docs/architecture.md` for the architectural constraints.

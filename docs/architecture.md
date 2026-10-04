@@ -14,7 +14,10 @@ A node is defined by:
 - effect set
 - constraints/attributes
 
-The bootstrap implementation currently has one output per node and one type (`i64`). This is deliberately temporary.
+The original text bootstrap uses `i64` and one output per node. Native GIR has
+explicit typed ports, integer ranges and richer semantic types. Executable
+machine lowering currently covers a scalar subset; declaring a semantic type
+does not imply that its runtime representation is implemented.
 
 Textual order has no semantic meaning. Graph Assembly therefore permits forward references.
 
@@ -49,7 +52,10 @@ MachineIR target instructions/register classes
 x86-64 / future targets
 ```
 
-The current bootstrap temporarily lowers the typed graph directly to x86-64 assembly. That shortcut is intentionally isolated in `src/backend.rs`.
+The native compiler follows GIR -> MIR -> register allocation -> MachineIR ->
+x86-64 assembly. `g0c` can read a canonical `.g0g` graph directly into this
+pipeline. The original Graph Assembly bootstrap still uses the isolated direct
+emitter in `src/backend.rs`.
 
 ## 4. Product scope: backend + data first
 
