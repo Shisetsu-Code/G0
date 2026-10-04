@@ -1,6 +1,7 @@
 //! Native executable containers. Decoding reconstructs definitions, never
 //! execution authority. Version 0.1 carries no external bindings or policies.
 
+use crate::data_format::{DataSchema, FieldRequirement, SchemaField};
 use crate::gir::Graph;
 use crate::graph_binary::{BinaryGraphIssue, encode_graph};
 use crate::graph_binary_decode::{BinaryDecodeIssue, decode_graph};
@@ -12,6 +13,7 @@ const MAGIC: &[u8; 4] = b"G0P\0";
 pub struct ProgramDocument {
     pub entry_graph: String,
     pub graphs: Vec<Graph>,
+    pub schemas: Vec<DataSchema>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,6 +26,7 @@ pub enum ProgramBinaryIssue {
     Truncated,
     LengthOverflow,
     InvalidUtf8,
+    InvalidSchema,
     TrailingBytes,
     EmptyEntry,
     EntryInterface {
@@ -49,11 +52,16 @@ impl ProgramDocument {
         let program = ProgramContract {
             entry_graph: Some(self.entry_graph.clone()),
             graphs: self.graphs.clone(),
+            schemas: self.schemas.clone(),
             ..ProgramContract::default()
         };
         validate_program(&program, &PlatformContract::bootstrap_x86_64_v3())
             .map_err(ProgramBinaryIssue::InvalidProgram)?;
-        let entry = program
+        Ok(program)
+    }
+
+    fn validate_legacy_entry(&self) -> Result<(), ProgramBinaryIssue> {
+        let entry = self
             .graphs
             .iter()
             .find(|graph| graph.name == self.entry_graph)
@@ -64,7 +72,7 @@ impl ProgramDocument {
                 outputs: entry.outputs.len(),
             });
         }
-        Ok(program)
+        Ok(())
     }
 }
 
@@ -74,7 +82,7 @@ pub fn encode_program(document: &ProgramDocument) -> Result<Vec<u8>, ProgramBina
     document.validated_contract()?;
     let mut bytes = MAGIC.to_vec();
     bytes.extend_from_slice(&0_u16.to_le_bytes());
-    bytes.extend_from_slice(&1_u16.to_le_bytes());
+    bytes.extend_from_slice(&3_u16.to_le_bytes());
     put_blob(&mut bytes, document.entry_graph.as_bytes())?;
     put_length(&mut bytes, document.graphs.len())?;
     let mut graphs: Vec<_> = document.graphs.iter().collect();
@@ -86,6 +94,25 @@ pub fn encode_program(document: &ProgramDocument) -> Result<Vec<u8>, ProgramBina
         })?;
         put_blob(&mut bytes, &encoded)?;
     }
+    put_length(&mut bytes, document.schemas.len())?;
+    let mut schemas: Vec<_> = document.schemas.iter().collect();
+    schemas.sort_by(|a, b| a.name.cmp(&b.name));
+    for schema in schemas {
+        put_blob(&mut bytes, schema.name.as_bytes())?;
+        bytes.extend_from_slice(&schema.version.to_le_bytes());
+        put_length(&mut bytes, schema.fields.len())?;
+        for field in &schema.fields {
+            bytes.extend_from_slice(&field.tag.to_le_bytes());
+            put_blob(&mut bytes, field.name.as_bytes())?;
+            let ty = crate::graph_binary::encode_semantic_type(&field.ty)
+                .map_err(|_| ProgramBinaryIssue::InvalidSchema)?;
+            put_blob(&mut bytes, &ty)?;
+            bytes.push(match field.requirement {
+                FieldRequirement::Required => 0,
+                FieldRequirement::Optional => 1,
+            });
+        }
+    }
     Ok(bytes)
 }
 
@@ -96,7 +123,7 @@ pub fn decode_program(bytes: &[u8]) -> Result<ProgramDocument, ProgramBinaryIssu
     }
     let major = u16::from_le_bytes(reader.take(2)?.try_into().unwrap());
     let minor = u16::from_le_bytes(reader.take(2)?.try_into().unwrap());
-    if (major, minor) != (0, 1) {
+    if major != 0 || !(1..=3).contains(&minor) {
         return Err(ProgramBinaryIssue::UnsupportedVersion { major, minor });
     }
     let entry_graph = std::str::from_utf8(reader.blob()?)
@@ -114,14 +141,56 @@ pub fn decode_program(bytes: &[u8]) -> Result<ProgramDocument, ProgramBinaryIssu
                 .map_err(|issue| ProgramBinaryIssue::DecodeGraph { index, issue })?,
         );
     }
+    let mut schemas = Vec::new();
+    if minor >= 2 {
+        let count = reader.length()?;
+        if count > reader.remaining.len() / 12 {
+            return Err(ProgramBinaryIssue::Truncated);
+        }
+        for _ in 0..count {
+            let name = reader.string()?;
+            let version = u32::from_le_bytes(reader.take(4)?.try_into().unwrap());
+            let count = reader.length()?;
+            if count > reader.remaining.len() / 13 {
+                return Err(ProgramBinaryIssue::Truncated);
+            }
+            let mut fields = Vec::new();
+            for _ in 0..count {
+                let tag = u32::from_le_bytes(reader.take(4)?.try_into().unwrap());
+                let name = reader.string()?;
+                let ty = crate::graph_binary_decode::decode_semantic_type(reader.blob()?)
+                    .map_err(|_| ProgramBinaryIssue::InvalidSchema)?;
+                let requirement = match reader.take(1)?[0] {
+                    0 => FieldRequirement::Required,
+                    1 => FieldRequirement::Optional,
+                    _ => return Err(ProgramBinaryIssue::InvalidSchema),
+                };
+                fields.push(SchemaField {
+                    tag,
+                    name,
+                    ty,
+                    requirement,
+                });
+            }
+            schemas.push(DataSchema {
+                name,
+                version,
+                fields,
+            });
+        }
+    }
     if !reader.remaining.is_empty() {
         return Err(ProgramBinaryIssue::TrailingBytes);
     }
     let document = ProgramDocument {
         entry_graph,
         graphs,
+        schemas,
     };
     document.validated_contract()?;
+    if minor < 3 {
+        document.validate_legacy_entry()?;
+    }
     Ok(document)
 }
 
@@ -142,6 +211,11 @@ struct Reader<'a> {
 }
 
 impl<'a> Reader<'a> {
+    fn string(&mut self) -> Result<String, ProgramBinaryIssue> {
+        Ok(std::str::from_utf8(self.blob()?)
+            .map_err(|_| ProgramBinaryIssue::InvalidUtf8)?
+            .to_owned())
+    }
     fn take(&mut self, length: usize) -> Result<&'a [u8], ProgramBinaryIssue> {
         if length > self.remaining.len() {
             return Err(ProgramBinaryIssue::Truncated);

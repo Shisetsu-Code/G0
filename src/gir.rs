@@ -32,24 +32,15 @@ pub enum SemanticType {
     Versioned(Box<SemanticType>),
 }
 
-pub fn type_assignable(
-    source: &SemanticType,
-    target: &SemanticType,
-) -> bool {
+pub fn type_assignable(source: &SemanticType, target: &SemanticType) -> bool {
     if source == target {
         return true;
     }
 
     match (source, target) {
-        (SemanticType::Integer(source), SemanticType::Integer(target)) => {
-            target.contains(source)
-        }
-        (
-            SemanticType::Array(source, source_len),
-            SemanticType::Array(target, target_len),
-        ) => {
-            source_len == target_len
-                && type_assignable(source, target)
+        (SemanticType::Integer(source), SemanticType::Integer(target)) => target.contains(source),
+        (SemanticType::Array(source, source_len), SemanticType::Array(target, target_len)) => {
+            source_len == target_len && type_assignable(source, target)
         }
         (SemanticType::Slice(source), SemanticType::Slice(target))
         | (SemanticType::Option(source), SemanticType::Option(target))
@@ -60,24 +51,16 @@ pub fn type_assignable(
         | (SemanticType::Atomic(source), SemanticType::Atomic(target))
         | (SemanticType::Versioned(source), SemanticType::Versioned(target))
         | (SemanticType::Secret(source), SemanticType::Secret(target))
-        | (
-            SemanticType::Credential(source),
-            SemanticType::Credential(target),
-        ) => type_assignable(source, target),
-        (
-            SemanticType::Vector(source, source_len),
-            SemanticType::Vector(target, target_len),
-        ) => {
-            source_len == target_len
-                && type_assignable(source, target)
+        | (SemanticType::Credential(source), SemanticType::Credential(target)) => {
+            type_assignable(source, target)
+        }
+        (SemanticType::Vector(source, source_len), SemanticType::Vector(target, target_len)) => {
+            source_len == target_len && type_assignable(source, target)
         }
         (
             SemanticType::Result(source_ok, source_err),
             SemanticType::Result(target_ok, target_err),
-        ) => {
-            type_assignable(source_ok, target_ok)
-                && type_assignable(source_err, target_err)
-        }
+        ) => type_assignable(source_ok, target_ok) && type_assignable(source_err, target_err),
         _ => false,
     }
 }
@@ -118,10 +101,7 @@ pub struct DecimalType {
 }
 
 impl DecimalType {
-    pub fn new(
-        precision_digits: u32,
-        scale: i32,
-    ) -> Result<Self, &'static str> {
+    pub fn new(precision_digits: u32, scale: i32) -> Result<Self, &'static str> {
         if precision_digits == 0 {
             return Err("decimal precision must be greater than zero");
         }
@@ -259,6 +239,38 @@ pub enum Operation {
     Xor,
     Not,
     ConvertChecked,
+    MakeArray,
+    Index,
+    Length,
+    TextConcat,
+    BytesConcat,
+    EncodeUtf8,
+    DecodeUtf8,
+    FormatInteger,
+    MakeRecord {
+        schema: String,
+        fields: Vec<String>,
+    },
+    Field {
+        name: String,
+    },
+    MakeVariant {
+        schema: String,
+        tag: String,
+    },
+    VariantPayload {
+        tag: String,
+    },
+    Some,
+    None,
+    Ok,
+    Err,
+    UnwrapOr,
+    /// Apply a closed graph to each element in order, with shared execution budgets.
+    Map {
+        body: String,
+    },
+    TextJoin,
     Truncate {
         bits: u16,
         signed: bool,
@@ -372,12 +384,8 @@ mod tests {
 
     #[test]
     fn narrower_integer_range_is_assignable_to_wider_contract() {
-        let narrow = SemanticType::Integer(
-            IntegerType::new(20, 20).unwrap(),
-        );
-        let wide = SemanticType::Integer(
-            IntegerType::new(0, 100).unwrap(),
-        );
+        let narrow = SemanticType::Integer(IntegerType::new(20, 20).unwrap());
+        let wide = SemanticType::Integer(IntegerType::new(0, 100).unwrap());
 
         assert!(type_assignable(&narrow, &wide));
         assert!(!type_assignable(&wide, &narrow));
@@ -393,23 +401,13 @@ mod tests {
 
     #[test]
     fn arbitrary_precision_numeric_types_are_semantic_types() {
-        let decimal = SemanticType::Decimal(
-            DecimalType::new(50, 8).unwrap(),
-        );
-        let big_float = SemanticType::BigFloat(
-            BigFloatType::new(1024).unwrap(),
-        );
+        let decimal = SemanticType::Decimal(DecimalType::new(50, 8).unwrap());
+        let big_float = SemanticType::BigFloat(BigFloatType::new(1024).unwrap());
 
         assert!(matches!(decimal, SemanticType::Decimal(_)));
         assert!(matches!(big_float, SemanticType::BigFloat(_)));
-        assert!(matches!(
-            SemanticType::BigInteger,
-            SemanticType::BigInteger
-        ));
-        assert!(matches!(
-            SemanticType::Rational,
-            SemanticType::Rational
-        ));
+        assert!(matches!(SemanticType::BigInteger, SemanticType::BigInteger));
+        assert!(matches!(SemanticType::Rational, SemanticType::Rational));
     }
 
     #[test]

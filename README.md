@@ -141,7 +141,9 @@ g0c v1: Rust + G0
 g0c v2: G0 self-hosting
 ```
 
-The compiler currently uses no third-party Rust crates.
+The bootstrap platform uses pinned `ring` and `rustls` for snapshot encryption
+and mutually authenticated native transport. Their versions are locked in
+`Cargo.lock`; they do not define G0 Core semantics.
 
 ## Current development priorities
 
@@ -153,8 +155,19 @@ Finish the language and its runtime before adding Mosca integration:
 4. End-to-end applications with one structural model across runtime boundaries.
 5. Native graph authoring/debugging tools and eventual self-hosting.
 
-Many policy, storage, crypto and runtime modules currently define and validate
-contracts. Their presence does not mean a persistent database, encrypted network
-connection or task executor has been implemented. See `docs/implementation-status.md`.
+The native host now executes structured values, bounded tasks and regions,
+encrypted storage transactions and typed messages over mutually authenticated
+TLS 1.3. An integration test carries one record through graph execution,
+persistence, transport and client reception. Some advanced profiles remain
+contracts and fail closed when unsupported. See
+[`docs/native-execution.md`](docs/native-execution.md) and
+[`docs/implementation-status.md`](docs/implementation-status.md).
+
+The Windows native editor runs with `cargo run --bin g0-editor`. The initial G0
+compiler backend is checked in as `compiler/native-wrapper.g0p`; use
+`cargo run -- bootstrap input.g0p -o output.s` to generate its interpreter-backed
+native wrapper. See [`docs/native-editor.md`](docs/native-editor.md) and
+[`docs/compiler-bootstrap.md`](docs/compiler-bootstrap.md) for verified behavior
+and the remaining editor/self-hosting work.
 
 See `docs/architecture.md` for the architectural constraints.

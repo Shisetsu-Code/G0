@@ -1,8 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::gir::{
-    Capability, Effect, Graph, MatchArm, Node, NodeId, Operation, Port,
-    SemanticType,
+    Capability, Effect, Graph, MatchArm, Node, NodeId, Operation, Port, SemanticType,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,43 +71,36 @@ pub enum ControlIssue {
     ControlReferenceCycle(Vec<String>),
 }
 
-pub fn validate_control_graphs(
-    graphs: &[Graph],
-) -> Result<(), Vec<ControlIssue>> {
-    let by_name: BTreeMap<&str, &Graph> =
-        graphs.iter().map(|graph| (graph.name.as_str(), graph)).collect();
+pub fn validate_control_graphs(graphs: &[Graph]) -> Result<(), Vec<ControlIssue>> {
+    let by_name: BTreeMap<&str, &Graph> = graphs
+        .iter()
+        .map(|graph| (graph.name.as_str(), graph))
+        .collect();
     let mut issues = Vec::new();
     let mut references = BTreeMap::<String, BTreeSet<String>>::new();
 
     for graph in graphs {
         for node in &graph.nodes {
             match &node.operation {
+                Operation::Map { body } => {
+                    validate_map(graph, node, body, &by_name, &mut issues);
+                    references
+                        .entry(graph.name.clone())
+                        .or_default()
+                        .insert(body.clone());
+                }
                 Operation::Select {
                     when_true,
                     when_false,
                 } => {
-                    validate_select(
-                        graph,
-                        node,
-                        when_true,
-                        when_false,
-                        &by_name,
-                        &mut issues,
-                    );
+                    validate_select(graph, node, when_true, when_false, &by_name, &mut issues);
                     references
                         .entry(graph.name.clone())
                         .or_default()
                         .extend([when_true.clone(), when_false.clone()]);
                 }
                 Operation::Match { arms, default } => {
-                    validate_match(
-                        graph,
-                        node,
-                        arms,
-                        default,
-                        &by_name,
-                        &mut issues,
-                    );
+                    validate_match(graph, node, arms, default, &by_name, &mut issues);
                     let entry = references.entry(graph.name.clone()).or_default();
                     entry.insert(default.clone());
                     entry.extend(arms.iter().map(|arm| arm.graph.clone()));
@@ -154,6 +146,9 @@ pub fn control_references(graph: &Graph) -> BTreeSet<String> {
     let mut result = BTreeSet::new();
     for node in &graph.nodes {
         match &node.operation {
+            Operation::Map { body } => {
+                result.insert(body.clone());
+            }
             Operation::Select {
                 when_true,
                 when_false,
@@ -175,6 +170,59 @@ pub fn control_references(graph: &Graph) -> BTreeSet<String> {
         }
     }
     result
+}
+
+fn validate_map(
+    owner: &Graph,
+    node: &Node,
+    target: &str,
+    by_name: &BTreeMap<&str, &Graph>,
+    issues: &mut Vec<ControlIssue>,
+) {
+    let Some(body) = by_name.get(target).copied() else {
+        issues.push(ControlIssue::UnknownGraph {
+            owner: owner.name.clone(),
+            node: node.id,
+            target: target.into(),
+        });
+        return;
+    };
+    let element = |ty: &SemanticType| match ty {
+        SemanticType::Bytes => Some(SemanticType::Integer(crate::gir::IntegerType {
+            min: 0,
+            max: 255,
+        })),
+        SemanticType::Array(t, _) | SemanticType::Vector(t, _) | SemanticType::Slice(t) => {
+            Some(t.as_ref().clone())
+        }
+        _ => None,
+    };
+    let input = node.inputs.first().and_then(|p| element(&p.ty));
+    if node.inputs.len() != 1
+        || body.inputs.len() != 1
+        || input.as_ref() != body.inputs.first().map(|p| &p.ty)
+    {
+        issues.push(ControlIssue::BranchInputMismatch {
+            owner: owner.name.clone(),
+            node: node.id,
+            target: target.into(),
+        });
+    }
+    let output = node.outputs.first().and_then(|p| match &p.ty {
+        SemanticType::Slice(t) => Some(t.as_ref()),
+        _ => None,
+    });
+    if node.outputs.len() != 1
+        || body.outputs.len() != 1
+        || output != body.outputs.first().map(|p| &p.ty)
+    {
+        issues.push(ControlIssue::BranchOutputMismatch {
+            owner: owner.name.clone(),
+            node: node.id,
+            target: target.into(),
+        });
+    }
+    validate_effect_summary(owner, node, &[body], issues);
 }
 
 fn validate_select(
@@ -331,9 +379,7 @@ fn validate_loop(
         });
     }
 
-    if condition.outputs.len() != 1
-        || condition.outputs[0].ty != SemanticType::Bool
-    {
+    if condition.outputs.len() != 1 || condition.outputs[0].ty != SemanticType::Bool {
         issues.push(ControlIssue::LoopConditionOutputInvalid {
             owner: owner.name.clone(),
             node: node.id,
@@ -350,8 +396,7 @@ fn validate_loop(
         });
     }
 
-    if !same_interface(&node.inputs, &body.inputs)
-        || !same_interface(&node.outputs, &body.outputs)
+    if !same_interface(&node.inputs, &body.inputs) || !same_interface(&node.outputs, &body.outputs)
     {
         issues.push(ControlIssue::LoopStateMismatch {
             owner: owner.name.clone(),
@@ -400,9 +445,7 @@ fn validate_effect_summary(
         .flat_map(|graph| graph_effect_summary(graph).1)
         .collect();
 
-    if node.effects != effects
-        || node.required_capabilities != capabilities
-    {
+    if node.effects != effects || node.required_capabilities != capabilities {
         issues.push(ControlIssue::EffectSummaryMismatch {
             owner: owner.name.clone(),
             node: node.id,
@@ -410,9 +453,7 @@ fn validate_effect_summary(
     }
 }
 
-fn graph_effect_summary(
-    graph: &Graph,
-) -> (BTreeSet<Effect>, BTreeSet<Capability>) {
+fn graph_effect_summary(graph: &Graph) -> (BTreeSet<Effect>, BTreeSet<Capability>) {
     (
         graph
             .nodes
@@ -429,9 +470,9 @@ fn graph_effect_summary(
 
 fn same_interface(a: &[Port], b: &[Port]) -> bool {
     a.len() == b.len()
-        && a.iter().zip(b.iter()).all(|(left, right)| {
-            left.name == right.name && left.ty == right.ty
-        })
+        && a.iter()
+            .zip(b.iter())
+            .all(|(left, right)| left.name == right.name && left.ty == right.ty)
 }
 
 fn find_cycle(
@@ -447,8 +488,7 @@ fn find_cycle(
         path: &mut Vec<String>,
     ) -> Option<Vec<String>> {
         if visiting.contains(name) {
-            let start =
-                path.iter().position(|item| item == name).unwrap_or(0);
+            let start = path.iter().position(|item| item == name).unwrap_or(0);
             let mut cycle = path[start..].to_vec();
             cycle.push(name.to_owned());
             return Some(cycle);
@@ -463,14 +503,7 @@ fn find_cycle(
         if let Some(targets) = references.get(name) {
             for target in targets {
                 if by_name.contains_key(target.as_str())
-                    && let Some(cycle) = visit(
-                        target,
-                        references,
-                        by_name,
-                        visiting,
-                        visited,
-                        path,
-                    )
+                    && let Some(cycle) = visit(target, references, by_name, visiting, visited, path)
                 {
                     return Some(cycle);
                 }

@@ -59,6 +59,7 @@ pub fn call_program() -> ProgramDocument {
     ));
     main.edges.push(result(1));
     ProgramDocument {
+        schemas: vec![],
         entry_graph: "main".into(),
         graphs: vec![main, constant("worker", 42)],
     }
@@ -92,6 +93,7 @@ pub fn select_program() -> ProgramDocument {
         result(2),
     ];
     ProgramDocument {
+        schemas: vec![],
         entry_graph: "main".into(),
         graphs: vec![main, constant("yes", 42), constant("no", 7)],
     }
@@ -172,6 +174,7 @@ pub fn loop_program() -> ProgramDocument {
         result(2),
     ];
     ProgramDocument {
+        schemas: vec![],
         entry_graph: "main".into(),
         graphs: vec![main, condition, body],
     }

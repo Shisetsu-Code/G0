@@ -27,6 +27,16 @@ jobs:
           cargo run --release -- compile examples/answer.g0 -o target/answer.s
           cc -c target/answer.s -o target/answer.o
           file target/answer.o
+      - name: Compile G0 backend and compare bootstrap stages
+        run: |
+          cargo build --release --lib
+          cargo run --release -- bootstrap compiler/native-wrapper.g0p -o target/compiler-stage1.s
+          cc target/compiler-stage1.s tests/support/bootstrap_driver.c target/release/libg0.a -ldl -lpthread -lm -o target/compiler-stage1
+          ./target/compiler-stage1 compiler/native-wrapper.g0p > target/compiler-stage2.s
+          cmp target/compiler-stage1.s target/compiler-stage2.s
+          cc target/compiler-stage2.s tests/support/bootstrap_driver.c target/release/libg0.a -ldl -lpthread -lm -o target/compiler-stage2
+          ./target/compiler-stage2 compiler/native-wrapper.g0p > target/compiler-stage3.s
+          cmp target/compiler-stage2.s target/compiler-stage3.s
       - name: Compile and execute GIR pipeline example
         run: |
           cargo run --release --example gir_answer > target/gir_answer.s
@@ -71,3 +81,16 @@ jobs:
           EOF
           cc target/native_convert.s target/native_convert_harness.c -o target/native_convert
           ./target/native_convert
+
+  windows-editor:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - name: Verify native Windows editor
+        run: |
+          cargo test --test editor --test execution --test bootstrap_compiler
+          cargo run --bin g0-editor -- --smoke-test target/editor-native.bmp target/editor-native.g0g
+          cargo run -- check target/editor-native.g0g

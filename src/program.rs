@@ -241,6 +241,7 @@ impl PlatformContract {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProgramIssue {
+    Composite(Vec<crate::composite::CompositeIssue>),
     DuplicateGraphName(String),
     UnknownEntryGraph(String),
     CallGraph(Vec<CallGraphIssue>),
@@ -352,6 +353,9 @@ pub fn validate_program(
     platform: &PlatformContract,
 ) -> Result<(), Vec<ProgramIssue>> {
     let mut issues = Vec::new();
+
+    let composites = crate::composite::validate_program(&program.graphs, &program.schemas);
+    if !composites.is_empty() { issues.push(ProgramIssue::Composite(composites)); }
 
     let mut graph_names = std::collections::BTreeSet::new();
     for graph in &program.graphs {

@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::abi::{lower_signature, AbiIssue};
+use crate::abi::{AbiIssue, lower_signature};
 use crate::gir::{Graph, Operation, SemanticType};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,8 +43,10 @@ pub fn build_call_graph(
         }
     }
 
-    let by_name: BTreeMap<&str, &Graph> =
-        graphs.iter().map(|graph| (graph.name.as_str(), graph)).collect();
+    let by_name: BTreeMap<&str, &Graph> = graphs
+        .iter()
+        .map(|graph| (graph.name.as_str(), graph))
+        .collect();
 
     let mut calls = BTreeMap::new();
     for graph in graphs {
@@ -52,9 +54,7 @@ pub fn build_call_graph(
         for node in &graph.nodes {
             let referenced = referenced_graphs(&node.operation);
             for callee in referenced {
-                if !local.contains(&callee)
-                    && !external_subgraphs.contains(&callee)
-                {
+                if !local.contains(&callee) && !external_subgraphs.contains(&callee) {
                     issues.push(CallGraphIssue::UnknownCallee {
                         caller: graph.name.clone(),
                         callee: callee.clone(),
@@ -86,8 +86,7 @@ pub fn build_call_graph(
                             });
                         }
                     } else if external_subgraphs.contains(&callee)
-                        && let Err(abi_issues) =
-                            lower_signature(&node_inputs, &node_outputs)
+                        && let Err(abi_issues) = lower_signature(&node_inputs, &node_outputs)
                     {
                         issues.push(CallGraphIssue::AbiUnsupported {
                             callee: callee.clone(),
@@ -116,29 +115,24 @@ pub fn build_call_graph(
 fn referenced_graphs(operation: &Operation) -> Vec<String> {
     match operation {
         Operation::Subgraph(name) => vec![name.clone()],
+        Operation::Map { body } => vec![body.clone()],
         Operation::Select {
             when_true,
             when_false,
         } => vec![when_true.clone(), when_false.clone()],
         Operation::Match { arms, default } => {
-            let mut result: Vec<String> =
-                arms.iter().map(|arm| arm.graph.clone()).collect();
+            let mut result: Vec<String> = arms.iter().map(|arm| arm.graph.clone()).collect();
             result.push(default.clone());
             result
         }
         Operation::Loop {
-            condition,
-            body,
-            ..
+            condition, body, ..
         } => vec![condition.clone(), body.clone()],
         _ => Vec::new(),
     }
 }
 
-pub fn reachable_from(
-    call_graph: &CallGraph,
-    entry: &str,
-) -> BTreeSet<String> {
+pub fn reachable_from(call_graph: &CallGraph, entry: &str) -> BTreeSet<String> {
     let mut seen = BTreeSet::new();
     let mut stack = vec![entry.to_owned()];
 
@@ -163,8 +157,10 @@ pub fn reachable_program_graphs(
     graphs: &[Graph],
     entry: &str,
 ) -> BTreeSet<String> {
-    let by_name: BTreeMap<&str, &Graph> =
-        graphs.iter().map(|graph| (graph.name.as_str(), graph)).collect();
+    let by_name: BTreeMap<&str, &Graph> = graphs
+        .iter()
+        .map(|graph| (graph.name.as_str(), graph))
+        .collect();
     let mut seen = BTreeSet::new();
     let mut stack = vec![entry.to_owned()];
 
@@ -193,23 +189,13 @@ pub fn reachable_program_graphs(
     seen
 }
 
-fn find_local_cycle(
-    graph: &CallGraph,
-    local: &BTreeSet<String>,
-) -> Option<Vec<String>> {
+fn find_local_cycle(graph: &CallGraph, local: &BTreeSet<String>) -> Option<Vec<String>> {
     let mut visiting = BTreeSet::new();
     let mut visited = BTreeSet::new();
     let mut path = Vec::new();
 
     for name in local {
-        if let Some(cycle) = visit(
-            name,
-            graph,
-            local,
-            &mut visiting,
-            &mut visited,
-            &mut path,
-        ) {
+        if let Some(cycle) = visit(name, graph, local, &mut visiting, &mut visited, &mut path) {
             return Some(cycle);
         }
     }
@@ -241,14 +227,7 @@ fn visit(
     if let Some(callees) = graph.calls.get(name) {
         for callee in callees {
             if local.contains(callee)
-                && let Some(cycle) = visit(
-                    callee,
-                    graph,
-                    local,
-                    visiting,
-                    visited,
-                    path,
-                )
+                && let Some(cycle) = visit(callee, graph, local, visiting, visited, path)
             {
                 return Some(cycle);
             }
@@ -319,9 +298,7 @@ mod tests {
         worker.inputs.push(Port {
             id: 0,
             name: "x".into(),
-            ty: SemanticType::Integer(
-                IntegerType::new(0, 10).unwrap(),
-            ),
+            ty: SemanticType::Integer(IntegerType::new(0, 10).unwrap()),
         });
 
         assert!(matches!(
@@ -356,11 +333,7 @@ mod tests {
 
         assert_eq!(
             reachable_from(&call_graph, "main"),
-            BTreeSet::from([
-                "main".into(),
-                "no".into(),
-                "yes".into(),
-            ])
+            BTreeSet::from(["main".into(), "no".into(), "yes".into(),])
         );
     }
 

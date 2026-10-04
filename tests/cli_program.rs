@@ -7,8 +7,10 @@ mod fixture;
 struct Workspace(PathBuf);
 impl Workspace {
     fn new() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let sequence = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let path = std::env::temp_dir().join(format!(
-            "g0-program-cli-{}-{}",
+            "g0-program-cli-{}-{}-{sequence}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -37,6 +39,34 @@ fn success(output: Output) {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn g0_compiler_bootstrap_preserves_input_and_previous_output_on_failure() {
+    let work = Workspace::new();
+    let source = g0::bootstrap_compiler::COMPILER_SOURCE;
+    std::fs::write(work.0.join("compiler.g0p"), source).unwrap();
+    assert!(
+        !work
+            .run(&["bootstrap", "compiler.g0p", "-o", "compiler.g0p"])
+            .status
+            .success()
+    );
+    assert_eq!(std::fs::read(work.0.join("compiler.g0p")).unwrap(), source);
+    success(work.run(&["bootstrap", "compiler.g0p", "-o", "compiler.s"]));
+    assert_eq!(
+        std::fs::read_to_string(work.0.join("compiler.s")).unwrap(),
+        g0::bootstrap_compiler::compile_native(source).unwrap()
+    );
+    let previous = std::fs::read(work.0.join("compiler.s")).unwrap();
+    std::fs::write(work.0.join("bad.g0p"), b"bad").unwrap();
+    assert!(
+        !work
+            .run(&["bootstrap", "bad.g0p", "-o", "compiler.s"])
+            .status
+            .success()
+    );
+    assert_eq!(std::fs::read(work.0.join("compiler.s")).unwrap(), previous);
 }
 
 #[test]

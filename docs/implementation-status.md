@@ -18,20 +18,34 @@ those native facilities.
   Rust bootstrap APIs.
 - Linux/x86-64 execution tests for generated assembly. Rust can build the
   compiler on Windows, but the emitted assembly uses ELF/System V conventions.
+- Native Win32/GDI graph editor with canonical save, validation, undo/redo and
+  bounded execution traces. The initial toolbox and UI limits are documented in
+  `native-editor.md`.
+- Executable compiler backend written as G0 graphs, generating a native wrapper
+  linked to the Rust runtime. This stage is not full compiler self-hosting; see
+  `compiler-bootstrap.md` for reproducibility checks and remaining work.
 
 ## Contracts requiring runtime implementation
 
-Storage schemas, authorization, tenant isolation, transaction rules, encryption
-requirements, replay restrictions, ownership plans and task budgets have
-validation code and tests. They still need concrete persistence, cryptographic
-transport, memory operations and execution machinery connected to compiler
-lowering. A validated policy is not an implementation of its runtime effect.
+The native Rust host now implements `g0c run`, immutable structured values and
+schema-directed codecs, bounded/cancellable tasks, region lifetimes, encrypted
+snapshot transactions and mutually authenticated TLS 1.3. Storage GIR nodes use
+one explicit transaction with commit after successful execution. A graph-native
+service maps authenticated certificate fingerprints to scoped principals.
+Integration tests prove the same record survives storage reopen and a real
+encrypted loopback round trip.
+
+Aggregate x86 lowering, GIR region/task handles, protected-field/credential
+storage profiles, relations, migrations, trusted anti-rollback witnesses and
+advanced scheduling/remote-execution profiles still require implementation.
+Current profiles reject unsupported requirements instead of weakening them.
 
 ## Current native-file boundary
 
 The `.g0g` format represents one graph. `.g0p` represents a closed executable
 bundle with an explicit entry, multiple definitions and no external bindings.
-The bootstrap entry has no input ports and exactly one output. The CLI
+G0P 0.3 supports typed entry interfaces; the optimized bootstrap entry still
+requires no input ports and exactly one output. The CLI
 checks graph references and control contracts with the existing program
 validator; a missing subgraph definition fails before emission. Compilation
 uses the existing scalar pipeline and exports `g0_machine_main`.
@@ -49,6 +63,7 @@ and `select.g0p` return 42; `loop.g0p` performs one state transition and returns
 
 ## Next milestone
 
-Implement executable structured values and memory, then the runtime effects
-required by a small native application. Policy/schema sections in future program
-formats must be explicit rather than granting runtime authority during decoding.
+Expand the editor and G0 compiler beyond their initial profiles, then close the
+remaining runtime/profile integrations. The full
+continuous checklist is in `docs/superpowers/plans/2026-10-04-language-runtime.md`.
+Policy sections remain host bindings, never authority obtained by decoding.

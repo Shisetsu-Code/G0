@@ -30,6 +30,7 @@ fn constant(name: &str, value: i128) -> Graph {
 
 fn document() -> ProgramDocument {
     ProgramDocument {
+        schemas: vec![],
         entry_graph: "main".into(),
         graphs: vec![constant("unused", 7), constant("main", 42)],
     }
@@ -70,6 +71,38 @@ fn program_roundtrip_is_canonical_independent_of_graph_order() {
 }
 
 #[test]
+fn typed_entry_arguments_round_trip_in_version_three() {
+    let mut graph = Graph::new("identity");
+    graph.inputs = vec![Port {
+        id: 0,
+        name: "source".into(),
+        ty: SemanticType::Bytes,
+    }];
+    graph.outputs = graph.inputs.clone();
+    graph.edges = vec![Edge {
+        from: SourceEndpoint::GraphInput(0),
+        to: TargetEndpoint::GraphOutput(0),
+    }];
+    let document = ProgramDocument {
+        entry_graph: "identity".into(),
+        graphs: vec![graph],
+        schemas: vec![],
+    };
+    let bytes = encode_program(&document).unwrap();
+    assert_eq!(u16::from_le_bytes([bytes[6], bytes[7]]), 3);
+    assert_eq!(decode_program(&bytes).unwrap(), document);
+    let program = document.validated_contract().unwrap();
+    assert!(matches!(
+        g0::native_program::compile_program(
+            &program,
+            &g0::program::PlatformContract::bootstrap_x86_64_v3(),
+            g0::machine::MachineProfile::x86_64_v3()
+        ),
+        Err(g0::native_program::ProgramCompileIssue::EntryInterface { .. })
+    ));
+}
+
+#[test]
 fn missing_empty_and_duplicate_entry_definitions_are_rejected() {
     for (entry, graphs) in [
         ("missing", vec![constant("main", 42)]),
@@ -80,6 +113,7 @@ fn missing_empty_and_duplicate_entry_definitions_are_rejected() {
         assert!(decode_program(&raw(entry, &graphs)).is_err());
         assert!(
             encode_program(&ProgramDocument {
+                schemas: vec![],
                 entry_graph: entry.into(),
                 graphs
             })
@@ -158,4 +192,37 @@ fn nested_graph_counts_are_bounded_before_allocation() {
             }
         ));
     }
+}
+
+#[test]
+fn current_version_carries_the_same_schema_registry_and_reads_legacy_versions() {
+    use g0::data_format::{DataSchema, FieldRequirement, SchemaField};
+    let mut doc = document();
+    doc.schemas.push(DataSchema {
+        name: "Packet".into(),
+        version: 1,
+        fields: vec![SchemaField {
+            tag: 1,
+            name: "body".into(),
+            ty: SemanticType::Text,
+            requirement: FieldRequirement::Required,
+        }],
+    });
+    let bytes = encode_program(&doc).unwrap();
+    assert_eq!(&bytes[6..8], &3u16.to_le_bytes());
+    assert_eq!(decode_program(&bytes).unwrap().schemas, doc.schemas);
+    let mut legacy = bytes.clone();
+    legacy[6] = 2;
+    assert_eq!(decode_program(&legacy).unwrap().schemas, doc.schemas);
+    for end in 0..bytes.len() {
+        assert!(decode_program(&bytes[..end]).is_err());
+    }
+    assert!(
+        decode_program(&raw("main", &[constant("main", 42)]))
+            .unwrap()
+            .schemas
+            .is_empty()
+    );
+    doc.schemas.push(doc.schemas[0].clone());
+    assert!(encode_program(&doc).is_err());
 }
