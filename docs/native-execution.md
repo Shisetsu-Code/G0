@@ -53,8 +53,9 @@ cancellation and join all children on drop. Join returns typed results or an
 explicit error. Budgets are reserved cumulatively and are not recycled on join.
 
 GIR region/buffer handles and pure task spawn/join execute through ResourceHost;
-see `graph-resources.md`. Child/secret region constructors and effectful child
-tasks still require additional GIR profiles.
+see `graph-resources.md`. Child and secret region constructors execute with
+inherited quotas/lifetimes and protected read types. Effectful child tasks still
+require an additional execution profile.
 
 ## Canonical formats
 
@@ -67,6 +68,8 @@ The decoder retains support for G0G 0.1.
 G0G 0.3 adds region/task operations 49..55 and relation operations 56..57.
 G0G 0.4 adds credential operations 58..59; readers retain versions 0.1..0.3.
 Older version headers cannot introduce the new operation tags.
+G0G 0.5 adds secret-root and child-region constructors (60..61), preserving all
+previous operation encodings and retaining readers for 0.1..0.4.
 
 G0P 0.2 appends a schema registry after the graph list. It consists of a u32 count;
 each schema has a u32-length UTF-8 name, u32 version and u32 field count. Each field

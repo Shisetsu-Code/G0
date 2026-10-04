@@ -4,6 +4,9 @@ G0G 0.3 adds `RegionOpen`, `RegionAllocate`, `RegionWrite`, `RegionRead`,
 `RegionClose`, `TaskSpawn` and `TaskJoin` (tags 49..55). Older graph versions
 retain their original operation sets; a new operation under an old version
 header is rejected. G0P 0.3 can contain these graphs with typed entry arguments.
+G0G 0.5 adds `RegionOpenSecret` (60) and `RegionOpenChild { secret }` (61).
+The child secrecy flag has canonical values 0/1; inheritance can never weaken a
+secret parent.
 
 Region handles have type `Unique<Reference<g0.region>>`; buffer handles have
 type `Unique<Reference<g0.buffer>>`. Values are opaque: literals and codecs cannot
@@ -21,12 +24,28 @@ The public-region profile has these interfaces:
 | RegionAllocate | region, nonnegative size | region, buffer |
 | RegionWrite | region, buffer, nonnegative offset, Bytes | region, buffer |
 | RegionRead | region, buffer | region, buffer, owned Bytes |
-| RegionClose | region | Bool |
+| RegionClose | region, optional Bool sequencing dependency | Bool |
 
 Region nodes declare `MemoryWrite`. Their dependency edges order mutable
 operations. Reads make owned copies that remain valid after closing the region.
-Copies and allocations are charged before allocation. Native Rust APIs also
-support child and secret regions; GIR exposes public root regions in this stage.
+Copies and allocations are charged before allocation.
+
+`RegionOpenSecret` has the root-open interface but returns
+`Unique<Reference<g0.secret-region>>`. Secret buffers have the corresponding
+`g0.secret-buffer` kind. The same allocate/write/read/close operations preserve
+these kinds; writes require `Secret<Bytes>` and reads return `Secret<Bytes>`.
+Validation rejects declaring the read result as public Bytes. Protected read
+copies remain redacted and cannot use public transport/value codecs. They are
+immutable application values; their lifetime is distinct from the arena's owned
+buffers and does not promise wiping on drop. Owned arena buffers are wiped when
+their secret region closes or the resource scope is destroyed.
+
+`RegionOpenChild` consumes a parent and a byte quota, returning a renewed parent
+and a new child. A secret parent always produces a secret child; a public parent
+can explicitly request a secret child. Child allocations consume every ancestor
+quota, and closing a parent closes all descendants. An optional Bool dependency
+on close orders parent destruction after a child's last operation without
+duplicating its linear handle.
 
 TaskSpawn refers to a closed pure graph and reserves explicit cumulative child
 step and allocation budgets. The output is

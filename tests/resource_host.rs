@@ -29,6 +29,172 @@ fn new_host() -> ResourceHost {
     )
     .unwrap()
 }
+
+#[test]
+fn child_regions_inherit_secrecy_and_parent_lifetime_in_native_graphs() {
+    let mut host = new_host();
+    let root = host
+        .execute(&node(Operation::RegionOpenSecret), &[Value::Integer(32)])
+        .unwrap()
+        .remove(0);
+    let children = host
+        .execute(
+            &node(Operation::RegionOpenChild { secret: false }),
+            &[root, Value::Integer(16)],
+        )
+        .unwrap();
+    let allocated = host
+        .execute(
+            &node(Operation::RegionAllocate),
+            &[children[1].clone(), Value::Integer(4)],
+        )
+        .unwrap();
+    let written = host
+        .execute(
+            &node(Operation::RegionWrite),
+            &[
+                allocated[0].clone(),
+                allocated[1].clone(),
+                Value::Integer(0),
+                Value::Secret(Arc::new(Value::Bytes(Arc::from([42])))),
+            ],
+        )
+        .unwrap();
+    let read = host
+        .execute(&node(Operation::RegionRead), &written)
+        .unwrap();
+    assert_eq!(
+        read[2],
+        Value::Secret(Arc::new(Value::Bytes(Arc::from([42, 0, 0, 0]))))
+    );
+    assert!(
+        g0::value_codec::encode_value(
+            &read[2],
+            &SemanticType::Secret(Box::new(SemanticType::Bytes)),
+            &[],
+            Default::default()
+        )
+        .is_err()
+    );
+    host.execute(&node(Operation::RegionClose), &children[..1])
+        .unwrap();
+    assert!(
+        host.execute(&node(Operation::RegionRead), &read[..2])
+            .is_err()
+    );
+    let mut secret_program = region_program();
+    for graph in &mut secret_program.graphs {
+        for port in graph
+            .inputs
+            .iter_mut()
+            .chain(graph.outputs.iter_mut())
+            .chain(
+                graph
+                    .nodes
+                    .iter_mut()
+                    .flat_map(|n| n.inputs.iter_mut().chain(n.outputs.iter_mut())),
+            )
+        {
+            port.ty = match &port.ty {
+                SemanticType::Unique(ty) if matches!(ty.as_ref(),SemanticType::Reference(name) if name == "g0.region") => {
+                    SemanticType::Unique(Box::new(SemanticType::Reference(
+                        "g0.secret-region".into(),
+                    )))
+                }
+                SemanticType::Unique(ty) if matches!(ty.as_ref(),SemanticType::Reference(name) if name == "g0.buffer") => {
+                    SemanticType::Unique(Box::new(SemanticType::Reference(
+                        "g0.secret-buffer".into(),
+                    )))
+                }
+                SemanticType::Bytes => SemanticType::Secret(Box::new(SemanticType::Bytes)),
+                ty => ty.clone(),
+            };
+        }
+        graph.nodes[1].operation = Operation::RegionOpenSecret;
+        let region = graph.nodes[1].outputs[0].clone();
+        let mut child = region.clone();
+        child.id = 1;
+        child.name = "child".into();
+        graph.nodes.push(Node {
+            id: 9,
+            operation: Operation::RegionOpenChild { secret: false },
+            inputs: vec![
+                region.clone(),
+                Port {
+                    id: 1,
+                    name: "quota".into(),
+                    ..graph.nodes[2].outputs[0].clone()
+                },
+            ],
+            outputs: vec![region.clone(), child],
+            effects: BTreeSet::from([Effect::MemoryWrite]),
+            required_capabilities: BTreeSet::new(),
+        });
+        graph.nodes.push(Node {
+            id: 10,
+            operation: Operation::RegionClose,
+            inputs: vec![
+                region,
+                Port {
+                    id: 1,
+                    name: "closed-child".into(),
+                    ..graph.nodes[7].outputs[0].clone()
+                },
+            ],
+            outputs: graph.nodes[7].outputs.clone(),
+            effects: BTreeSet::from([Effect::MemoryWrite]),
+            required_capabilities: BTreeSet::new(),
+        });
+        graph.edges.retain(|e| {
+            !matches!(e.from, SourceEndpoint::NodeOutput { node: 2, port: 0 })
+                && e.to != TargetEndpoint::GraphOutput(1)
+        });
+        let link = |a, b, c, d| Edge {
+            from: SourceEndpoint::NodeOutput { node: a, port: b },
+            to: TargetEndpoint::NodeInput { node: c, port: d },
+        };
+        graph.edges.extend([
+            link(2, 0, 9, 0),
+            link(3, 0, 9, 1),
+            link(9, 1, 4, 0),
+            link(9, 0, 10, 0),
+            link(8, 0, 10, 1),
+            Edge {
+                from: SourceEndpoint::NodeOutput { node: 10, port: 0 },
+                to: TargetEndpoint::GraphOutput(1),
+            },
+        ]);
+    }
+    g0::gir_validate::validate(&secret_program.graphs[0]).unwrap();
+    let bytes = g0::graph_binary::encode_graph(&secret_program.graphs[0]).unwrap();
+    let mut legacy = bytes.clone();
+    legacy[6] = 4;
+    assert!(g0::graph_binary_decode::decode_graph(&legacy).is_err());
+    secret_program.graphs[0] = g0::graph_binary_decode::decode_graph(&bytes).unwrap();
+    let mut host = ResourceHost::new(
+        Arc::new(secret_program.clone()),
+        Default::default(),
+        BTreeSet::new(),
+    )
+    .unwrap();
+    let secret = Value::Secret(Arc::new(Value::Bytes(Arc::from([7]))));
+    assert_eq!(
+        host.run_graph("regions", vec![secret]).unwrap(),
+        vec![
+            Value::Secret(Arc::new(Value::Bytes(Arc::from([7, 0, 0, 0])))),
+            Value::Bool(true)
+        ]
+    );
+    secret_program.graphs[0].nodes[6].outputs[2].ty = SemanticType::Bytes;
+    assert!(
+        ResourceHost::new(
+            Arc::new(secret_program),
+            Default::default(),
+            BTreeSet::new()
+        )
+        .is_err()
+    );
+}
 #[test]
 fn graph_resource_handles_move_and_close_without_serialization_or_forgery() {
     let mut host = new_host();

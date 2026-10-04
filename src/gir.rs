@@ -272,6 +272,10 @@ pub enum Operation {
     },
     TextJoin,
     RegionOpen,
+    RegionOpenSecret,
+    RegionOpenChild {
+        secret: bool,
+    },
     RegionAllocate,
     RegionWrite,
     RegionRead,

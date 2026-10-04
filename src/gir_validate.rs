@@ -311,6 +311,8 @@ fn resolve_target_type<'a>(graph: &'a Graph, target: &TargetEndpoint) -> Option<
 fn validate_operation(node: &Node, report: &mut ValidationReport) {
     match &node.operation {
         Operation::RegionOpen
+        | Operation::RegionOpenSecret
+        | Operation::RegionOpenChild { .. }
         | Operation::RegionAllocate
         | Operation::RegionWrite
         | Operation::RegionRead

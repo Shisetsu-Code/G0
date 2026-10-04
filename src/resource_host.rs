@@ -120,7 +120,12 @@ impl ResourceHost {
             .ok_or_else(|| failure(node, "consumed-resource-handle"))
     }
     fn region(&mut self, value: &Value, node: &Node) -> Result<RegionId, RuntimeError> {
-        match self.take(value, "g0.region", node)? {
+        let kind = match value {
+            Value::NativeHandle(h) if h.kind() == "g0.region" => "g0.region",
+            Value::NativeHandle(h) if h.kind() == "g0.secret-region" => "g0.secret-region",
+            _ => return Err(failure(node, "invalid-region")),
+        };
+        match self.take(value, kind, node)? {
             Resource::Region(id) => Ok(id),
             _ => Err(failure(node, "invalid-region")),
         }
@@ -131,7 +136,16 @@ impl ResourceHost {
         region: RegionId,
         node: &Node,
     ) -> Result<RegionHandle, RuntimeError> {
-        match self.take(value, "g0.buffer", node)? {
+        let kind = if self
+            .arena
+            .is_secret(region)
+            .map_err(|_| failure(node, "region-closed"))?
+        {
+            "g0.secret-buffer"
+        } else {
+            "g0.buffer"
+        };
+        match self.take(value, kind, node)? {
             Resource::Buffer {
                 region: owner,
                 handle,
@@ -156,18 +170,51 @@ fn failure(node: &Node, code: &'static str) -> RuntimeError {
     }
 }
 pub fn validate_node(node: &Node) -> Result<(), String> {
-    let region = SemanticType::Unique(Box::new(SemanticType::Reference("g0.region".into())));
-    let buffer = SemanticType::Unique(Box::new(SemanticType::Reference("g0.buffer".into())));
+    let handle = |kind: &str| SemanticType::Unique(Box::new(SemanticType::Reference(kind.into())));
+    let secret_region = handle("g0.secret-region");
     let mut inputs: Vec<_> = node.inputs.iter().collect();
     inputs.sort_by_key(|p| p.id);
     let mut outputs: Vec<_> = node.outputs.iter().collect();
     outputs.sort_by_key(|p| p.id);
     let inputs: Vec<_> = inputs.into_iter().map(|p| p.ty.clone()).collect();
     let outputs: Vec<_> = outputs.into_iter().map(|p| p.ty.clone()).collect();
+    let secret = inputs.first() == Some(&secret_region);
+    let region = if secret {
+        secret_region.clone()
+    } else {
+        handle("g0.region")
+    };
+    let buffer = if secret {
+        handle("g0.secret-buffer")
+    } else {
+        handle("g0.buffer")
+    };
+    let bytes = if secret {
+        SemanticType::Secret(Box::new(SemanticType::Bytes))
+    } else {
+        SemanticType::Bytes
+    };
     let size = |ty: &SemanticType| matches!(ty,SemanticType::Integer(t) if t.min>=0);
     let valid = match &node.operation {
         Operation::RegionOpen => {
             inputs.len() == 1 && size(&inputs[0]) && outputs == vec![region.clone()]
+        }
+        Operation::RegionOpenSecret => {
+            inputs.len() == 1 && size(&inputs[0]) && outputs == vec![secret_region.clone()]
+        }
+        Operation::RegionOpenChild { secret: requested } => {
+            inputs.len() == 2
+                && inputs[0] == region
+                && size(&inputs[1])
+                && outputs
+                    == vec![
+                        region.clone(),
+                        if secret || *requested {
+                            secret_region
+                        } else {
+                            region.clone()
+                        },
+                    ]
         }
         Operation::RegionAllocate => {
             inputs.len() == 2
@@ -180,14 +227,17 @@ pub fn validate_node(node: &Node) -> Result<(), String> {
                 && inputs[0] == region
                 && inputs[1] == buffer
                 && size(&inputs[2])
-                && inputs[3] == SemanticType::Bytes
+                && inputs[3] == bytes
                 && outputs == vec![region.clone(), buffer.clone()]
         }
         Operation::RegionRead => {
             inputs == vec![region.clone(), buffer.clone()]
-                && outputs == vec![region.clone(), buffer.clone(), SemanticType::Bytes]
+                && outputs == vec![region.clone(), buffer.clone(), bytes]
         }
-        Operation::RegionClose => inputs == vec![region] && outputs == vec![SemanticType::Bool],
+        Operation::RegionClose => {
+            (inputs == vec![region.clone()] || inputs == vec![region, SemanticType::Bool])
+                && outputs == vec![SemanticType::Bool]
+        }
         _ => return Ok(()),
     };
     if !valid
@@ -213,6 +263,8 @@ impl EffectHost for ChainedHost<'_> {
     fn execute(&mut self, node: &Node, inputs: &[Value]) -> Result<Vec<Value>, RuntimeError> {
         match node.operation {
             Operation::RegionOpen
+            | Operation::RegionOpenSecret
+            | Operation::RegionOpenChild { .. }
             | Operation::RegionAllocate
             | Operation::RegionWrite
             | Operation::RegionRead
@@ -311,40 +363,126 @@ impl EffectHost for ResourceHost {
                     _ => Err(failure(node, "invalid-task")),
                 }
             }
-            (Operation::RegionOpen, [limit]) => {
+            (Operation::RegionOpen | Operation::RegionOpenSecret, [limit]) => {
+                let secret = matches!(node.operation, Operation::RegionOpenSecret);
                 let region = self
                     .arena
-                    .create_region(None, size(limit, node)?, false)
+                    .create_region(None, size(limit, node)?, secret)
                     .map_err(|_| failure(node, "region-budget"))?;
-                Ok(vec![self.issue(Resource::Region(region), "g0.region")])
+                Ok(vec![self.issue(
+                    Resource::Region(region),
+                    if secret {
+                        "g0.secret-region"
+                    } else {
+                        "g0.region"
+                    },
+                )])
+            }
+            (Operation::RegionOpenChild { secret }, [parent, limit]) => {
+                let limit = size(limit, node)?;
+                let parent = self.region(parent, node)?;
+                let parent_secret = self
+                    .arena
+                    .is_secret(parent)
+                    .map_err(|_| failure(node, "region-closed"))?;
+                let child = self
+                    .arena
+                    .create_region(Some(parent), limit, *secret)
+                    .map_err(|_| failure(node, "region-budget-or-closed"))?;
+                Ok(vec![
+                    self.issue(
+                        Resource::Region(parent),
+                        if parent_secret {
+                            "g0.secret-region"
+                        } else {
+                            "g0.region"
+                        },
+                    ),
+                    self.issue(
+                        Resource::Region(child),
+                        if parent_secret || *secret {
+                            "g0.secret-region"
+                        } else {
+                            "g0.region"
+                        },
+                    ),
+                ])
             }
             (Operation::RegionAllocate, [region, length]) => {
                 let length = size(length, node)?;
                 self.charge(length as u64)?;
                 let region = self.region(region, node)?;
+                let secret = self
+                    .arena
+                    .is_secret(region)
+                    .map_err(|_| failure(node, "region-closed"))?;
                 let handle = self
                     .arena
                     .allocate_zeroed(region, length)
                     .map_err(|_| failure(node, "region-budget-or-closed"))?;
                 Ok(vec![
-                    self.issue(Resource::Region(region), "g0.region"),
-                    self.issue(Resource::Buffer { region, handle }, "g0.buffer"),
+                    self.issue(
+                        Resource::Region(region),
+                        if secret {
+                            "g0.secret-region"
+                        } else {
+                            "g0.region"
+                        },
+                    ),
+                    self.issue(
+                        Resource::Buffer { region, handle },
+                        if secret {
+                            "g0.secret-buffer"
+                        } else {
+                            "g0.buffer"
+                        },
+                    ),
                 ])
             }
-            (Operation::RegionWrite, [region, buffer, offset, Value::Bytes(bytes)]) => {
+            (Operation::RegionWrite, [region, buffer, offset, data]) => {
                 let offset = size(offset, node)?;
                 let region = self.region(region, node)?;
+                let secret = self
+                    .arena
+                    .is_secret(region)
+                    .map_err(|_| failure(node, "region-closed"))?;
+                let bytes = match (secret, data) {
+                    (false, Value::Bytes(bytes)) => bytes,
+                    (true, Value::Secret(data)) => match data.as_ref() {
+                        Value::Bytes(bytes) => bytes,
+                        _ => return Err(failure(node, "secret-bytes-required")),
+                    },
+                    _ => return Err(failure(node, "secret-bytes-required")),
+                };
                 let handle = self.buffer(buffer, region, node)?;
                 self.arena
                     .write(&handle, offset, bytes)
                     .map_err(|_| failure(node, "region-bounds-or-closed"))?;
                 Ok(vec![
-                    self.issue(Resource::Region(region), "g0.region"),
-                    self.issue(Resource::Buffer { region, handle }, "g0.buffer"),
+                    self.issue(
+                        Resource::Region(region),
+                        if secret {
+                            "g0.secret-region"
+                        } else {
+                            "g0.region"
+                        },
+                    ),
+                    self.issue(
+                        Resource::Buffer { region, handle },
+                        if secret {
+                            "g0.secret-buffer"
+                        } else {
+                            "g0.buffer"
+                        },
+                    ),
                 ])
             }
             (Operation::RegionRead, [region, buffer]) => {
                 let region = self.region(region, node)?;
+                let secret = self
+                    .arena
+                    .is_secret(region)
+                    .map_err(|_| failure(node, "region-closed"))?;
                 let handle = self.buffer(buffer, region, node)?;
                 let length = self
                     .arena
@@ -359,12 +497,30 @@ impl EffectHost for ResourceHost {
                         .as_ref(),
                 ));
                 Ok(vec![
-                    self.issue(Resource::Region(region), "g0.region"),
-                    self.issue(Resource::Buffer { region, handle }, "g0.buffer"),
-                    bytes,
+                    self.issue(
+                        Resource::Region(region),
+                        if secret {
+                            "g0.secret-region"
+                        } else {
+                            "g0.region"
+                        },
+                    ),
+                    self.issue(
+                        Resource::Buffer { region, handle },
+                        if secret {
+                            "g0.secret-buffer"
+                        } else {
+                            "g0.buffer"
+                        },
+                    ),
+                    if secret {
+                        Value::Secret(Arc::new(bytes))
+                    } else {
+                        bytes
+                    },
                 ])
             }
-            (Operation::RegionClose, [region]) => {
+            (Operation::RegionClose, [region] | [region, Value::Bool(_)]) => {
                 let region = self.region(region, node)?;
                 self.arena
                     .close_region(region)
