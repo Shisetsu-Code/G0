@@ -95,8 +95,17 @@ fn dispatch(name: &str, tags: &[usize], graphs: &mut Vec<Graph>) {
     };
     graphs.push(graph.finish(out));
 }
+fn signed_byte_order()->Graph{
+    let mut g=G::new("validator-signed-bytes-le",vec![SemanticType::Bytes,int(),int()],vec![SemanticType::Bool]);let mut less=g.bool(false);let mut equal=g.bool(true);
+    for offset in (0..16).rev(){let a=g.advance(input(1),offset);let b=g.advance(input(2),offset);let mut a=g.byte(a);let mut b=g.byte(b);
+        if offset==15 {let bias=g.n(128);a=g.arithmetic(Operation::Add,a,bias.clone());b=g.arithmetic(Operation::Add,b,bias);let modulus=g.n(256);a=g.op(Operation::Rem,vec![(a,int()),(modulus.clone(),int())],int());b=g.op(Operation::Rem,vec![(b,int()),(modulus,int())],int());}
+        let smaller=g.compare(Operation::Lt,a.clone(),b.clone());let first=g.and(equal.clone(),smaller);less=g.logic(Operation::Or,less,first);let same=g.compare(Operation::Eq,a,b);equal=g.and(equal,same);
+    }
+    let le=g.logic(Operation::Or,less,equal);g.finish(vec![le])
+}
 pub(super) fn graphs() -> Vec<Graph> {
     let mut graphs = byte_equal_graphs();
+    graphs.push(signed_byte_order());
     for tag in 0..25 {
         let mut graph = G::new(&format!("validator-type-tag-{tag}"), state(), state());
         let source_tag = graph.byte(input(1));
@@ -108,32 +117,8 @@ pub(super) fn graphs() -> Vec<Graph> {
             let source_max_at = graph.advance(input(1), 17);
             let target_min_at = graph.advance(input(2), 1);
             let target_max_at = graph.advance(input(2), 17);
-            let source_min = call(
-                &mut graph,
-                "reader-i128",
-                vec![input(0), source_min_at],
-                full_integer(),
-            );
-            let source_max = call(
-                &mut graph,
-                "reader-i128",
-                vec![input(0), source_max_at],
-                full_integer(),
-            );
-            let target_min = call(
-                &mut graph,
-                "reader-i128",
-                vec![input(0), target_min_at],
-                full_integer(),
-            );
-            let target_max = call(
-                &mut graph,
-                "reader-i128",
-                vec![input(0), target_max_at],
-                full_integer(),
-            );
-            let min_fits = graph.compare(Operation::Le, target_min, source_min);
-            let max_fits = graph.compare(Operation::Le, source_max, target_max);
+            let min_fits=call(&mut graph,"validator-signed-bytes-le",vec![input(0),target_min_at,source_min_at],SemanticType::Bool);
+            let max_fits=call(&mut graph,"validator-signed-bytes-le",vec![input(0),source_max_at,target_max_at],SemanticType::Bool);
             valid = graph.and(valid, min_fits);
             valid = graph.and(valid, max_fits);
             let source_end = graph.advance(input(1), 33);

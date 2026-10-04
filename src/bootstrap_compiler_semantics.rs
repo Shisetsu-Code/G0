@@ -2,6 +2,10 @@
 use super::*;
 #[path = "bootstrap_compiler_typecheck.rs"]
 mod typecheck;
+#[path = "bootstrap_compiler_linkcheck.rs"]
+mod linkcheck;
+#[path = "bootstrap_compiler_wires.rs"]
+mod wires;
 fn rows() -> SemanticType {
     SemanticType::Slice(Box::new(SemanticType::Slice(Box::new(int()))))
 }
@@ -70,12 +74,12 @@ fn port_position_graphs()->Vec<Graph>{
 fn endpoint_type_graphs()->Vec<Graph>{
     let types=vec![SemanticType::Bytes,rows(),int(),int(),int(),int(),int(),int()];
     let graph=G::new("validator-endpoint-graph-list",types.clone(),vec![int()]);
-    let mut node=G::new("validator-endpoint-node-list",types.clone(),vec![int()]);let index=call(&mut node,"emitter-node-index",vec![input(1),input(4)],int());let descriptor=node.index(input(1),index);let node_list=node.index(descriptor,input(6));
+    let mut node=G::new("validator-endpoint-node-list",types.clone(),vec![int()]);let index=call(&mut node,"validator-node-index-fast",vec![input(1),input(4)],int());let descriptor=node.index(input(1),index);let node_list=node.index(descriptor,input(6));
     let mut main=G::new("validator-endpoint-type",types,vec![int()]);let is_node=main.compare(Operation::Eq,input(3),input(7));
     let mut args=vec![(is_node,SemanticType::Bool)];args.extend((0..8).map(|p|(input(p),main.b.graph.inputs[p as usize].ty.clone())));
     let list=main.op(Operation::Select{when_true:"validator-endpoint-node-list".into(),when_false:"validator-endpoint-graph-list".into()},args,int());
     let selector=main.b.graph.nodes.last_mut().unwrap();selector.inputs[0].name="selector".into();for (i,port) in selector.inputs.iter_mut().skip(1).enumerate(){port.name=format!("p{i}");}
-    let rank=call(&mut main,"control-port-rank",vec![input(0),list.clone(),input(5)],int());let type_at=call(&mut main,"validator-port-type-at",vec![input(0),list,rank],int());
+    let rank=call(&mut main,"validator-port-rank-fast",vec![input(0),list.clone(),input(5)],int());let type_at=call(&mut main,"validator-port-type-at",vec![input(0),list,rank],int());
     vec![graph.finish(vec![input(2)]),node.finish(vec![node_list]),main.finish(vec![type_at])]
 }
 fn endpoint_graphs() -> Vec<Graph> {
@@ -98,7 +102,7 @@ fn endpoint_graphs() -> Vec<Graph> {
     );
     let rank = call(
         &mut graph,
-        "control-port-rank",
+        "validator-port-rank-fast",
         vec![input(0), input(2), input(5)],
         int(),
     );
@@ -115,7 +119,7 @@ fn endpoint_graphs() -> Vec<Graph> {
     let list = ports.index(node, input(6));
     let rank = call(
         &mut ports,
-        "control-port-rank",
+        "validator-port-rank-fast",
         vec![input(0), list.clone(), input(5)],
         int(),
     );
@@ -134,7 +138,7 @@ fn endpoint_graphs() -> Vec<Graph> {
     );
     let index = call(
         &mut node,
-        "emitter-node-index",
+        "validator-node-index-fast",
         vec![input(1), input(4)],
         int(),
     );
@@ -378,27 +382,15 @@ fn edge_graphs() -> Vec<Graph> {
             input(0),
             nodes.clone(),
             edges.clone(),
-            inputs,
+            inputs.clone(),
             outputs.clone(),
         ],
         SemanticType::Bool,
     );
-    let node_inputs = call(
-        &mut graph,
-        "validator-node-inputs",
-        vec![input(0), nodes, edges.clone()],
-        SemanticType::Bool,
-    );
-    let one = graph.n(1);
-    let zero = graph.n(0);
-    let graph_outputs = call(
-        &mut graph,
-        "validator-required-ports",
-        vec![input(0), edges, outputs, one, zero],
-        SemanticType::Bool,
-    );
-    let graph_valid = graph.and(endpoints, node_inputs);
-    let graph_valid = graph.and(graph_valid, graph_outputs);
+    let graph_valid=select(&mut graph,"validator-wire-complete","validator-wire-invalid",endpoints,vec![input(0),nodes.clone(),edges,inputs,outputs]);
+    let mut invalid_wires=G::new("validator-wire-invalid",vec![SemanticType::Bytes,rows(),rows(),int(),int()],vec![SemanticType::Bool]);let no=invalid_wires.bool(false);
+    let operations=call(&mut graph,"validator-operations",vec![input(0),nodes],SemanticType::Bool);
+    let graph_valid=graph.and(graph_valid,operations);
     vec![
         cond.finish(vec![test]),
         body.finish(vec![
@@ -412,7 +404,25 @@ fn edge_graphs() -> Vec<Graph> {
         ]),
         main.finish(vec![out[6].clone()]),
         graph.finish(vec![graph_valid]),
+        invalid_wires.finish(vec![no]),
     ]
+}
+fn operation_graphs()->Vec<Graph>{
+    let seq=SemanticType::Slice(Box::new(int()));
+    let args=vec![SemanticType::Bytes,seq.clone()];
+    let mut skip=G::new("validator-operation-control",args.clone(),vec![SemanticType::Bool]);let yes=skip.bool(true);
+    let mut node=G::new("validator-operation-local",args,vec![SemanticType::Bool]);
+    let at=node.field(input(1),2);let tag=node.byte(at);
+    let four=node.n(4);let seven=node.n(7);let lower=node.compare(Operation::Ge,tag.clone(),four);let upper=node.compare(Operation::Le,tag.clone(),seven);let control=node.and(lower,upper);
+    let fortyseven=node.n(47);let call_node=node.compare(Operation::Eq,tag.clone(),fortyseven);let control=node.op(Operation::Or,vec![(control,SemanticType::Bool),(call_node,SemanticType::Bool)],SemanticType::Bool);
+    let mut deferred=control;
+    for (low,high) in [(8,16),(49,65)] {let low=node.n(low);let high=node.n(high);let a=node.compare(Operation::Ge,tag.clone(),low);let b=node.compare(Operation::Le,tag.clone(),high);let range=node.and(a,b);deferred=node.op(Operation::Or,vec![(deferred,SemanticType::Bool),(range,SemanticType::Bool)],SemanticType::Bool);}
+    let local=select(&mut node,"validator-operation-control","validator-node-operation",deferred,vec![input(0),input(1)]);
+    let state=vec![SemanticType::Bytes,rows(),int(),SemanticType::Bool];
+    let mut cond=G::new("validator-operations-condition",state.clone(),vec![SemanticType::Bool]);let len=cond.length(input(1));let more=cond.compare(Operation::Lt,input(2),len);let more=cond.and(more,input(3));
+    let mut body=G::new("validator-operations-body",state.clone(),state.clone());let row=body.index(input(1),input(2));let valid=call(&mut body,"validator-operation-local",vec![input(0),row],SemanticType::Bool);let valid=body.and(input(3),valid);let one=body.n(1);let next=body.arithmetic(Operation::Add,input(2),one);
+    let mut main=G::new("validator-operations",vec![SemanticType::Bytes,rows()],vec![SemanticType::Bool]);let zero=main.n(0);let yes_main=main.bool(true);let out=main.loop_node("validator-operations",state,vec![input(0),input(1),zero,yes_main]);
+    vec![skip.finish(vec![yes]),node.finish(vec![local]),cond.finish(vec![more]),body.finish(vec![input(0),input(1),next,valid]),main.finish(vec![out[3].clone()])]
 }
 pub(super) fn graphs() -> Vec<Graph> {
     let mut graphs = endpoint_graphs();
@@ -423,5 +433,8 @@ pub(super) fn graphs() -> Vec<Graph> {
     graphs.extend(node_inputs_graphs());
     graphs.extend(edge_graphs());
     graphs.extend(typecheck::graphs());
+    graphs.extend(linkcheck::graphs());
+    graphs.extend(operation_graphs());
+    graphs.extend(wires::graphs());
     graphs
 }

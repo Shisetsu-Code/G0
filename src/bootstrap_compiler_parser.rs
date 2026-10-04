@@ -7,6 +7,10 @@ mod control;
 mod semantics;
 #[path = "bootstrap_compiler_bytes.rs"]
 mod bytes;
+#[path = "bootstrap_compiler_schedule_fast.rs"]
+mod schedule_fast;
+#[path = "bootstrap_compiler_lookup_fast.rs"]
+mod lookup_fast;
 #[path = "bootstrap_compiler_operationcheck.rs"]
 mod operationcheck;
 #[path = "bootstrap_compiler_emitter.rs"]
@@ -441,6 +445,8 @@ pub(super) fn graphs() -> Vec<Graph> {
     syntax.extend(control::graphs());
     syntax.extend(semantics::graphs());
     syntax.extend(bytes::graphs());
+    syntax.extend(schedule_fast::graphs());
+    syntax.extend(lookup_fast::graphs());
     syntax.extend(operationcheck::graphs());
     syntax
 }

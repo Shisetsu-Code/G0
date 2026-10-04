@@ -67,14 +67,24 @@ truncation with an actual native-control regression check. Explicit form port
 IDs now preserve imported nonconsecutive interfaces and node contracts.
 
 Compiler/runtime checkpoint: G0 binary syntax reader, AST offset descriptors and
-topological scheduler execute as G0 graphs. A direct G0 emitter currently covers
-one graph of primitive operations. Full semantic validation and program/control
-emission in G0 remain. Host limits distinguish ordinary execution from explicit
+topological scheduler execute as G0 graphs. A direct G0 emitter covers primitive
+operations, multiple graphs, calls, selection, matching, loops and maps. Linux
+has assembled and executed sparse-ID call/select/loop output. Compiler-native
+self-generation still exhausts its explicit step quota; full semantic validation
+and its remaining program contracts are in progress. Host limits distinguish ordinary execution from explicit
 compiler reservations. The Rust aggregate native backend has machine-level
 control, typed entries, private tagged result packs and cancellation; Linux
 assembly execution passed CI run 37201209650 on Linux. The full run also passed
 Windows editor verification and three linked wrapper-bootstrap stages, including
 rejection of a legacy compiler input without publishing diagnostic text as assembly.
+
+Independent runtime review: 89 tests in 15 suites passed for the completed
+storage, task, transport, codec, editor and ABI paths. Follow-up review verified
+full 4 MiB byte emission (41,943,033 output bytes for all-255 input) within
+12,584,075 steps. Dense lookup preserves general lookup behavior; 21 differential
+probes passed, and a 1000-node dense lookup used 22 steps while the old scan
+exhausted 200. The compiler's remaining semantic and self-generation work is
+excluded from these completion claims.
 
 Runtime integration: G0G 0.3 resource operations now execute through opaque host-bound linear handles. Tests cover region lifetime, bounds, foreign/stale handles, schema-contained linear fan-out, explicit task permissions, ordered concurrent spawning, one-time join and child error propagation. Native wrappers, CLI, editor and graph services route these operations to the actual resource scope. Linux and Windows CI succeeded for the preceding 336-test editor/compiler checkpoint (run 37193464436).
 

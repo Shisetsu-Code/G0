@@ -1040,9 +1040,234 @@ fn truncate_graphs() -> Vec<Graph> {
         guard.finish(vec![valid]),
     ]
 }
+fn string_graphs() -> Vec<Graph> {
+    let state = vec![
+        SemanticType::Bytes,
+        int(),
+        int(),
+        int(),
+        int(),
+        SemanticType::Bool,
+    ];
+    let mut cond = G::new(
+        "operation-string-equal-condition",
+        state.clone(),
+        vec![SemanticType::Bool],
+    );
+    let remaining = cond.compare(Operation::Lt, input(3), input(4));
+    let test = cond.and(remaining, input(5));
+    let mut body = G::new("operation-string-equal-body", state.clone(), state.clone());
+    let a = body.arithmetic(Operation::Add, input(1), input(3));
+    let b = body.arithmetic(Operation::Add, input(2), input(3));
+    let a = body.byte(a);
+    let b = body.byte(b);
+    let same = body.compare(Operation::Eq, a, b);
+    let valid = body.and(input(5), same);
+    let next = body.advance(input(3), 1);
+    let mut main = G::new(
+        "operation-string-equal",
+        vec![SemanticType::Bytes, int(), int()],
+        vec![SemanticType::Bool],
+    );
+    let a_len = main.u32(input(1));
+    let b_len = main.u32(input(2));
+    let same_len = main.compare(Operation::Eq, a_len.clone(), b_len);
+    let a = main.advance(input(1), 4);
+    let b = main.advance(input(2), 4);
+    let zero = main.n(0);
+    let out = main.loop_node(
+        "operation-string-equal",
+        state,
+        vec![input(0), a, b, zero, a_len, same_len],
+    );
+    vec![
+        cond.finish(vec![test]),
+        body.finish(vec![input(0), input(1), input(2), next, input(4), valid]),
+        main.finish(vec![out[5].clone()]),
+    ]
+}
+fn distinct_field_graphs() -> Vec<Graph> {
+    let state = vec![SemanticType::Bytes, int(), int(), int(), SemanticType::Bool];
+    let mut cond = G::new(
+        "operation-field-unseen-condition",
+        state.clone(),
+        vec![SemanticType::Bool],
+    );
+    let zero = cond.n(0);
+    let left = cond.compare(Operation::Gt, input(3), zero);
+    let test = cond.and(left, input(4));
+    let mut body = G::new("operation-field-unseen-body", state.clone(), state.clone());
+    let same = call(
+        &mut body,
+        "operation-string-equal",
+        vec![input(0), input(1), input(2)],
+        SemanticType::Bool,
+    );
+    let different = body.not(same);
+    let valid = body.and(input(4), different);
+    let next = body.skip_blob(input(2));
+    let one = body.n(1);
+    let inner_left = body.arithmetic(Operation::Sub, input(3), one);
+    let mut main = G::new(
+        "operation-field-unseen",
+        vec![SemanticType::Bytes, int(), int(), int()],
+        vec![SemanticType::Bool],
+    );
+    let yes = main.bool(true);
+    let out = main.loop_node(
+        "operation-field-unseen",
+        state,
+        vec![input(0), input(1), input(2), input(3), yes],
+    );
+    let state = vec![
+        SemanticType::Bytes,
+        int(),
+        int(),
+        int(),
+        int(),
+        SemanticType::Bool,
+    ];
+    let mut outer_cond = G::new(
+        "operation-distinct-fields-condition",
+        state.clone(),
+        vec![SemanticType::Bool],
+    );
+    let zero = outer_cond.n(0);
+    let left = outer_cond.compare(Operation::Gt, input(3), zero);
+    let test_outer = outer_cond.and(left, input(5));
+    let mut outer_body = G::new(
+        "operation-distinct-fields-body",
+        state.clone(),
+        state.clone(),
+    );
+    let unique = call(
+        &mut outer_body,
+        "operation-field-unseen",
+        vec![input(0), input(2), input(1), input(4)],
+        SemanticType::Bool,
+    );
+    let valid_outer = outer_body.and(input(5), unique);
+    let next_outer = outer_body.skip_blob(input(2));
+    let one = outer_body.n(1);
+    let left_outer = outer_body.arithmetic(Operation::Sub, input(3), one);
+    let index = outer_body.advance(input(4), 1);
+    let mut outer = G::new(
+        "operation-distinct-fields",
+        vec![SemanticType::Bytes, int()],
+        vec![SemanticType::Bool],
+    );
+    let count = outer.u32(input(1));
+    let first = outer.advance(input(1), 4);
+    let zero = outer.n(0);
+    let yes = outer.bool(true);
+    let result = outer.loop_node(
+        "operation-distinct-fields",
+        state,
+        vec![input(0), first.clone(), first, count, zero, yes],
+    );
+    vec![
+        cond.finish(vec![test]),
+        body.finish(vec![input(0), input(1), next, inner_left, valid]),
+        main.finish(vec![out[4].clone()]),
+        outer_cond.finish(vec![test_outer]),
+        outer_body.finish(vec![
+            input(0),
+            input(1),
+            next_outer,
+            left_outer,
+            index,
+            valid_outer,
+        ]),
+        outer.finish(vec![result[5].clone()]),
+    ]
+}
+fn named_graphs() -> Vec<Graph> {
+    // The graph-local interface proves local contracts. Program-level schema
+    // checks must also resolve named fields, required fields and payload types.
+    let mut graphs = string_graphs();
+    graphs.extend(distinct_field_graphs());
+    for tag in [38, 40] {
+        let mut proof = G::new(
+            &format!("operation-named-proof-{tag}"),
+            signature(),
+            vec![SemanticType::Bool],
+        );
+        let op = operation_at(&mut proof);
+        let schema = proof.advance(op, 1);
+        let len = proof.u32(schema.clone());
+        let zero = proof.n(0);
+        let nonempty = proof.compare(Operation::Gt, len, zero);
+        let output = type_at(&mut proof, 4, 0);
+        let out_schema = proof.advance(output, 1);
+        let same = call(
+            &mut proof,
+            "operation-string-equal",
+            vec![input(0), schema.clone(), out_schema],
+            SemanticType::Bool,
+        );
+        let next = proof.skip_blob(schema);
+        let extra = if tag == 38 {
+            let list = proof.field(input(1), 3);
+            let arity = proof.u32(list);
+            let n = proof.u32(next.clone());
+            let size = proof.compare(Operation::Eq, n, arity);
+            let distinct = call(
+                &mut proof,
+                "operation-distinct-fields",
+                vec![input(0), next],
+                SemanticType::Bool,
+            );
+            proof.and(size, distinct)
+        } else {
+            let length = proof.u32(next);
+            let zero = proof.n(0);
+            proof.compare(Operation::Gt, length, zero)
+        };
+        let valid = all(&mut proof, vec![nonempty, same, extra]);
+        graphs.push(proof.finish(vec![valid]));
+        let mut guard = G::new(
+            &format!("operation-types-{tag}"),
+            signature(),
+            vec![SemanticType::Bool],
+        );
+        let output = type_at(&mut guard, 4, 0);
+        let valid_type = kind(&mut guard, output, if tag == 38 { 12 } else { 13 });
+        let valid = choose(
+            &mut guard,
+            valid_type,
+            &format!("operation-named-proof-{tag}"),
+            "operation-invalid",
+            vec![input(0), input(1)],
+            SemanticType::Bool,
+        );
+        graphs.push(guard.finish(vec![valid]));
+    }
+    for tag in [39, 41] {
+        let mut g = G::new(
+            &format!("operation-types-{tag}"),
+            signature(),
+            vec![SemanticType::Bool],
+        );
+        let a = type_at(&mut g, 3, 0);
+        let a = kind(&mut g, a, if tag == 39 { 12 } else { 13 });
+        let op = operation_at(&mut g);
+        let name = g.advance(op, 1);
+        let len = g.u32(name);
+        let zero = g.n(0);
+        let nonempty = g.compare(Operation::Gt, len, zero);
+        let mut flags = vec![a, nonempty];
+        if tag == 41 {
+            let output = type_at(&mut g, 4, 0);
+            flags.push(kind(&mut g, output, 14));
+        }
+        let valid = all(&mut g, flags);
+        graphs.push(g.finish(vec![valid]));
+    }
+    graphs
+}
 fn dispatch(graphs: &mut Vec<Graph>, low: u8, high: u8) -> String {
     if low == high {
-        return if matches!(low, 0..=3 | 17..=37 | 42..=46 | 48 | 66..=73) {
+        return if matches!(low, 0..=3 | 17..=46 | 48 | 66..=73) {
             format!("operation-check-{low}")
         } else {
             "operation-invalid".into()
@@ -1077,6 +1302,7 @@ pub(super) fn graphs() -> Vec<Graph> {
     graphs.extend(composite_graphs());
     graphs.extend(extended_arithmetic_graphs());
     graphs.extend(truncate_graphs());
+    graphs.extend(named_graphs());
     for tag in 22..=25 {
         graphs.push(boolean_graph(tag, if tag == 25 { 1 } else { 2 }));
     }
@@ -1110,6 +1336,10 @@ pub(super) fn graphs() -> Vec<Graph> {
         (35, 1),
         (36, 1),
         (37, 1),
+        (38, usize::MAX),
+        (39, 1),
+        (40, 1),
+        (41, 1),
         (42, 1),
         (43, 0),
         (44, 1),
@@ -1157,6 +1387,11 @@ pub(super) fn graphs() -> Vec<Graph> {
     let pure = equal(&mut main, en, 0);
     let caps = equal(&mut main, cn, 0);
     let pure = main.and(pure, caps);
+    let operation = operation_at(&mut main);
+    let tag = main.byte(operation);
+    let last = main.n(73);
+    let known = main.compare(Operation::Le, tag, last);
+    let pure = main.and(pure, known);
     let valid = choose(
         &mut main,
         pure,

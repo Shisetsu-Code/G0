@@ -1265,7 +1265,7 @@ fn graph_emission_graphs() -> Vec<Graph> {
     );
     let ordered = call(
         &mut main,
-        "scheduler-order",
+        "scheduler-fast-rows",
         vec![nodes.clone(), edges.clone()],
         rows(),
     );

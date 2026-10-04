@@ -95,7 +95,8 @@ jobs:
       - name: Execute direct G0 compiler and native bootstrap stages
         run: |
           cargo build --lib
-          cargo test --test bootstrap_control --test native_aggregate_cli
+          cargo test --test native_aggregate_cli
+          cargo test --test bootstrap_control
 
   windows-editor:
     runs-on: windows-latest

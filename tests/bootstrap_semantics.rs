@@ -1,5 +1,32 @@
 use g0::{bootstrap_compiler::*, execution::Executor, value::Value};
 
+#[test]
+fn g0_integer_assignment_uses_signed_byte_comparison_under_small_step_budget() {
+    use g0::gir::*;
+    let narrow=SemanticType::Integer(IntegerType{min:-7,max:42});
+    let wide=SemanticType::Integer(IntegerType{min:i128::MIN,max:i128::MAX});
+    let mut bytes=g0::graph_binary::encode_semantic_type(&narrow).unwrap();let target=bytes.len() as i128;bytes.extend(g0::graph_binary::encode_semantic_type(&wide).unwrap());
+    let contract=compiler_document().validated_contract().unwrap();let mut limits=compiler_limits();limits.max_steps=1000;
+    let output=Executor::new(&contract,limits).unwrap().run_graph("validator-type-assignable",vec![Value::Bytes(bytes.into()),Value::Integer(0),Value::Integer(target)]).unwrap();
+    assert_eq!(output,vec![Value::Bool(true)]);
+}
+
+#[test]
+fn g0_graph_reader_rejects_literal_outside_declared_output_interval() {
+    let graph=g0::editor::GraphEditor::new().graph().clone();
+    let mut source=g0::graph_binary::encode_graph(&graph).unwrap();
+    let contract=compiler_document().validated_contract().unwrap();
+    let nodes=Executor::new(&contract,compiler_limits()).unwrap().run_graph("reader-graph-ast",vec![Value::Bytes(source.clone().into()),Value::Integer(0)]).unwrap();
+    let [Value::Array(rows)]=nodes.as_slice() else {panic!("AST")};
+    let Value::Array(row)=&rows[0] else {panic!("node")};
+    let Value::Integer(at)=row[2] else {panic!("opcode")};
+    assert_eq!(source[at as usize],0);assert_eq!(source[at as usize+1],1);
+    source[at as usize+2..at as usize+18].copy_from_slice(&43i128.to_le_bytes());
+    let len=source.len() as i128;
+    let output=Executor::new(&contract,compiler_limits()).unwrap().run_graph("reader-graph",vec![Value::Bytes(source.into()),Value::Integer(0)]);
+    assert!(!matches!(output,Ok(ref values) if values==&vec![Value::Integer(len)]));
+}
+
 fn read_type(bytes: Vec<u8>) -> i128 {
     let contract = compiler_document().validated_contract().unwrap();
     let output = Executor::new(&contract, compiler_limits())

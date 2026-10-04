@@ -6,14 +6,21 @@ their canonical binary document. The builder does not inspect or transform
 compiler input. Tests require the checked-in source to match the generated
 definition byte for byte.
 
-The default `compile` entry accepts bytes and returns System V x86-64 assembly.
-Its G0 reader checks G0P 0.3 framing, GIR magic and supported versions, UTF-8
-strings, operation payload framing, type prefix trees, schemas, endpoint tags,
-capability/effect tags and complete consumption of graph blobs and the container.
-It rejects opcodes introduced after the encoded GIR version, duplicate node and
-port identifiers, inverted signed i128 bounds, zero decimal precision and
-big-float precision below two bits. Integer decoding and bounds comparison run
-in G0, including the complete signed i128 range.
+The default `compile` entry aliases `compile-wrapper`, accepts bytes and returns
+System V x86-64 assembly. Its G0 syntax reader checks G0P 0.3 framing, GIR magic
+and supported versions, operation payload framing, type prefix trees, schemas,
+endpoint and capability/effect tags, and complete consumption of graph blobs and
+the container. It rejects opcodes introduced after the encoded GIR version.
+The wrapper uses layout readers to avoid repeating semantic checks on every
+offset-table traversal. Its Rust host and embedded runtime validate semantics.
+
+The separate semantic reader rejects duplicate node and port identifiers,
+inverted signed i128 bounds, zero decimal precision, and big-float precision
+below two bits. It validates endpoint existence, nested type assignment, exact
+input wiring, and local pure operation contracts, including literal bounds and
+checked arithmetic interval proofs. Signed i128 decoding and bytewise bounds
+comparison run in G0. Wiring uses target slot prefixes and a byte bitmap;
+already ordered node tables bypass the general dependency scheduler.
 Separate G0 reader graphs construct program, node and edge offset tables. A G0 scheduler
 orders dependencies before their users and detects cycles when a complete pass
 makes no progress. Tests execute these GIR algorithms with raw bytes or tables
@@ -22,8 +29,9 @@ provided directly to the executor.
 The default output remains an interpreter-backed native wrapper. It embeds
 the document and invokes the linked G0 runtime. The Rust bootstrap host still
 decodes and semantically validates source before invoking this entry. The G0
-reader does not yet replace the complete semantic validator, including type
-assignment, arithmetic proofs, graph linking, operation shapes and linearity.
+reader does not yet replace the complete semantic validator, including control
+contracts, call cycles, schema references, versioned type availability and
+linearity.
 Reproducing the wrapper compiler through multiple stages does not establish
 full compiler self-hosting.
 
@@ -41,7 +49,9 @@ This backend accepts closed pure programs with canonically ordered node and
 port identifiers. It lowers multiple graphs, Subgraph, Select, Loop, Map and
 Match, and supports multiple outputs through private result packs. Dynamic
 native frames hold flattened node outputs and argument slots. Effects and
-unsupported operations are rejected by a G0 domain check. Complete independent
+unsupported operations are rejected by a G0 domain check. G0 also checks graph
+name uniqueness, entry resolution, and references in calls and controls.
+Complete independent
 semantic validation remains unfinished; the Rust bootstrap host still validates
 the source before executing the G0 backend.
 

@@ -168,7 +168,11 @@ fn operation_validator_checks_collections_text_and_result_contracts() {
         std::slice::from_ref(&slice),
         &[integer(0, u64::MAX as i128)]
     ));
-    assert!(!check(&[32], std::slice::from_ref(&slice), &[integer(0, 255)]));
+    assert!(!check(
+        &[32],
+        std::slice::from_ref(&slice),
+        &[integer(0, 255)]
+    ));
     assert!(check(
         &[48],
         &[
@@ -302,4 +306,269 @@ fn operation_validator_division_remainder_and_truncation_cover_signed_extremes()
         &[integer(0, 255)],
         &[integer(0, 256)]
     ));
+}
+
+fn strings(tag: u8, names: &[&str], fields: bool) -> Vec<u8> {
+    let mut out = vec![tag];
+    for (i, name) in names.iter().enumerate() {
+        if fields && i == 1 {
+            out.extend_from_slice(&((names.len() - 1) as u32).to_le_bytes());
+        }
+        out.extend_from_slice(&(name.len() as u32).to_le_bytes());
+        out.extend_from_slice(name.as_bytes());
+    }
+    if fields && names.len() == 1 {
+        out.extend_from_slice(&0u32.to_le_bytes());
+    }
+    out
+}
+#[test]
+fn operation_validator_checks_named_local_contracts_and_distinct_record_fields() {
+    let record = SemanticType::Record("Payload".into());
+    let variant = SemanticType::Variant("Payload".into());
+    assert!(check(
+        &strings(38, &["Payload", "left", "right"], true),
+        &[integer(0, 10), SemanticType::Text],
+        std::slice::from_ref(&record)
+    ));
+    assert!(!check(
+        &strings(38, &["Payload", "left", "left"], true),
+        &[integer(0, 10), SemanticType::Text],
+        std::slice::from_ref(&record)
+    ));
+    assert!(!check(
+        &strings(38, &["Payload", "left", "right"], true),
+        &[integer(0, 10)],
+        std::slice::from_ref(&record)
+    ));
+    assert!(!check(
+        &strings(38, &["Other", "left"], true),
+        &[integer(0, 10)],
+        std::slice::from_ref(&record)
+    ));
+    assert!(check(
+        &strings(39, &["left"], false),
+        std::slice::from_ref(&record),
+        &[integer(0, 10)]
+    ));
+    assert!(!check(
+        &strings(39, &[""], false),
+        std::slice::from_ref(&record),
+        &[integer(0, 10)]
+    ));
+    assert!(check(
+        &strings(40, &["Payload", "answer"], false),
+        &[integer(0, 10)],
+        std::slice::from_ref(&variant)
+    ));
+    assert!(!check(
+        &strings(40, &["Other", "answer"], false),
+        &[integer(0, 10)],
+        std::slice::from_ref(&variant)
+    ));
+    assert!(!check(
+        &strings(40, &["Payload", ""], false),
+        &[integer(0, 10)],
+        std::slice::from_ref(&variant)
+    ));
+    assert!(check(
+        &strings(41, &["answer"], false),
+        std::slice::from_ref(&variant),
+        &[SemanticType::Option(Box::new(integer(0, 10)))]
+    ));
+    assert!(!check(
+        &strings(41, &["answer"], false),
+        &[record],
+        &[integer(0, 10)]
+    ));
+}
+
+#[test]
+fn operation_validator_accepts_every_remaining_pure_primitive_tag() {
+    for tag in 18..=21 {
+        assert!(
+            check(
+                &[tag],
+                &[integer(-1, 1), integer(-1, 1)],
+                &[SemanticType::Bool]
+            ),
+            "tag {tag}"
+        );
+    }
+    for tag in 23..=24 {
+        assert!(
+            check(
+                &[tag],
+                &[SemanticType::Bool, SemanticType::Bool],
+                &[SemanticType::Bool]
+            ),
+            "tag {tag}"
+        );
+    }
+    assert!(check(&[25], &[SemanticType::Bool], &[SemanticType::Bool]));
+    for (tag, inputs, output) in [
+        (
+            33,
+            vec![SemanticType::Text, SemanticType::Text],
+            SemanticType::Text,
+        ),
+        (
+            34,
+            vec![SemanticType::Bytes, SemanticType::Bytes],
+            SemanticType::Bytes,
+        ),
+        (35, vec![SemanticType::Text], SemanticType::Bytes),
+        (37, vec![integer(i128::MIN, i128::MAX)], SemanticType::Text),
+        (
+            43,
+            vec![],
+            SemanticType::Option(Box::new(SemanticType::Bool)),
+        ),
+        (
+            44,
+            vec![integer(0, 1)],
+            SemanticType::Result(Box::new(integer(0, 255)), Box::new(SemanticType::Text)),
+        ),
+        (
+            71,
+            vec![integer(0, 1), integer(0, 1)],
+            SemanticType::Result(
+                Box::new(integer(i128::MIN, i128::MAX)),
+                Box::new(SemanticType::Bool),
+            ),
+        ),
+        (
+            72,
+            vec![integer(0, 1), integer(0, 1)],
+            SemanticType::Result(
+                Box::new(integer(i128::MIN, i128::MAX)),
+                Box::new(SemanticType::Bool),
+            ),
+        ),
+        (
+            73,
+            vec![SemanticType::Result(
+                Box::new(SemanticType::Text),
+                Box::new(SemanticType::Bytes),
+            )],
+            SemanticType::Bool,
+        ),
+    ] {
+        assert!(check(&[tag], &inputs, &[output]), "tag {tag}");
+    }
+    assert!(check(
+        &strings(38, &["Payload"], true),
+        &[],
+        &[SemanticType::Record("Payload".into())]
+    ));
+    for tag in [4, 5, 6, 7, 47, 49, 65, 74] {
+        assert!(
+            !check(&[tag], &[], &[]),
+            "unsupported tag {tag} must fail closed"
+        );
+    }
+    assert!(!check(&[74],&[SemanticType::Result(Box::new(SemanticType::Text),Box::new(SemanticType::Bytes))],&[SemanticType::Bool]));
+}
+
+#[test]
+fn operation_validator_integer_proofs_agree_with_gir_reference() {
+    use g0::gir::*;
+    let ranges = [
+        (i128::MIN, i128::MIN),
+        (-7, 4),
+        (0, 0),
+        (2, 11),
+        (i128::MAX, i128::MAX),
+    ];
+    for (tag, op, a, b, out) in [
+        (1, Operation::Add, ranges[1], ranges[3], (-5, 15)),
+        (
+            1,
+            Operation::Add,
+            ranges[4],
+            ranges[3],
+            (i128::MIN, i128::MAX),
+        ),
+        (
+            2,
+            Operation::Sub,
+            ranges[0],
+            ranges[3],
+            (i128::MIN, i128::MAX),
+        ),
+        (3, Operation::Mul, ranges[1], ranges[3], (-77, 44)),
+        (
+            3,
+            Operation::Mul,
+            ranges[0],
+            (-1, -1),
+            (i128::MIN, i128::MAX),
+        ),
+        (
+            26,
+            Operation::Div,
+            ranges[0],
+            (-1, 1),
+            (i128::MIN, i128::MIN),
+        ),
+        (
+            26,
+            Operation::Div,
+            ranges[1],
+            ranges[2],
+            (i128::MIN, i128::MAX),
+        ),
+        (
+            27,
+            Operation::Rem,
+            ranges[0],
+            (-1, -1),
+            (i128::MIN, i128::MAX),
+        ),
+        (
+            27,
+            Operation::Rem,
+            ranges[1],
+            ranges[0],
+            (-i128::MAX, i128::MAX),
+        ),
+    ] {
+        let inputs = vec![integer(a.0, a.1), integer(b.0, b.1)];
+        let output = integer(out.0, out.1);
+        let p = |id, ty| Port {
+            id,
+            name: format!("p{id}"),
+            ty,
+        };
+        let mut graph = Graph::new("proof");
+        graph.inputs = vec![p(0, inputs[0].clone()), p(1, inputs[1].clone())];
+        graph.outputs = vec![p(0, output.clone())];
+        graph.nodes = vec![Node {
+            id: 1,
+            operation: op,
+            inputs: graph.inputs.clone(),
+            outputs: graph.outputs.clone(),
+            effects: Default::default(),
+            required_capabilities: Default::default(),
+        }];
+        graph.edges = vec![
+            Edge {
+                from: SourceEndpoint::GraphInput(0),
+                to: TargetEndpoint::NodeInput { node: 1, port: 0 },
+            },
+            Edge {
+                from: SourceEndpoint::GraphInput(1),
+                to: TargetEndpoint::NodeInput { node: 1, port: 1 },
+            },
+            Edge {
+                from: SourceEndpoint::NodeOutput { node: 1, port: 0 },
+                to: TargetEndpoint::GraphOutput(0),
+            },
+        ];
+        assert_eq!(
+            check(&[tag], &inputs, &[output]),
+            g0::gir_validate::validate(&graph).is_ok(),
+            "tag {tag}, {a:?}, {b:?}, {out:?}"
+        );
+    }
 }
