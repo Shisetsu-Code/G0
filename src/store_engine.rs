@@ -194,9 +194,8 @@ impl NativeStore {
         }
         std::sync::atomic::compiler_fence(Ordering::SeqCst);
         let cipher = aead::LessSafeKey::new(cipher?);
-        let instance = INSTANCE
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_add(1))
-            .map_err(|_| StoreError::Limit)?;
+        let instance =
+            crate::runtime_resources::fresh_identity(&INSTANCE).ok_or(StoreError::Limit)?;
         let mut store = Self {
             root: permit.root,
             _lock: lock,

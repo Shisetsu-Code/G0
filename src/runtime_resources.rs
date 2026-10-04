@@ -16,6 +16,16 @@ use std::{
 };
 
 static ARENA_ID: AtomicU64 = AtomicU64::new(1);
+pub(crate) fn fresh_identity(counter: &AtomicU64) -> Option<u64> {
+    let mut current = counter.load(Ordering::Relaxed);
+    loop {
+        let next = current.checked_add(1)?;
+        match counter.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(previous) => return Some(previous),
+            Err(actual) => current = actual,
+        }
+    }
+}
 pub type RegionId = u64;
 #[derive(Debug)]
 pub struct RegionHandle {
@@ -94,9 +104,7 @@ pub struct RegionArena {
 }
 impl RegionArena {
     pub fn new(max_bytes: usize) -> Result<Self, RegionError> {
-        let id = ARENA_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |v| v.checked_add(1))
-            .map_err(|_| RegionError::Limit)?;
+        let id = fresh_identity(&ARENA_ID).ok_or(RegionError::Limit)?;
         Ok(Self {
             id,
             max_bytes,
