@@ -493,6 +493,159 @@ fn graph_tasks_require_explicit_authority_and_join_once() {
     );
 }
 
+#[test]
+fn scoped_tasks_execute_region_effects_under_owned_child_scopes() {
+    let body = region_program().graphs.remove(0);
+    let task = SemanticType::Unique(Box::new(SemanticType::Reference(
+        "g0.scoped-task:regions".into(),
+    )));
+    let spawn = Capability::new(
+        CapabilityClass::LocalExecution,
+        "spawn-scoped",
+        "regions",
+        "tasks",
+    );
+    let join = Capability::new(
+        CapabilityClass::LocalExecution,
+        "join-scoped",
+        "regions",
+        "tasks",
+    );
+    let effects = BTreeSet::from([Effect::LocalExecution, Effect::MemoryWrite]);
+    let mut graph = Graph::new("scoped-driver");
+    graph.inputs = body.inputs.clone();
+    graph.outputs = body.outputs.clone();
+    let port = Port {
+        id: 0,
+        name: "task".into(),
+        ty: task,
+    };
+    graph.nodes = vec![
+        Node {
+            id: 1,
+            operation: Operation::TaskSpawnScoped {
+                body: "regions".into(),
+                max_steps: 1000,
+                max_value_bytes: 1_000_000,
+            },
+            inputs: body.inputs.clone(),
+            outputs: vec![port.clone()],
+            effects: effects.clone(),
+            required_capabilities: BTreeSet::from([spawn.clone()]),
+        },
+        Node {
+            id: 2,
+            operation: Operation::TaskJoinScoped {
+                body: "regions".into(),
+            },
+            inputs: vec![port],
+            outputs: body.outputs.clone(),
+            effects,
+            required_capabilities: BTreeSet::from([join.clone()]),
+        },
+    ];
+    graph.edges = vec![
+        Edge {
+            from: SourceEndpoint::GraphInput(0),
+            to: TargetEndpoint::NodeInput { node: 1, port: 0 },
+        },
+        Edge {
+            from: SourceEndpoint::NodeOutput { node: 1, port: 0 },
+            to: TargetEndpoint::NodeInput { node: 2, port: 0 },
+        },
+    ];
+    for id in [0, 1] {
+        graph.edges.push(Edge {
+            from: SourceEndpoint::NodeOutput { node: 2, port: id },
+            to: TargetEndpoint::GraphOutput(id),
+        });
+    }
+    let bytes = g0::graph_binary::encode_graph(&graph).unwrap();
+    let graph = g0::graph_binary_decode::decode_graph(&bytes).unwrap();
+    let program = Arc::new(g0::program::ProgramContract {
+        entry_graph: Some(graph.name.clone()),
+        graphs: vec![graph.clone(), body],
+        ..Default::default()
+    });
+    let args = vec![Value::Bytes(Arc::from([9]))];
+    let mut denied =
+        ResourceHost::new(program.clone(), Default::default(), BTreeSet::new()).unwrap();
+    assert!(matches!(
+        denied.run_graph("scoped-driver", args.clone()),
+        Err(g0::execution::RuntimeError::MissingCapability(_))
+    ));
+    let mut host = ResourceHost::new(
+        program.clone(),
+        Default::default(),
+        BTreeSet::from([spawn.clone(), join.clone()]),
+    )
+    .unwrap();
+    assert_eq!(
+        host.run_graph("scoped-driver", args.clone()).unwrap(),
+        vec![Value::Bytes(Arc::from([9, 0, 0, 0])), Value::Bool(true)]
+    );
+    let mut starving = graph.nodes[0].clone();
+    starving.operation = Operation::TaskSpawnScoped {
+        body: "regions".into(),
+        max_steps: 1,
+        max_value_bytes: 1_000_000,
+    };
+    let task = host.execute(&starving, &args).unwrap();
+    assert!(matches!(
+        host.execute(&graph.nodes[1], &task),
+        Err(g0::execution::RuntimeError::StepLimit)
+    ));
+    let mut invalid = program.as_ref().clone();
+    invalid.graphs[0].nodes[0]
+        .effects
+        .remove(&Effect::MemoryWrite);
+    assert!(
+        ResourceHost::new(
+            Arc::new(invalid),
+            Default::default(),
+            BTreeSet::from([spawn.clone(), join.clone()])
+        )
+        .is_err()
+    );
+    let mut escaping = program.as_ref().clone();
+    let handle_type = SemanticType::Unique(Box::new(SemanticType::Reference("g0.buffer".into())));
+    escaping.graphs[0].outputs[0].ty = handle_type.clone();
+    escaping.graphs[0].nodes[1].outputs[0].ty = handle_type.clone();
+    escaping.graphs[1].outputs[0].ty = handle_type;
+    escaping.graphs[1]
+        .edges
+        .iter_mut()
+        .find(|e| e.to == TargetEndpoint::GraphOutput(0))
+        .unwrap()
+        .from = SourceEndpoint::NodeOutput { node: 7, port: 1 };
+    let mut host = ResourceHost::new(
+        Arc::new(escaping),
+        Default::default(),
+        BTreeSet::from([spawn.clone(), join.clone()]),
+    )
+    .unwrap();
+    assert_eq!(
+        host.run_graph("scoped-driver", args.clone()),
+        Err(g0::execution::RuntimeError::TypeMismatch {
+            graph: "regions".into(),
+            node: None
+        })
+    );
+    let mut limited = ResourceHost::new(
+        program,
+        ExecutionLimits {
+            max_value_bytes: 1_500_000,
+            ..Default::default()
+        },
+        BTreeSet::from([spawn, join]),
+    )
+    .unwrap();
+    assert!(matches!(
+        limited.run_graph("scoped-driver", args),
+        Err(g0::execution::RuntimeError::MemoryLimit)
+    ));
+}
+
 fn region_program() -> g0::program::ProgramContract {
     let region = SemanticType::Unique(Box::new(SemanticType::Reference("g0.region".into())));
     let buffer = SemanticType::Unique(Box::new(SemanticType::Reference("g0.buffer".into())));

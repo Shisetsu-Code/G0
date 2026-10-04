@@ -62,6 +62,22 @@ joined while preserving an explicit effect order. The child receives only its
 declared payload inputs. Children performing host effects require an additional
 task execution profile; this profile deliberately accepts pure child graphs.
 
+G0G 0.6 adds `TaskSpawnScoped` and `TaskJoinScoped` (62..63). Their bodies may
+perform MemoryWrite operations in a separately owned ResourceHost. The task
+kind is `g0.scoped-task:BODY` and exact capabilities use `spawn-scoped` and
+`join-scoped`. Both nodes declare LocalExecution plus the body's MemoryWrite
+summary. Child steps remain bounded and allocation reservations cover both the
+child executor and resource scope (twice the requested value-byte quota).
+No parent grants are inherited. External host effects require a separate
+explicit child-host binding and are rejected by this profile.
+
+Each scoped child owns and destroys its regions, preserving secret wipe behavior.
+Native handles cannot be passed into or returned from scoped tasks, including
+handles hidden inside records, variants or protected wrappers. Returned owned
+values remain valid after scope destruction; a handle escape fails explicitly.
+Cancellation comes from the parent task group; destroying a completed child's
+private resource group does not cancel its parent or siblings.
+
 `ResourceHost` bounds a scope to 16,384 cumulative opaque handle identities.
 Its resource allocation quota includes region copies, conservative metadata
 charges, and reserved child task memory. The Executor's graph-value quota is

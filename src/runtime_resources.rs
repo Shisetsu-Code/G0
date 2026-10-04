@@ -353,11 +353,37 @@ impl TaskGroup {
         grants: BTreeSet<Capability>,
         limits: ExecutionLimits,
     ) -> Result<TaskId, TaskError> {
+        self.spawn_profile(program, graph, inputs, grants, limits, false)
+    }
+    pub fn spawn_scoped(
+        &mut self,
+        program: Arc<ProgramContract>,
+        graph: String,
+        inputs: Vec<Value>,
+        limits: ExecutionLimits,
+    ) -> Result<TaskId, TaskError> {
+        self.spawn_profile(program, graph, inputs, BTreeSet::new(), limits, true)
+    }
+    fn spawn_profile(
+        &mut self,
+        program: Arc<ProgramContract>,
+        graph: String,
+        inputs: Vec<Value>,
+        grants: BTreeSet<Capability>,
+        limits: ExecutionLimits,
+        scoped: bool,
+    ) -> Result<TaskId, TaskError> {
         if self.cancel.is_cancelled() {
             return Err(TaskError::Cancelled);
         }
         if !grants.is_subset(&self.grants) {
             return Err(TaskError::Authority);
+        }
+        if scoped && inputs.iter().any(Value::contains_native_handles) {
+            return Err(TaskError::Runtime(RuntimeError::TypeMismatch {
+                graph,
+                node: None,
+            }));
         }
         let steps = self
             .steps_reserved
@@ -366,7 +392,12 @@ impl TaskGroup {
             .ok_or(TaskError::Budget)?;
         let bytes = self
             .bytes_reserved
-            .checked_add(limits.max_value_bytes)
+            .checked_add(
+                limits
+                    .max_value_bytes
+                    .checked_mul(if scoped { 2 } else { 1 })
+                    .ok_or(TaskError::Budget)?,
+            )
             .filter(|v| *v <= self.limits.max_value_bytes)
             .ok_or(TaskError::Budget)?;
         if limits.max_call_depth > self.limits.max_call_depth || self.next >= 4096 {
@@ -381,7 +412,20 @@ impl TaskGroup {
                 for grant in grants {
                     runtime.grant(grant);
                 }
-                runtime.run_graph(&graph, inputs)
+                if scoped {
+                    let mut host = crate::resource_host::ResourceHost::new(
+                        program.clone(),
+                        limits,
+                        BTreeSet::new(),
+                    )?;
+                    let values = runtime.run_with_host(&graph, inputs, &mut host)?;
+                    if values.iter().any(Value::contains_native_handles) {
+                        return Err(RuntimeError::TypeMismatch { graph, node: None });
+                    }
+                    Ok(values)
+                } else {
+                    runtime.run_graph(&graph, inputs)
+                }
             })
             .map_err(TaskError::Spawn)?;
         self.steps_reserved = steps;

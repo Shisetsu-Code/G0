@@ -8,7 +8,7 @@ use crate::gir::{
 
 const MAGIC: &[u8; 4] = b"G0G\0";
 const FORMAT_MAJOR: u16 = 0;
-const FORMAT_MINOR: u16 = 5;
+const FORMAT_MINOR: u16 = 6;
 const MAX_TYPE_DEPTH: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -230,7 +230,8 @@ fn read_operation(reader: &mut Reader<'_>, minor: u16) -> Result<Operation, Bina
         2 => 48,
         3 => 57,
         4 => 59,
-        _ => 61,
+        5 => 61,
+        _ => 63,
     };
     if tag > maximum {
         return Err(BinaryDecodeIssue::InvalidTag {
@@ -326,6 +327,14 @@ fn read_operation(reader: &mut Reader<'_>, minor: u16) -> Result<Operation, Bina
             max_value_bytes: reader.u64()?,
         },
         55 => Operation::TaskJoin {
+            body: reader.string()?,
+        },
+        62 => Operation::TaskSpawnScoped {
+            body: reader.string()?,
+            max_steps: reader.u64()?,
+            max_value_bytes: reader.u64()?,
+        },
+        63 => Operation::TaskJoinScoped {
             body: reader.string()?,
         },
         29 => {

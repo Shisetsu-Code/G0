@@ -270,7 +270,9 @@ impl EffectHost for ChainedHost<'_> {
             | Operation::RegionRead
             | Operation::RegionClose
             | Operation::TaskSpawn { .. }
-            | Operation::TaskJoin { .. } => self.resources.execute(node, inputs),
+            | Operation::TaskJoin { .. }
+            | Operation::TaskSpawnScoped { .. }
+            | Operation::TaskJoinScoped { .. } => self.resources.execute(node, inputs),
             _ => self.fallback.execute(node, inputs),
         }
     }
@@ -290,14 +292,26 @@ impl EffectHost for ResourceHost {
                     body,
                     max_steps,
                     max_value_bytes,
+                }
+                | Operation::TaskSpawnScoped {
+                    body,
+                    max_steps,
+                    max_value_bytes,
                 },
                 inputs,
             ) => {
-                let cap = Capability::new(CapabilityClass::LocalExecution, "spawn", body, "tasks");
+                let scoped = matches!(node.operation, Operation::TaskSpawnScoped { .. });
+                let action = if scoped { "spawn-scoped" } else { "spawn" };
+                let kind = if scoped { "g0.scoped-task" } else { "g0.task" };
+                let cap = Capability::new(CapabilityClass::LocalExecution, action, body, "tasks");
                 if !self.grants.contains(&cap) || !node.required_capabilities.contains(&cap) {
                     return Err(RuntimeError::MissingCapability(cap));
                 }
-                self.charge(*max_value_bytes)?;
+                self.charge(
+                    max_value_bytes
+                        .checked_mul(if scoped { 2 } else { 1 })
+                        .ok_or(RuntimeError::MemoryLimit)?,
+                )?;
                 let arity = self
                     .program
                     .graphs
@@ -312,34 +326,45 @@ impl EffectHost for ResourceHost {
                 {
                     return Err(failure(node, "invalid-task-inputs"));
                 }
-                let id = self
-                    .tasks
-                    .spawn(
+                let limits = ExecutionLimits {
+                    max_steps: *max_steps,
+                    max_value_bytes: *max_value_bytes,
+                    max_call_depth: self.limits.max_call_depth,
+                };
+                let id = if scoped {
+                    self.tasks.spawn_scoped(
+                        self.program.clone(),
+                        body.clone(),
+                        inputs[..arity].to_vec(),
+                        limits,
+                    )
+                } else {
+                    self.tasks.spawn(
                         self.program.clone(),
                         body.clone(),
                         inputs[..arity].to_vec(),
                         BTreeSet::new(),
-                        ExecutionLimits {
-                            max_steps: *max_steps,
-                            max_value_bytes: *max_value_bytes,
-                            max_call_depth: self.limits.max_call_depth,
-                        },
+                        limits,
                     )
-                    .map_err(|_| failure(node, "task-budget-or-cancelled"))?;
+                }
+                .map_err(|_| failure(node, "task-budget-or-cancelled"))?;
                 let mut outputs = vec![self.issue(
                     Resource::Task {
                         body: body.clone(),
                         id,
                     },
-                    &format!("g0.task:{body}"),
+                    &format!("{kind}:{body}"),
                 )];
                 if node.outputs.len() == 2 {
                     outputs.push(Value::Bool(true));
                 }
                 Ok(outputs)
             }
-            (Operation::TaskJoin { body }, inputs) => {
-                let cap = Capability::new(CapabilityClass::LocalExecution, "join", body, "tasks");
+            (Operation::TaskJoin { body } | Operation::TaskJoinScoped { body }, inputs) => {
+                let scoped = matches!(node.operation, Operation::TaskJoinScoped { .. });
+                let action = if scoped { "join-scoped" } else { "join" };
+                let kind = if scoped { "g0.scoped-task" } else { "g0.task" };
+                let cap = Capability::new(CapabilityClass::LocalExecution, action, body, "tasks");
                 if !self.grants.contains(&cap) || !node.required_capabilities.contains(&cap) {
                     return Err(RuntimeError::MissingCapability(cap));
                 }
@@ -349,7 +374,7 @@ impl EffectHost for ResourceHost {
                 {
                     return Err(failure(node, "invalid-task-inputs"));
                 }
-                match self.take(&inputs[0], &format!("g0.task:{body}"), node)? {
+                match self.take(&inputs[0], &format!("{kind}:{body}"), node)? {
                     Resource::Task { body: actual, id } if actual == *body => {
                         let mut outputs = self
                             .tasks

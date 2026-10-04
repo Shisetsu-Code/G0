@@ -6,7 +6,7 @@ use crate::graph_format::canonicalize_graph;
 
 const MAGIC: &[u8; 4] = b"G0G\0";
 const FORMAT_MAJOR: u16 = 0;
-const FORMAT_MINOR: u16 = 5;
+const FORMAT_MINOR: u16 = 6;
 const MAX_TYPE_DEPTH: usize = 128;
 
 pub fn encode_semantic_type(ty: &SemanticType) -> Result<Vec<u8>, BinaryGraphIssue> {
@@ -318,6 +318,20 @@ fn put_operation(out: &mut Vec<u8>, operation: &Operation) -> Result<(), BinaryG
         }
         Operation::TaskJoin { body } => {
             put_u8(out, 55);
+            put_string(out, body)?;
+        }
+        Operation::TaskSpawnScoped {
+            body,
+            max_steps,
+            max_value_bytes,
+        } => {
+            put_u8(out, 62);
+            put_string(out, body)?;
+            put_u64(out, *max_steps);
+            put_u64(out, *max_value_bytes);
+        }
+        Operation::TaskJoinScoped { body } => {
+            put_u8(out, 63);
             put_string(out, body)?;
         }
         Operation::Truncate { bits, signed } => {

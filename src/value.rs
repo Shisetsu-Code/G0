@@ -72,6 +72,29 @@ impl From<&Literal> for Value {
 }
 
 impl Value {
+    pub(crate) fn contains_native_handles(&self) -> bool {
+        self.contains_handles_at(0, &mut 0)
+    }
+    fn contains_handles_at(&self, depth: usize, visited: &mut usize) -> bool {
+        if depth >= 128 || *visited >= 1_000_000 {
+            return true;
+        }
+        *visited += 1;
+        match self {
+            Self::NativeHandle(_) => true,
+            Self::Array(v) => v.iter().any(|v| v.contains_handles_at(depth + 1, visited)),
+            Self::Record { fields, .. } => fields
+                .values()
+                .any(|v| v.contains_handles_at(depth + 1, visited)),
+            Self::Variant { payload, .. }
+            | Self::Option(Some(payload))
+            | Self::Result(Ok(payload))
+            | Self::Result(Err(payload))
+            | Self::Secret(payload)
+            | Self::Credential(payload) => payload.contains_handles_at(depth + 1, visited),
+            _ => false,
+        }
+    }
     pub fn fits(&self, ty: &SemanticType, schemas: &[DataSchema]) -> bool {
         self.fits_at(ty, schemas, 0, &mut 0)
     }

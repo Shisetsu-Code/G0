@@ -54,8 +54,9 @@ explicit error. Budgets are reserved cumulatively and are not recycled on join.
 
 GIR region/buffer handles and pure task spawn/join execute through ResourceHost;
 see `graph-resources.md`. Child and secret region constructors execute with
-inherited quotas/lifetimes and protected read types. Effectful child tasks still
-require an additional execution profile.
+inherited quotas/lifetimes and protected read types. Scoped child tasks execute
+owned region effects, enforce handle containment and reserve both child quotas.
+External child host effects require an explicit additional binding.
 
 ## Canonical formats
 
@@ -70,6 +71,7 @@ G0G 0.4 adds credential operations 58..59; readers retain versions 0.1..0.3.
 Older version headers cannot introduce the new operation tags.
 G0G 0.5 adds secret-root and child-region constructors (60..61), preserving all
 previous operation encodings and retaining readers for 0.1..0.4.
+G0G 0.6 adds scoped task spawn/join (62..63) and retains readers for 0.1..0.5.
 
 G0P 0.2 appends a schema registry after the graph list. It consists of a u32 count;
 each schema has a u32-length UTF-8 name, u32 version and u32 field count. Each field

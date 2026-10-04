@@ -288,6 +288,14 @@ pub enum Operation {
     TaskJoin {
         body: String,
     },
+    TaskSpawnScoped {
+        body: String,
+        max_steps: u64,
+        max_value_bytes: u64,
+    },
+    TaskJoinScoped {
+        body: String,
+    },
     Truncate {
         bits: u16,
         signed: bool,
