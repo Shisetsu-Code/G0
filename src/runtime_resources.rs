@@ -1,7 +1,7 @@
 //! Executable region lifetimes and structured task scopes for the native host.
 use crate::{
-    execution::{Cancellation, ExecutionLimits, Executor, RuntimeError},
-    gir::Capability,
+    execution::{Cancellation, EffectHost, ExecutionLimits, Executor, RuntimeError},
+    gir::{Capability, CapabilityClass},
     program::ProgramContract,
     value::Value,
 };
@@ -318,6 +318,26 @@ pub enum TaskError {
     Runtime(RuntimeError),
 }
 pub type TaskId = u64;
+pub trait TaskEffectHost: EffectHost + Send {
+    /// Called only after successful execution and output/lifetime checks.
+    fn finish(&mut self) -> Result<(), &'static str> {
+        Ok(())
+    }
+}
+pub trait TaskEffectHostFactory: Send + Sync {
+    /// The trusted binding must check delegated grants and bound its I/O.
+    fn create(
+        &self,
+        graph: &str,
+        grants: &BTreeSet<Capability>,
+        cancellation: Cancellation,
+    ) -> Result<Box<dyn TaskEffectHost>, RuntimeError>;
+}
+enum ChildProfile {
+    Pure,
+    Scoped,
+    Hosted(Arc<dyn TaskEffectHostFactory>),
+}
 pub struct TaskGroup {
     limits: ExecutionLimits,
     steps_reserved: u64,
@@ -353,7 +373,7 @@ impl TaskGroup {
         grants: BTreeSet<Capability>,
         limits: ExecutionLimits,
     ) -> Result<TaskId, TaskError> {
-        self.spawn_profile(program, graph, inputs, grants, limits, false)
+        self.spawn_profile(program, graph, inputs, grants, limits, ChildProfile::Pure)
     }
     pub fn spawn_scoped(
         &mut self,
@@ -362,7 +382,32 @@ impl TaskGroup {
         inputs: Vec<Value>,
         limits: ExecutionLimits,
     ) -> Result<TaskId, TaskError> {
-        self.spawn_profile(program, graph, inputs, BTreeSet::new(), limits, true)
+        self.spawn_profile(
+            program,
+            graph,
+            inputs,
+            BTreeSet::new(),
+            limits,
+            ChildProfile::Scoped,
+        )
+    }
+    pub fn spawn_hosted(
+        &mut self,
+        program: Arc<ProgramContract>,
+        graph: String,
+        inputs: Vec<Value>,
+        grants: BTreeSet<Capability>,
+        limits: ExecutionLimits,
+        factory: Arc<dyn TaskEffectHostFactory>,
+    ) -> Result<TaskId, TaskError> {
+        self.spawn_profile(
+            program,
+            graph,
+            inputs,
+            grants,
+            limits,
+            ChildProfile::Hosted(factory),
+        )
     }
     fn spawn_profile(
         &mut self,
@@ -371,12 +416,23 @@ impl TaskGroup {
         inputs: Vec<Value>,
         grants: BTreeSet<Capability>,
         limits: ExecutionLimits,
-        scoped: bool,
+        profile: ChildProfile,
     ) -> Result<TaskId, TaskError> {
         if self.cancel.is_cancelled() {
             return Err(TaskError::Cancelled);
         }
         if !grants.is_subset(&self.grants) {
+            return Err(TaskError::Authority);
+        }
+        let scoped = !matches!(profile, ChildProfile::Pure);
+        if matches!(profile, ChildProfile::Hosted(_))
+            && grants.iter().any(|c| {
+                matches!(
+                    c.class,
+                    CapabilityClass::LocalExecution | CapabilityClass::RemoteExecution
+                )
+            })
+        {
             return Err(TaskError::Authority);
         }
         if scoped && inputs.iter().any(Value::contains_native_handles) {
@@ -408,19 +464,47 @@ impl TaskGroup {
             .name(format!("g0-task-{}", self.next))
             .spawn(move || {
                 let mut runtime = Executor::new(&program, limits)?;
-                runtime.set_cancellation(cancel);
-                for grant in grants {
-                    runtime.grant(grant);
+                runtime.set_cancellation(cancel.clone());
+                for grant in &grants {
+                    runtime.grant(grant.clone());
                 }
                 if scoped {
                     let mut host = crate::resource_host::ResourceHost::new(
                         program.clone(),
                         limits,
-                        BTreeSet::new(),
+                        grants.clone(),
                     )?;
-                    let values = runtime.run_with_host(&graph, inputs, &mut host)?;
+                    let mut fallback = match profile {
+                        ChildProfile::Hosted(factory) => {
+                            Some(factory.create(&graph, &grants, cancel.clone())?)
+                        }
+                        _ => None,
+                    };
+                    let values = if let Some(fallback) = fallback.as_mut() {
+                        runtime.run_with_host(
+                            &graph,
+                            inputs,
+                            &mut crate::resource_host::ChainedHost {
+                                resources: &mut host,
+                                fallback: fallback.as_mut(),
+                            },
+                        )?
+                    } else {
+                        runtime.run_with_host(&graph, inputs, &mut host)?
+                    };
                     if values.iter().any(Value::contains_native_handles) {
                         return Err(RuntimeError::TypeMismatch { graph, node: None });
+                    }
+                    if cancel.is_cancelled() {
+                        return Err(RuntimeError::Cancelled);
+                    }
+                    if let Some(fallback) = fallback.as_mut() {
+                        fallback
+                            .finish()
+                            .map_err(|code| RuntimeError::HostCompletion {
+                                graph: graph.clone(),
+                                code,
+                            })?;
                     }
                     Ok(values)
                 } else {

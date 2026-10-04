@@ -464,6 +464,8 @@ fn validate_operation(node: &Node, report: &mut ValidationReport) {
         | Operation::TaskJoin { .. }
         | Operation::TaskSpawnScoped { .. }
         | Operation::TaskJoinScoped { .. }
+        | Operation::TaskSpawnHosted { .. }
+        | Operation::TaskJoinHosted { .. }
         | Operation::Map { .. }
         | Operation::Match { .. }
         | Operation::Loop { .. }

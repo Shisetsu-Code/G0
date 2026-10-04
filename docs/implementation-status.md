@@ -38,6 +38,9 @@ encrypted loopback round trip.
 GIR also executes opaque linear region/buffer handles and bounded pure child
 tasks through `ResourceHost`, including CLI/editor/native-wrapper/service
 hosting. See `graph-resources.md` for the current interfaces and profiles.
+Explicitly hosted children delegate only parent-held requirements through a
+per-child host factory. The storage provider uses independent transactions,
+commits after valid results and drops writes on child execution failure.
 
 Aggregate x86 lowering, online migration/type-change profiles, trusted witness providers and
 advanced scheduling/remote-execution profiles still require implementation.

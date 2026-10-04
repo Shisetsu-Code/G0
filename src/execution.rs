@@ -55,6 +55,7 @@ pub enum RuntimeError {
     MissingCapability(Capability),
     Unsupported { graph: String, node: NodeId },
     InvalidHostResult,
+    HostCompletion { graph: String, code: &'static str },
     EffectFailure { node: NodeId, code: &'static str },
 }
 

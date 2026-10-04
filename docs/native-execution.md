@@ -56,7 +56,9 @@ GIR region/buffer handles and pure task spawn/join execute through ResourceHost;
 see `graph-resources.md`. Child and secret region constructors execute with
 inherited quotas/lifetimes and protected read types. Scoped child tasks execute
 owned region effects, enforce handle containment and reserve both child quotas.
-External child host effects require an explicit additional binding.
+Hosted child tasks accept explicitly delegated effects through a per-child host
+factory; the storage factory stages and commits each child's own transaction.
+See `graph-resources.md` for delegation and independent-commit boundaries.
 
 ## Canonical formats
 
@@ -72,6 +74,7 @@ Older version headers cannot introduce the new operation tags.
 G0G 0.5 adds secret-root and child-region constructors (60..61), preserving all
 previous operation encodings and retaining readers for 0.1..0.4.
 G0G 0.6 adds scoped task spawn/join (62..63) and retains readers for 0.1..0.5.
+G0G 0.7 adds explicitly hosted task spawn/join (64..65), retaining 0.1..0.6.
 
 G0P 0.2 appends a schema registry after the graph list. It consists of a u32 count;
 each schema has a u32-length UTF-8 name, u32 version and u32 field count. Each field

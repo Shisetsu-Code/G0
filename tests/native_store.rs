@@ -97,6 +97,296 @@ fn open(temp: &Temp) -> NativeStore {
 }
 
 #[test]
+fn hosted_child_storage_tasks_commit_valid_results_and_abort_failed_execution() {
+    use g0::{gir::*, resource_host::ResourceHost, storage_host::StorageTaskFactory};
+    let temp = Temp::new();
+    let store = Arc::new(std::sync::Mutex::new(open(&temp)));
+    let principal = Principal::new("alice", "tenant-a");
+    let create = Capability::new(CapabilityClass::Storage, "create", "Message", "tenant-a");
+    let read = Capability::new(CapabilityClass::Storage, "read", "Message", "tenant-a");
+    let delegated = BTreeSet::from([create.clone(), read.clone()]);
+    let spawn = Capability::new(
+        CapabilityClass::LocalExecution,
+        "spawn-hosted",
+        "store-child",
+        "tasks",
+    );
+    let join = Capability::new(
+        CapabilityClass::LocalExecution,
+        "join-hosted",
+        "store-child",
+        "tasks",
+    );
+    let version = SemanticType::Integer(IntegerType {
+        min: 0,
+        max: u64::MAX as i128,
+    });
+    let record = SemanticType::Record("Message".into());
+    let ports = |types: Vec<SemanticType>| {
+        types
+            .into_iter()
+            .enumerate()
+            .map(|(id, ty)| Port {
+                id: id as u16,
+                name: format!("p{id}"),
+                ty,
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut body = Graph::new("store-child");
+    body.inputs = ports(vec![SemanticType::Text, record.clone()]);
+    body.outputs = ports(vec![record]);
+    body.nodes = vec![
+        Node {
+            id: 1,
+            operation: Operation::StoreCreate {
+                resource: "Message".into(),
+                fields: vec!["body".into()],
+            },
+            inputs: body.inputs.clone(),
+            outputs: ports(vec![version.clone()]),
+            effects: BTreeSet::from([Effect::Storage]),
+            required_capabilities: BTreeSet::from([create]),
+        },
+        Node {
+            id: 2,
+            operation: Operation::StoreRead {
+                resource: "Message".into(),
+                fields: vec!["body".into()],
+            },
+            inputs: ports(vec![SemanticType::Text, version]),
+            outputs: body.outputs.clone(),
+            effects: BTreeSet::from([Effect::Storage]),
+            required_capabilities: BTreeSet::from([read]),
+        },
+    ];
+    body.edges = vec![
+        Edge {
+            from: SourceEndpoint::GraphInput(0),
+            to: TargetEndpoint::NodeInput { node: 1, port: 0 },
+        },
+        Edge {
+            from: SourceEndpoint::GraphInput(1),
+            to: TargetEndpoint::NodeInput { node: 1, port: 1 },
+        },
+        Edge {
+            from: SourceEndpoint::GraphInput(0),
+            to: TargetEndpoint::NodeInput { node: 2, port: 0 },
+        },
+        Edge {
+            from: SourceEndpoint::NodeOutput { node: 1, port: 0 },
+            to: TargetEndpoint::NodeInput { node: 2, port: 1 },
+        },
+        Edge {
+            from: SourceEndpoint::NodeOutput { node: 2, port: 0 },
+            to: TargetEndpoint::GraphOutput(0),
+        },
+    ];
+    let mut driver = Graph::new("host-driver");
+    driver.inputs = body.inputs.clone();
+    driver.outputs = body.outputs.clone();
+    let task = ports(vec![SemanticType::Unique(Box::new(
+        SemanticType::Reference("g0.host-task:store-child".into()),
+    ))]);
+    let mut spawn_caps = delegated.clone();
+    spawn_caps.insert(spawn.clone());
+    let mut join_caps = delegated.clone();
+    join_caps.insert(join.clone());
+    driver.nodes = vec![
+        Node {
+            id: 1,
+            operation: Operation::TaskSpawnHosted {
+                body: body.name.clone(),
+                max_steps: 1000,
+                max_value_bytes: 1_000_000,
+            },
+            inputs: body.inputs.clone(),
+            outputs: task.clone(),
+            effects: BTreeSet::from([Effect::Storage, Effect::LocalExecution]),
+            required_capabilities: spawn_caps.clone(),
+        },
+        Node {
+            id: 2,
+            operation: Operation::TaskJoinHosted {
+                body: body.name.clone(),
+            },
+            inputs: task,
+            outputs: body.outputs.clone(),
+            effects: BTreeSet::from([Effect::Storage, Effect::LocalExecution]),
+            required_capabilities: join_caps.clone(),
+        },
+    ];
+    driver.edges = vec![
+        Edge {
+            from: SourceEndpoint::GraphInput(0),
+            to: TargetEndpoint::NodeInput { node: 1, port: 0 },
+        },
+        Edge {
+            from: SourceEndpoint::GraphInput(1),
+            to: TargetEndpoint::NodeInput { node: 1, port: 1 },
+        },
+        Edge {
+            from: SourceEndpoint::NodeOutput { node: 1, port: 0 },
+            to: TargetEndpoint::NodeInput { node: 2, port: 0 },
+        },
+        Edge {
+            from: SourceEndpoint::NodeOutput { node: 2, port: 0 },
+            to: TargetEndpoint::GraphOutput(0),
+        },
+    ];
+    let bytes = g0::graph_binary::encode_graph(&driver).unwrap();
+    let driver = g0::graph_binary_decode::decode_graph(&bytes).unwrap();
+    let program = Arc::new(g0::program::ProgramContract {
+        entry_graph: Some(driver.name.clone()),
+        graphs: vec![driver.clone(), body],
+        schemas: schema().1,
+        ..Default::default()
+    });
+    let grants: BTreeSet<_> = spawn_caps.union(&join_caps).cloned().collect();
+    let factory = Arc::new(StorageTaskFactory::new(
+        store.clone(),
+        principal.clone(),
+        delegated.clone(),
+    ));
+    let mut host = ResourceHost::new(program.clone(), Default::default(), grants.clone()).unwrap();
+    let mut undelegated = ResourceHost::new(
+        program.clone(),
+        Default::default(),
+        BTreeSet::from([spawn, join]),
+    )
+    .unwrap();
+    undelegated.set_task_effect_factory(factory.clone());
+    assert!(matches!(
+        undelegated.run_graph(
+            "host-driver",
+            vec![Value::Text("denied".into()), value("never staged")]
+        ),
+        Err(g0::execution::RuntimeError::MissingCapability(_))
+    ));
+    drop(undelegated);
+    let args = vec![Value::Text("m1".into()), value("child committed")];
+    assert!(host.run_graph("host-driver", args.clone()).is_err());
+    host.set_task_effect_factory(factory.clone());
+    assert_eq!(
+        host.run_graph("host-driver", args).unwrap(),
+        vec![value("child committed")]
+    );
+    {
+        let guard = store.lock().unwrap();
+        assert_eq!(
+            guard
+                .read(&guard.begin(principal.clone()), "Message", "m1")
+                .unwrap()
+                .value,
+            value("child committed")
+        );
+    }
+    let before = std::fs::read(temp.0.join("snapshot.g0s")).unwrap();
+    let mut starving = driver.nodes[0].clone();
+    starving.operation = Operation::TaskSpawnHosted {
+        body: "store-child".into(),
+        max_steps: 2,
+        max_value_bytes: 1_000_000,
+    };
+    let task = g0::execution::EffectHost::execute(
+        &mut host,
+        &starving,
+        &[Value::Text("m2".into()), value("discarded")],
+    )
+    .unwrap();
+    assert!(matches!(
+        g0::execution::EffectHost::execute(&mut host, &driver.nodes[1], &task),
+        Err(g0::execution::RuntimeError::StepLimit)
+    ));
+    assert_eq!(std::fs::read(temp.0.join("snapshot.g0s")).unwrap(), before);
+    host.set_task_effect_factory(Arc::new(StorageTaskFactory::new(
+        store.clone(),
+        principal.clone(),
+        BTreeSet::new(),
+    )));
+    assert!(matches!(
+        host.run_graph(
+            "host-driver",
+            vec![Value::Text("denied-binding".into()), value("never staged")]
+        ),
+        Err(g0::execution::RuntimeError::MissingCapability(_))
+    ));
+    assert_eq!(std::fs::read(temp.0.join("snapshot.g0s")).unwrap(), before);
+    struct RevokingFactory {
+        inner: StorageTaskFactory,
+        store: Arc<std::sync::Mutex<NativeStore>>,
+    }
+    struct RevokingHost {
+        inner: Box<dyn g0::runtime_resources::TaskEffectHost>,
+        store: Arc<std::sync::Mutex<NativeStore>>,
+    }
+    impl g0::runtime_resources::TaskEffectHostFactory for RevokingFactory {
+        fn create(
+            &self,
+            graph: &str,
+            grants: &BTreeSet<Capability>,
+            cancellation: g0::execution::Cancellation,
+        ) -> Result<Box<dyn g0::runtime_resources::TaskEffectHost>, g0::execution::RuntimeError>
+        {
+            Ok(Box::new(RevokingHost {
+                inner: g0::runtime_resources::TaskEffectHostFactory::create(
+                    &self.inner,
+                    graph,
+                    grants,
+                    cancellation,
+                )?,
+                store: self.store.clone(),
+            }))
+        }
+    }
+    impl g0::execution::EffectHost for RevokingHost {
+        fn execute(
+            &mut self,
+            node: &Node,
+            inputs: &[Value],
+        ) -> Result<Vec<Value>, g0::execution::RuntimeError> {
+            self.inner.execute(node, inputs)
+        }
+    }
+    impl g0::runtime_resources::TaskEffectHost for RevokingHost {
+        fn finish(&mut self) -> Result<(), &'static str> {
+            self.store.try_lock().unwrap().advance_security_epoch();
+            self.inner.finish()
+        }
+    }
+    host.set_task_effect_factory(Arc::new(RevokingFactory {
+        inner: StorageTaskFactory::new(store.clone(), principal.clone(), delegated),
+        store: store.clone(),
+    }));
+    assert_eq!(
+        host.run_graph(
+            "host-driver",
+            vec![Value::Text("revoked".into()), value("never acknowledged")]
+        ),
+        Err(g0::execution::RuntimeError::HostCompletion {
+            graph: "store-child".into(),
+            code: "authority-changed"
+        })
+    );
+    assert_eq!(std::fs::read(temp.0.join("snapshot.g0s")).unwrap(), before);
+    drop(host);
+    drop(factory);
+    drop(store);
+    let store = open(&temp);
+    assert_eq!(
+        store
+            .read(&store.begin(principal.clone()), "Message", "m1")
+            .unwrap()
+            .value,
+        value("child committed")
+    );
+    assert!(matches!(
+        store.read(&store.begin(principal), "Message", "m2"),
+        Err(StoreError::NotFound)
+    ));
+}
+
+#[test]
 fn offline_g0_migration_is_authorized_bounded_atomic_and_reopenable() {
     use g0::{
         gir::*,

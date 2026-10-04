@@ -49,6 +49,7 @@ pub struct ResourceHost {
     limits: ExecutionLimits,
     grants: BTreeSet<Capability>,
     tasks: TaskGroup,
+    task_factory: Option<Arc<dyn crate::runtime_resources::TaskEffectHostFactory>>,
     charged: u64,
 }
 impl ResourceHost {
@@ -71,6 +72,7 @@ impl ResourceHost {
             limits,
             grants,
             tasks,
+            task_factory: None,
             charged: 0,
         })
     }
@@ -89,6 +91,12 @@ impl ResourceHost {
     }
     pub fn cancellation(&self) -> crate::execution::Cancellation {
         self.tasks.cancellation()
+    }
+    pub fn set_task_effect_factory(
+        &mut self,
+        factory: Arc<dyn crate::runtime_resources::TaskEffectHostFactory>,
+    ) {
+        self.task_factory = Some(factory);
     }
     fn charge(&mut self, bytes: u64) -> Result<(), RuntimeError> {
         self.charged = self
@@ -272,7 +280,9 @@ impl EffectHost for ChainedHost<'_> {
             | Operation::TaskSpawn { .. }
             | Operation::TaskJoin { .. }
             | Operation::TaskSpawnScoped { .. }
-            | Operation::TaskJoinScoped { .. } => self.resources.execute(node, inputs),
+            | Operation::TaskJoinScoped { .. }
+            | Operation::TaskSpawnHosted { .. }
+            | Operation::TaskJoinHosted { .. } => self.resources.execute(node, inputs),
             _ => self.fallback.execute(node, inputs),
         }
     }
@@ -297,19 +307,62 @@ impl EffectHost for ResourceHost {
                     body,
                     max_steps,
                     max_value_bytes,
+                }
+                | Operation::TaskSpawnHosted {
+                    body,
+                    max_steps,
+                    max_value_bytes,
                 },
                 inputs,
             ) => {
                 let scoped = matches!(node.operation, Operation::TaskSpawnScoped { .. });
-                let action = if scoped { "spawn-scoped" } else { "spawn" };
-                let kind = if scoped { "g0.scoped-task" } else { "g0.task" };
+                let hosted = matches!(node.operation, Operation::TaskSpawnHosted { .. });
+                let action = if hosted {
+                    "spawn-hosted"
+                } else if scoped {
+                    "spawn-scoped"
+                } else {
+                    "spawn"
+                };
+                let kind = if hosted {
+                    "g0.host-task"
+                } else if scoped {
+                    "g0.scoped-task"
+                } else {
+                    "g0.task"
+                };
                 let cap = Capability::new(CapabilityClass::LocalExecution, action, body, "tasks");
                 if !self.grants.contains(&cap) || !node.required_capabilities.contains(&cap) {
                     return Err(RuntimeError::MissingCapability(cap));
                 }
+                let factory = if hosted {
+                    Some(
+                        self.task_factory
+                            .clone()
+                            .ok_or_else(|| failure(node, "child-effect-host-required"))?,
+                    )
+                } else {
+                    None
+                };
+                let target = self
+                    .program
+                    .graphs
+                    .iter()
+                    .find(|g| &g.name == body)
+                    .ok_or_else(|| failure(node, "unknown-task-body"))?;
+                let (_, delegated) = crate::control::graph_effect_summary(target);
+                if hosted {
+                    for grant in &delegated {
+                        if !self.grants.contains(grant)
+                            || !node.required_capabilities.contains(grant)
+                        {
+                            return Err(RuntimeError::MissingCapability(grant.clone()));
+                        }
+                    }
+                }
                 self.charge(
                     max_value_bytes
-                        .checked_mul(if scoped { 2 } else { 1 })
+                        .checked_mul(if scoped || hosted { 2 } else { 1 })
                         .ok_or(RuntimeError::MemoryLimit)?,
                 )?;
                 let arity = self
@@ -331,7 +384,16 @@ impl EffectHost for ResourceHost {
                     max_value_bytes: *max_value_bytes,
                     max_call_depth: self.limits.max_call_depth,
                 };
-                let id = if scoped {
+                let id = if let Some(factory) = factory {
+                    self.tasks.spawn_hosted(
+                        self.program.clone(),
+                        body.clone(),
+                        inputs[..arity].to_vec(),
+                        delegated,
+                        limits,
+                        factory,
+                    )
+                } else if scoped {
                     self.tasks.spawn_scoped(
                         self.program.clone(),
                         body.clone(),
@@ -360,10 +422,28 @@ impl EffectHost for ResourceHost {
                 }
                 Ok(outputs)
             }
-            (Operation::TaskJoin { body } | Operation::TaskJoinScoped { body }, inputs) => {
+            (
+                Operation::TaskJoin { body }
+                | Operation::TaskJoinScoped { body }
+                | Operation::TaskJoinHosted { body },
+                inputs,
+            ) => {
                 let scoped = matches!(node.operation, Operation::TaskJoinScoped { .. });
-                let action = if scoped { "join-scoped" } else { "join" };
-                let kind = if scoped { "g0.scoped-task" } else { "g0.task" };
+                let hosted = matches!(node.operation, Operation::TaskJoinHosted { .. });
+                let action = if hosted {
+                    "join-hosted"
+                } else if scoped {
+                    "join-scoped"
+                } else {
+                    "join"
+                };
+                let kind = if hosted {
+                    "g0.host-task"
+                } else if scoped {
+                    "g0.scoped-task"
+                } else {
+                    "g0.task"
+                };
                 let cap = Capability::new(CapabilityClass::LocalExecution, action, body, "tasks");
                 if !self.grants.contains(&cap) || !node.required_capabilities.contains(&cap) {
                     return Err(RuntimeError::MissingCapability(cap));

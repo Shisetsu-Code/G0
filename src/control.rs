@@ -85,7 +85,9 @@ pub fn validate_control_graphs(graphs: &[Graph]) -> Result<(), Vec<ControlIssue>
                 Operation::TaskSpawn { body, .. }
                 | Operation::TaskJoin { body }
                 | Operation::TaskSpawnScoped { body, .. }
-                | Operation::TaskJoinScoped { body } => {
+                | Operation::TaskJoinScoped { body }
+                | Operation::TaskSpawnHosted { body, .. }
+                | Operation::TaskJoinHosted { body } => {
                     validate_task(graph, node, body, &by_name, &mut issues);
                     references
                         .entry(graph.name.clone())
@@ -159,7 +161,9 @@ pub fn control_references(graph: &Graph) -> BTreeSet<String> {
             Operation::TaskSpawn { body, .. }
             | Operation::TaskJoin { body }
             | Operation::TaskSpawnScoped { body, .. }
-            | Operation::TaskJoinScoped { body } => {
+            | Operation::TaskJoinScoped { body }
+            | Operation::TaskSpawnHosted { body, .. }
+            | Operation::TaskJoinHosted { body } => {
                 result.insert(body.clone());
             }
             Operation::Map { body } => {
@@ -207,7 +211,17 @@ fn validate_task(
         node.operation,
         Operation::TaskSpawnScoped { .. } | Operation::TaskJoinScoped { .. }
     );
-    let kind = if scoped { "g0.scoped-task" } else { "g0.task" };
+    let hosted = matches!(
+        node.operation,
+        Operation::TaskSpawnHosted { .. } | Operation::TaskJoinHosted { .. }
+    );
+    let kind = if hosted {
+        "g0.host-task"
+    } else if scoped {
+        "g0.scoped-task"
+    } else {
+        "g0.task"
+    };
     let task_type = SemanticType::Unique(Box::new(SemanticType::Reference(format!(
         "{kind}:{target}"
     ))));
@@ -221,6 +235,11 @@ fn validate_task(
             max_steps,
             max_value_bytes,
             ..
+        }
+        | Operation::TaskSpawnHosted {
+            max_steps,
+            max_value_bytes,
+            ..
         } => (
             *max_steps > 0
                 && *max_value_bytes > 0
@@ -228,14 +247,28 @@ fn validate_task(
                 && (1..=2).contains(&node.outputs.len())
                 && node.outputs[0].ty == task_type
                 && (node.outputs.len() == 1 || node.outputs[1].ty == SemanticType::Bool),
-            if scoped { "spawn-scoped" } else { "spawn" },
+            if hosted {
+                "spawn-hosted"
+            } else if scoped {
+                "spawn-scoped"
+            } else {
+                "spawn"
+            },
         ),
-        Operation::TaskJoin { .. } | Operation::TaskJoinScoped { .. } => (
+        Operation::TaskJoin { .. }
+        | Operation::TaskJoinScoped { .. }
+        | Operation::TaskJoinHosted { .. } => (
             (1..=2).contains(&node.inputs.len())
                 && node.inputs[0].ty == task_type
                 && (node.inputs.len() == 1 || node.inputs[1].ty == SemanticType::Bool)
                 && sequenced_interface(&node.outputs, &body.outputs),
-            if scoped { "join-scoped" } else { "join" },
+            if hosted {
+                "join-hosted"
+            } else if scoped {
+                "join-scoped"
+            } else {
+                "join"
+            },
         ),
         _ => return,
     };
@@ -248,15 +281,31 @@ fn validate_task(
     let (effects, capabilities) = graph_effect_summary(body);
     let mut expected_effects = effects.clone();
     expected_effects.insert(Effect::LocalExecution);
+    let mut expected_caps = if hosted {
+        capabilities.clone()
+    } else {
+        BTreeSet::new()
+    };
+    expected_caps.insert(cap);
     if !valid
-        || (if scoped {
+        || (if hosted {
+            effects.contains(&Effect::LocalExecution) || effects.contains(&Effect::RemoteExecution)
+        } else if scoped {
             effects.iter().any(|e| *e != Effect::MemoryWrite)
         } else {
             !effects.is_empty()
         })
-        || !capabilities.is_empty()
+        || (!hosted && !capabilities.is_empty())
+        || (hosted
+            && capabilities.iter().any(|c| {
+                matches!(
+                    c.class,
+                    crate::gir::CapabilityClass::LocalExecution
+                        | crate::gir::CapabilityClass::RemoteExecution
+                )
+            }))
         || node.effects != expected_effects
-        || node.required_capabilities != BTreeSet::from([cap])
+        || node.required_capabilities != expected_caps
     {
         issues.push(ControlIssue::EffectSummaryMismatch {
             owner: owner.name.clone(),
@@ -553,7 +602,7 @@ fn validate_effect_summary(
     }
 }
 
-fn graph_effect_summary(graph: &Graph) -> (BTreeSet<Effect>, BTreeSet<Capability>) {
+pub(crate) fn graph_effect_summary(graph: &Graph) -> (BTreeSet<Effect>, BTreeSet<Capability>) {
     (
         graph
             .nodes

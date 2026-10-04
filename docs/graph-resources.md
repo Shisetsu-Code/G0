@@ -78,6 +78,30 @@ values remain valid after scope destruction; a handle escape fails explicitly.
 Cancellation comes from the parent task group; destroying a completed child's
 private resource group does not cancel its parent or siblings.
 
+G0G 0.7 adds `TaskSpawnHosted` and `TaskJoinHosted` (64..65), with kind
+`g0.host-task:BODY` and exact `spawn-hosted`/`join-hosted` capabilities. Both
+nodes declare the child's complete effect and capability summary plus their
+local task operation. The child receives only its declared requirements that
+the parent actually holds. Nested local/remote execution is rejected in this
+profile. Native handles cannot cross its input or output boundary, and memory
+reservations cover both its executor and owned resource scope.
+
+The parent explicitly installs a `TaskEffectHostFactory`; decoding a graph never
+installs one. Each child gets its own host, with region operations routed through
+its private ResourceHost. The factory receives the delegated grants and shared
+cancellation token. Host completion runs only after execution, output validation
+and cancellation checks succeed. Completion failures retain child graph identity.
+Factories are trusted bindings responsible for authorization and bounded I/O;
+their storage or network quotas are separate from executor value accounting.
+
+`StorageTaskFactory` binds children to one fixed principal and a host allowlist.
+It accepts only storage grants for that principal's scope, begins a separate
+transaction per child and commits after valid results. Failed execution drops
+staged writes. Store contention fails immediately without a hidden wait or retry.
+Each successful child commit is independent: a subsequent parent or sibling
+failure does not undo it. Commit uncertainty and rollback-witness checks preserve
+the native store's existing behavior.
+
 `ResourceHost` bounds a scope to 16,384 cumulative opaque handle identities.
 Its resource allocation quota includes region copies, conservative metadata
 charges, and reserved child task memory. The Executor's graph-value quota is

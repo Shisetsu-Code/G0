@@ -7,7 +7,10 @@ use crate::{
     store_engine::{NativeStore, StoreError, Transaction},
     value::Value,
 };
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{Arc, Mutex},
+};
 
 pub struct StorageHost<'a> {
     store: &'a mut NativeStore,
@@ -28,7 +31,13 @@ impl<'a> StorageHost<'a> {
         self.store.commit(self.transaction)
     }
     fn failure(node: &Node, error: StoreError) -> RuntimeError {
-        let code = match error {
+        RuntimeError::EffectFailure {
+            node: node.id,
+            code: Self::code(error),
+        }
+    }
+    fn code(error: StoreError) -> &'static str {
+        match error {
             StoreError::Denied => "denied",
             StoreError::NotFound => "not-found",
             StoreError::Conflict => "conflict",
@@ -37,11 +46,96 @@ impl<'a> StorageHost<'a> {
             StoreError::AuthorityChanged => "authority-changed",
             StoreError::RelationConstraint => "relation-constraint",
             _ => "storage-failed",
-        };
-        RuntimeError::EffectFailure {
-            node: node.id,
-            code,
         }
+    }
+}
+
+/// Explicit fixed-principal storage binding for independently committed children.
+pub struct StorageTaskFactory {
+    store: Arc<Mutex<NativeStore>>,
+    principal: Principal,
+    allowed: BTreeSet<Capability>,
+}
+impl StorageTaskFactory {
+    pub fn new(
+        store: Arc<Mutex<NativeStore>>,
+        principal: Principal,
+        allowed: BTreeSet<Capability>,
+    ) -> Self {
+        Self {
+            store,
+            principal,
+            allowed,
+        }
+    }
+}
+impl crate::runtime_resources::TaskEffectHostFactory for StorageTaskFactory {
+    fn create(
+        &self,
+        graph: &str,
+        grants: &BTreeSet<Capability>,
+        cancellation: crate::execution::Cancellation,
+    ) -> Result<Box<dyn crate::runtime_resources::TaskEffectHost>, RuntimeError> {
+        if cancellation.is_cancelled() {
+            return Err(RuntimeError::Cancelled);
+        }
+        for grant in grants {
+            if !self.allowed.contains(grant)
+                || grant.class != CapabilityClass::Storage
+                || grant.scope != self.principal.scope.0
+            {
+                return Err(RuntimeError::MissingCapability(grant.clone()));
+            }
+        }
+        let store = self
+            .store
+            .try_lock()
+            .map_err(|_| RuntimeError::HostCompletion {
+                graph: graph.into(),
+                code: "storage-busy",
+            })?;
+        let transaction = store.begin(self.principal.clone());
+        Ok(Box::new(SharedStorageTaskHost {
+            store: self.store.clone(),
+            transaction: Some(transaction),
+            scope: self.principal.scope.0.clone(),
+        }))
+    }
+}
+struct SharedStorageTaskHost {
+    store: Arc<Mutex<NativeStore>>,
+    transaction: Option<Transaction>,
+    scope: String,
+}
+impl EffectHost for SharedStorageTaskHost {
+    fn execute(&mut self, node: &Node, inputs: &[Value]) -> Result<Vec<Value>, RuntimeError> {
+        let mut store = self
+            .store
+            .try_lock()
+            .map_err(|_| RuntimeError::EffectFailure {
+                node: node.id,
+                code: "storage-busy",
+            })?;
+        let transaction = self
+            .transaction
+            .take()
+            .ok_or(RuntimeError::InvalidHostResult)?;
+        let mut borrowed = StorageHost {
+            store: &mut store,
+            transaction,
+            scope: self.scope.clone(),
+        };
+        let result = borrowed.execute(node, inputs);
+        self.transaction = Some(borrowed.transaction);
+        result
+    }
+}
+impl crate::runtime_resources::TaskEffectHost for SharedStorageTaskHost {
+    fn finish(&mut self) -> Result<(), &'static str> {
+        let mut store = self.store.try_lock().map_err(|_| "storage-busy")?;
+        store
+            .commit(self.transaction.take().ok_or("already-finished")?)
+            .map_err(StorageHost::code)
     }
 }
 impl EffectHost for StorageHost<'_> {
