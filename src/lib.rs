@@ -56,6 +56,7 @@ pub mod parser;
 pub mod performance_gate;
 pub mod policy_plan;
 pub mod program;
+pub mod program_binary;
 pub mod profiling;
 pub mod query;
 pub mod runtime;

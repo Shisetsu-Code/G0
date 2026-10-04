@@ -20,7 +20,8 @@ The source of truth is a typed computation graph, not textual control flow. The 
 
 ## Bootstrap compiler
 
-`g0c check` and `g0c compile` accept native canonical graph files (`.g0g`).
+`g0c check` and `g0c compile` accept native program files (`.g0p`) and
+canonical graph files (`.g0g`).
 The existing `.g0` Graph Assembly path remains bootstrap tooling.
 
 The native path is:
@@ -44,8 +45,24 @@ canonical binary graph (.g0g)
 Native scalar compilation supports integer arithmetic, checked division and
 remainder, integer comparisons, Boolean operations, checked conversion and
 explicit bit truncation. Rust APIs also support composing multiple graphs and
-structured control flow. A `.g0g` CLI input currently contains one graph;
-references to definitions absent from that file are rejected.
+structured control flow. A `.g0p` file contains multiple graph definitions and
+one explicit entry, enabling native calls, selection and bounded loops from
+files. A `.g0g` file contains one graph; references to absent definitions are
+rejected in either format.
+
+Try the checked-in program examples directly:
+
+```sh
+cargo run --release -- check examples/call.g0p
+cargo run --release -- compile examples/call.g0p -o target/call.s
+cargo run --release -- compile examples/select.g0p -o target/select.s
+cargo run --release -- compile examples/loop.g0p -o target/loop.s
+```
+
+The call and selection examples return 42. The loop starts at 7, executes a
+body that resets the state to 0, then exits and returns 0. These outputs are
+assembled and executed in the Linux CLI integration tests. See
+`docs/program-format-0.1.md` for the container contract and current limits.
 
 Try the checked-in native example without running a Rust graph generator:
 
@@ -130,12 +147,11 @@ The compiler currently uses no third-party Rust crates.
 
 Finish the language and its runtime before adding Mosca integration:
 
-1. Native program files containing multiple graph definitions and an explicit entry.
-2. Executable record/variant layouts, text, bytes, collections and memory operations.
-3. Runtime ownership/regions, task execution and capability enforcement.
-4. Native persistent storage, transactions and secure transport implementations.
-5. End-to-end applications with one structural model across runtime boundaries.
-6. Native graph authoring/debugging tools and eventual self-hosting.
+1. Executable record/variant layouts, text, bytes, collections and memory operations.
+2. Runtime ownership/regions, task execution and capability enforcement.
+3. Native persistent storage, transactions and secure transport implementations.
+4. End-to-end applications with one structural model across runtime boundaries.
+5. Native graph authoring/debugging tools and eventual self-hosting.
 
 Many policy, storage, crypto and runtime modules currently define and validate
 contracts. Their presence does not mean a persistent database, encrypted network

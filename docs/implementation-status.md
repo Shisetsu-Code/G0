@@ -9,10 +9,13 @@ those native facilities.
 - Original Graph Assembly parsing, validation and arithmetic compilation.
 - Canonical binary GIR encoding and decoding.
 - `g0c check` and `compile` for a single native `.g0g` graph.
+- Native `.g0p` program files containing an explicit entry and multiple graphs,
+  with calls, selection and bounded loops compiled from files.
 - Native scalar GIR optimization, MIR, register allocation and x86-64 emission.
 - Integer arithmetic, comparisons, Boolean operations, checked conversion and
   explicit truncation, subject to supported physical widths.
-- Multi-graph composition and structured control through the Rust bootstrap APIs.
+- Multi-graph composition and structured control through native files and the
+  Rust bootstrap APIs.
 - Linux/x86-64 execution tests for generated assembly. Rust can build the
   compiler on Windows, but the emitted assembly uses ELF/System V conventions.
 
@@ -26,7 +29,9 @@ lowering. A validated policy is not an implementation of its runtime effect.
 
 ## Current native-file boundary
 
-The `.g0g` format represents one graph, not a complete program bundle. The CLI
+The `.g0g` format represents one graph. `.g0p` represents a closed executable
+bundle with an explicit entry, multiple definitions and no external bindings.
+The bootstrap entry has no input ports and exactly one output. The CLI
 checks graph references and control contracts with the existing program
 validator; a missing subgraph definition fails before emission. Compilation
 uses the existing scalar pipeline and exports `g0_machine_main`.
@@ -38,17 +43,12 @@ atomically, preserving the input even if output is a hardlink alias. Failed
 replacement cleans up the temporary file. Import/check does not execute graph
 operations.
 
-The checked-in `examples/truncate.g0g` returns 31. The CLI integration test
-actually assembles and executes it on Linux, rather than only inspecting the
-assembly text.
+The checked-in `examples/truncate.g0g` returns 31. Program examples `call.g0p`
+and `select.g0p` return 42; `loop.g0p` performs one state transition and returns
+0. CLI integration tests assemble and execute these examples on Linux.
 
 ## Next milestone
 
-Define a native program container containing an explicit entry and multiple
-canonical graph definitions. Preserve the existing program validation gates,
-reject incomplete bundles and compile calls/control flow without Rust-side
-graph construction. Keep additional policy/schema sections explicit rather
-than granting runtime authority during decoding.
-
-After that milestone, implement executable structured values and memory,
-then the runtime effects required by a small native application.
+Implement executable structured values and memory, then the runtime effects
+required by a small native application. Policy/schema sections in future program
+formats must be explicit rather than granting runtime authority during decoding.

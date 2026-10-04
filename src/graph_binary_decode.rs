@@ -19,6 +19,7 @@ pub enum BinaryDecodeIssue {
     InvalidUtf8,
     InvalidTag { domain: &'static str, tag: u8 },
     LengthOverflow,
+    LengthExceedsInput,
     TypeDepthExceeded,
     TrailingBytes,
     InvalidGraph,
@@ -466,8 +467,14 @@ impl<'a> Reader<'a> {
     }
 
     fn len(&mut self) -> Result<usize, BinaryDecodeIssue> {
-        usize::try_from(self.u32()?)
-            .map_err(|_| BinaryDecodeIssue::LengthOverflow)
+        let length = usize::try_from(self.u32()?)
+            .map_err(|_| BinaryDecodeIssue::LengthOverflow)?;
+        // Counts and byte lengths both require at least one encoded byte per
+        // element. Reject impossible lengths before Vec::with_capacity.
+        if length > self.bytes.len() - self.cursor {
+            return Err(BinaryDecodeIssue::LengthExceedsInput);
+        }
+        Ok(length)
     }
 
     fn usize_u64(&mut self) -> Result<usize, BinaryDecodeIssue> {

@@ -123,6 +123,15 @@ fn compile_accepts_native_magic_with_an_arbitrary_extension() {
 }
 
 #[test]
+fn graph_magic_takes_precedence_over_a_program_suffix() {
+    let work = Workspace::new();
+    work.write_graph("answer.g0p");
+    success(work.run(&["check", "answer.g0p"]));
+    success(work.run(&["compile", "answer.g0p"]));
+    assert!(work.0.join("answer.s").is_file());
+}
+
+#[test]
 fn compile_defaults_to_an_assembly_file_beside_native_input() {
     let work = Workspace::new();
     work.write_graph("answer.g0g");
