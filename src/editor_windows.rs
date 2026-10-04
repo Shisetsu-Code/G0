@@ -1,9 +1,13 @@
 //! Native Win32/GDI bootstrap UI. All unsafe code is confined to OS handles,
 //! live UTF-16 buffers and a window-owned RefCell released at WM_NCDESTROY.
-use g0::{editor::GraphEditor, execution::TraceEvent, gir::*};
+use g0::{
+    editor::{DebugSession, EditorLayout, GraphEditor, OPERATION_NAMES},
+    execution::TraceEvent,
+    gir::*,
+};
 use std::{
     cell::RefCell,
-    collections::BTreeMap,
+    collections::BTreeSet,
     ffi::OsString,
     fs,
     io::{Read, Write},
@@ -32,6 +36,76 @@ const CHECK: usize = 301;
 const RUN: usize = 302;
 const TRACE: usize = 303;
 const APPLY: usize = 401;
+const APPLY_TYPE: usize = 402;
+const OUTPUT_TYPE: usize = 403;
+const ADD_GRAPH: usize = 404;
+const PROPERTIES: usize = 405;
+const DUPLICATE: usize = 406;
+const SUBGRAPH: usize = 407;
+const NODE_FORM: usize = 408;
+const OPERATION_CHOICE: usize = 409;
+const FORM_APPLY: usize = 410;
+const SCHEMA_FORM: usize = 411;
+const SCHEMA_VIEW: usize = 412;
+const FORM_CANCEL: usize = 413;
+const EDIT_NODE_FORM: usize = 414;
+const GRAPH_FORM: usize = 415;
+#[derive(Clone, Copy)]
+enum FormMode {
+    Node,
+    Schema,
+    Graph,
+    EditNode(NodeId),
+}
+const TRACE_PREVIOUS: usize = 304;
+const DEBUG_START: usize = 305;
+const DEBUG_STEP: usize = 306;
+const DEBUG_CONTINUE: usize = 307;
+const DEBUG_PAUSE: usize = 308;
+const DEBUG_STOP: usize = 309;
+const DEBUG_BREAK: usize = 310;
+const TOOLBOX: usize = 500;
+fn toolbox() -> Vec<(&'static str, Operation)> {
+    vec![
+        ("Entero", Operation::Const(Literal::Integer(42))),
+        ("Booleano", Operation::Const(Literal::Bool(true))),
+        ("Texto", Operation::Const(Literal::Text(String::new()))),
+        ("Bytes hex", Operation::Const(Literal::Bytes(vec![]))),
+        ("Suma", Operation::Add),
+        ("Resta", Operation::Sub),
+        ("Producto", Operation::Mul),
+        ("División", Operation::Div),
+        ("Resto", Operation::Rem),
+        ("Igual", Operation::Eq),
+        ("Menor", Operation::Lt),
+        ("Menor o igual", Operation::Le),
+        ("Mayor", Operation::Gt),
+        ("Mayor o igual", Operation::Ge),
+        ("And", Operation::And),
+        ("Or", Operation::Or),
+        ("Xor", Operation::Xor),
+        ("Not", Operation::Not),
+        ("Concatenar texto", Operation::TextConcat),
+        ("Concatenar bytes", Operation::BytesConcat),
+        ("Codificar UTF8", Operation::EncodeUtf8),
+        ("Decodificar UTF8", Operation::DecodeUtf8),
+        ("Formatear entero", Operation::FormatInteger),
+        ("Conversión checked", Operation::ConvertChecked),
+        ("Array entero (2)", Operation::MakeArray),
+        ("Index bytes", Operation::Index),
+        ("Longitud bytes", Operation::Length),
+        ("Some entero", Operation::Some),
+        ("None entero", Operation::None),
+        ("Ok entero", Operation::Ok),
+        ("Err texto", Operation::Err),
+        ("UnwrapOr entero", Operation::UnwrapOr),
+        ("Range", Operation::Range),
+        ("Concatenar arrays", Operation::ArrayConcat),
+        ("Slice bytes", Operation::BytesSlice),
+        ("Bytes desde array", Operation::BytesFromArray),
+        ("Unir textos", Operation::TextJoin),
+    ]
+}
 #[derive(Clone, Copy)]
 struct Point {
     x: i32,
@@ -50,7 +124,7 @@ struct Window {
     path: Option<PathBuf>,
     selected: Option<NodeId>,
     pending: Option<SourceEndpoint>,
-    layout: BTreeMap<NodeId, Point>,
+    layout: EditorLayout,
     scroll: i32,
     drag: Option<(NodeId, Point)>,
     ports: Vec<Hit>,
@@ -59,31 +133,58 @@ struct Window {
     diagnostic: HWND,
     literal: HWND,
     apply: HWND,
+    operation_choice: HWND,
+    form_apply: HWND,
+    schema_form: Option<FormMode>,
     trace: Vec<TraceEvent>,
     trace_index: usize,
+    debugger: Option<DebugSession>,
+    breakpoints: BTreeSet<(String, NodeId)>,
     status: String,
 }
 impl Window {
     fn new(editor: GraphEditor, path: Option<PathBuf>) -> Self {
-        Self { editor,path,selected: None,pending: None,layout: BTreeMap::new(),scroll: 0,drag: None,ports: Vec::new(),width: 1100,height: 700,diagnostic: null_mut(),literal: null_mut(),apply: null_mut(),trace: Vec::new(),trace_index: 0,status: "Selecciona una salida y después una entrada para conectar. La validación comprueba los tipos.".into() }
+        let layout = path.as_deref().map(load_layout).unwrap_or_default();
+        Self { editor,path,selected: None,pending: None,layout,scroll: 0,drag: None,ports: Vec::new(),width: 1100,height: 700,diagnostic: null_mut(),literal: null_mut(),apply: null_mut(),operation_choice:null_mut(),form_apply:null_mut(),schema_form:None,trace: Vec::new(),trace_index: 0,debugger:None,breakpoints:BTreeSet::new(),status: "Selecciona una salida y después una entrada para conectar. La validación comprueba los tipos.".into() }
     }
     fn node_rect(&self, node: NodeId, index: usize) -> RECT {
-        let p = self.layout.get(&node).copied().unwrap_or(Point {
-            x: 35 + (index % 3) as i32 * 280,
-            y: 95 + (index / 3) as i32 * 230,
-        });
+        let p = self
+            .layout
+            .get(&self.editor.graph().name, node)
+            .map(|(x, y)| Point { x, y })
+            .unwrap_or(Point {
+                x: 35 + (index % 3) as i32 * 280,
+                y: 95 + (index / 3) as i32 * 230,
+            });
         let ports = self
             .editor
             .graph()
             .nodes
             .iter()
             .find(|n| n.id == node)
-            .map_or(1, |n| n.inputs.len().max(n.outputs.len()).min(8));
+            .map_or(1, |n| n.inputs.len().max(n.outputs.len()).min(64));
         RECT {
             left: p.x,
             top: p.y - self.scroll,
             right: p.x + 230,
             bottom: p.y - self.scroll + 60 + ports as i32 * 20,
+        }
+    }
+    fn focus_node(&mut self, graph: &str, node: NodeId) {
+        if let Some(index) = self
+            .editor
+            .graph_names()
+            .iter()
+            .position(|name| *name == graph)
+        {
+            let _ = self.editor.select_graph(index);
+        }
+        self.selected = Some(node);
+        if let Some(index) = self.editor.graph().nodes.iter().position(|n| n.id == node) {
+            let rect = self.node_rect(node, index);
+            if rect.top < 60 || rect.bottom > self.height - 175 {
+                self.scroll = (rect.top + self.scroll - 95).clamp(0, 100_000);
+            }
         }
     }
     fn source(&self, source: &SourceEndpoint) -> Option<Point> {
@@ -149,8 +250,42 @@ impl Window {
         }
     }
 }
+fn layout_path(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".layout");
+    PathBuf::from(name)
+}
+fn load_layout(path: &Path) -> EditorLayout {
+    let mut bytes = Vec::new();
+    let result = fs::File::open(layout_path(path))
+        .and_then(|file| file.take(1024 * 1024 + 1).read_to_end(&mut bytes));
+    if result.is_ok() {
+        EditorLayout::decode(&bytes).unwrap_or_default()
+    } else {
+        EditorLayout::default()
+    }
+}
+fn save_layout(path: &Path, layout: &EditorLayout) -> Result<(), Box<dyn std::error::Error>> {
+    let bytes = layout.encode().map_err(|e| format!("{e:?}"))?;
+    save_bytes(&layout_path(path), &bytes)
+}
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(Some(0)).collect()
+}
+unsafe fn read_edit_text(control: HWND, limit: usize) -> Result<String, String> {
+    let length = unsafe { GetWindowTextLengthW(control) };
+    if length < 0 || length as usize > limit {
+        return Err(
+            "El contenido supera el límite del formulario; no se aplicó ningún cambio.".into(),
+        );
+    }
+    let mut buffer = vec![0u16; length as usize + 1];
+    let read = unsafe { GetWindowTextW(control, buffer.as_mut_ptr(), buffer.len() as i32) };
+    if read != length {
+        return Err("El contenido cambió mientras se leía; vuelve a aplicar.".into());
+    }
+    String::from_utf16(&buffer[..read as usize])
+        .map_err(|_| "El texto contiene UTF-16 inválido.".into())
 }
 fn read_document(path: &Path) -> Result<GraphEditor, Box<dyn std::error::Error>> {
     let mut bytes = Vec::new();
@@ -161,6 +296,9 @@ fn read_document(path: &Path) -> Result<GraphEditor, Box<dyn std::error::Error>>
 }
 fn save_document(path: &Path, editor: &GraphEditor) -> Result<(), Box<dyn std::error::Error>> {
     let bytes = editor.encode().map_err(|e| format!("{e:?}"))?;
+    save_bytes(path, &bytes)
+}
+fn save_bytes(path: &Path, bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
     let temp = path.with_file_name(format!(
         ".g0-editor-{}-{}.tmp",
         std::process::id(),
@@ -173,7 +311,7 @@ fn save_document(path: &Path, editor: &GraphEditor) -> Result<(), Box<dyn std::e
             .create_new(true)
             .write(true)
             .open(&temp)?;
-        file.write_all(&bytes)?;
+        file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
         fs::rename(&temp, path)
@@ -262,16 +400,82 @@ pub fn run(args: &[OsString]) -> Result<(), Box<dyn std::error::Error>> {
                     .map_err(|e| format!("{e:?}"))?;
                 window.selected = Some(add);
                 save_document(Path::new(&args[2]), &window.editor)?;
-                window.layout.insert(1, Point { x: 40, y: 90 });
-                window.layout.insert(value, Point { x: 40, y: 300 });
-                window.layout.insert(add, Point { x: 370, y: 190 });
+                window.layout.set("main", 1, 40, 90).unwrap();
+                window.layout.set("main", value, 40, 300).unwrap();
+                window.layout.set("main", add, 370, 190).unwrap();
+                save_layout(Path::new(&args[2]), &window.layout)?;
             }
             SendMessageW(hwnd, WM_COMMAND, RUN, 0);
             let window = owner.borrow();
             render_bitmap(&window, Path::new(&args[1]))?;
             drop(window);
+            SendMessageW(hwnd, WM_COMMAND, DEBUG_START, 0);
+            let control = owner
+                .borrow()
+                .debugger
+                .as_ref()
+                .ok_or("debug session not started")?
+                .control();
+            if control
+                .wait_paused(std::time::Duration::from_secs(2))
+                .is_none()
+            {
+                return Err("native debugger failed to pause".into());
+            }
+            SendMessageW(hwnd, WM_COMMAND, DEBUG_CONTINUE, 0);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while owner.borrow().debugger.is_some() {
+                SendMessageW(hwnd, WM_TIMER, 1, 0);
+                if std::time::Instant::now() > deadline {
+                    return Err("native debugger failed to finish".into());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            if owner.borrow().trace.len() != 3 {
+                return Err("native debugger missing real node events".into());
+            }
+            SendMessageW(hwnd, WM_COMMAND, SCHEMA_FORM, 0);
+            SendMessageW(hwnd, WM_COMMAND, FORM_APPLY, 0);
+            SendMessageW(hwnd, WM_COMMAND, NODE_FORM, 0);
+            SetWindowTextW(owner.borrow().diagnostic,wide("operation=MakeRecord Point x\r\ninputs=x:int(-100,100)\r\noutputs=value:record(Point)\r\neffects=\r\ncapabilities=").as_ptr());
+            SendMessageW(hwnd, WM_COMMAND, FORM_APPLY, 0);
+            if !owner
+                .borrow()
+                .editor
+                .graph()
+                .nodes
+                .iter()
+                .any(|n| matches!(n.operation, Operation::MakeRecord { .. }))
+            {
+                return Err("native typed form failed to create record node".into());
+            }
+            let text = "ñ".repeat(200);
+            let constant = {
+                let mut window = owner.borrow_mut();
+                let constant = window
+                    .editor
+                    .add_literal(Literal::Text(text.clone()))
+                    .map_err(|e| format!("{e:?}"))?;
+                window.selected = Some(constant);
+                SetWindowTextW(window.literal, wide(&text).as_ptr());
+                constant
+            };
+            SendMessageW(hwnd, WM_COMMAND, APPLY, 0);
+            if owner
+                .borrow()
+                .editor
+                .graph()
+                .nodes
+                .iter()
+                .find(|node| node.id == constant)
+                .is_none_or(|node| node.operation != Operation::Const(Literal::Text(text)))
+            {
+                return Err("native literal Apply silently truncated text".into());
+            }
             DestroyWindow(hwnd);
-            println!("native editor smoke test: graph saved, executed and rendered");
+            println!(
+                "native editor smoke test: graph saved, executed, rendered, debugged; schema and typed node forms applied"
+            );
             return Ok(());
         }
         ShowWindow(hwnd, SW_SHOW);
@@ -306,6 +510,39 @@ unsafe fn menu() -> HMENU {
                 ],
             ),
             (
+                "Toolbox",
+                toolbox()
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (name, _))| (TOOLBOX + i, *name))
+                    .collect(),
+            ),
+            (
+                "Propiedades",
+                vec![
+                    (PROPERTIES, "Ver propiedades del nodo"),
+                    (
+                        APPLY_TYPE,
+                        "Tipo de puerto: in|out ID bool|text|bytes|int MIN MAX",
+                    ),
+                    (OUTPUT_TYPE, "Resultado desde salida seleccionada"),
+                    (ADD_GRAPH, "Crear grafo con nombre del formulario"),
+                    (SUBGRAPH, "Llamar grafo con nombre del formulario"),
+                    (DUPLICATE, "Duplicar operación seleccionada"),
+                    (NODE_FORM, "Crear operación con contrato tipado"),
+                    (SCHEMA_FORM, "Crear o actualizar schema"),
+                    (SCHEMA_VIEW, "Ver registro de schemas"),
+                    (FORM_CANCEL, "Cerrar formulario"),
+                ],
+            ),
+            (
+                "Contratos",
+                vec![
+                    (EDIT_NODE_FORM, "Editar contrato completo del nodo"),
+                    (GRAPH_FORM, "Editar interfaz del grafo"),
+                ],
+            ),
+            (
                 "Editar",
                 vec![
                     (UNDO, "Deshacer"),
@@ -322,6 +559,13 @@ unsafe fn menu() -> HMENU {
                     (CHECK, "Validar"),
                     (RUN, "Ejecutar y trazar"),
                     (TRACE, "Siguiente paso de traza"),
+                    (TRACE_PREVIOUS, "Paso anterior de traza"),
+                    (DEBUG_START, "Depurar: pausa antes del primer nodo"),
+                    (DEBUG_STEP, "Paso real"),
+                    (DEBUG_CONTINUE, "Continuar"),
+                    (DEBUG_PAUSE, "Pausar antes del siguiente nodo"),
+                    (DEBUG_STOP, "Detener"),
+                    (DEBUG_BREAK, "Alternar breakpoint del nodo"),
                 ],
             ),
         ] {
@@ -374,6 +618,7 @@ unsafe fn dispatch(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                 | WM_LBUTTONUP
                 | WM_MOUSEWHEEL
                 | WM_DESTROY
+                | WM_TIMER
         ) {
             return DefWindowProcW(hwnd, message, wparam, lparam);
         }
@@ -414,11 +659,11 @@ unsafe fn dispatch(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                     instance,
                     null(),
                 );
-                SendMessageW(window.literal, 0x00c5, 128, 0); // EM_LIMITTEXT
+                SendMessageW(window.literal, 0x00c5, 131072, 0); // EM_LIMITTEXT: 64KiB bytes as hex
                 window.apply = CreateWindowExW(
                     0,
                     wide("BUTTON").as_ptr(),
-                    wide("Aplicar entero al nodo seleccionado").as_ptr(),
+                    wide("Aplicar valor tipado al nodo seleccionado").as_ptr(),
                     WS_CHILD | WS_VISIBLE,
                     300,
                     650,
@@ -429,7 +674,49 @@ unsafe fn dispatch(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                     instance,
                     null(),
                 );
-                if window.diagnostic.is_null() || window.literal.is_null() || window.apply.is_null()
+                window.operation_choice = CreateWindowExW(
+                    0,
+                    wide("COMBOBOX").as_ptr(),
+                    null(),
+                    WS_CHILD | WS_VISIBLE | CBS_DROPDOWNLIST as u32 | WS_VSCROLL,
+                    610,
+                    650,
+                    240,
+                    400,
+                    hwnd,
+                    OPERATION_CHOICE as HMENU,
+                    instance,
+                    null(),
+                );
+                for name in OPERATION_NAMES {
+                    SendMessageW(
+                        window.operation_choice,
+                        0x0143,
+                        0,
+                        wide(name).as_ptr() as LPARAM,
+                    );
+                }
+                SendMessageW(window.operation_choice, 0x014e, 4, 0);
+                window.form_apply = CreateWindowExW(
+                    0,
+                    wide("BUTTON").as_ptr(),
+                    wide("Aplicar contrato").as_ptr(),
+                    WS_CHILD | WS_VISIBLE,
+                    860,
+                    650,
+                    170,
+                    26,
+                    hwnd,
+                    FORM_APPLY as HMENU,
+                    instance,
+                    null(),
+                );
+                SendMessageW(window.diagnostic, 0x00c5, 8192, 0);
+                if window.diagnostic.is_null()
+                    || window.literal.is_null()
+                    || window.apply.is_null()
+                    || window.operation_choice.is_null()
+                    || window.form_apply.is_null()
                 {
                     return -1;
                 }
@@ -448,8 +735,10 @@ unsafe fn dispatch(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                     120,
                     1,
                 );
-                MoveWindow(window.literal, 10, height - 35, 260, 26, 1);
-                MoveWindow(window.apply, 280, height - 35, 320, 26, 1);
+                MoveWindow(window.literal, 10, height - 35, 200, 26, 1);
+                MoveWindow(window.apply, 220, height - 35, 280, 26, 1);
+                MoveWindow(window.operation_choice, 510, height - 35, 240, 400, 1);
+                MoveWindow(window.form_apply, 760, height - 35, 170, 26, 1);
                 InvalidateRect(hwnd, null(), 1);
                 0
             }
@@ -461,11 +750,47 @@ unsafe fn dispatch(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                 0
             }
             WM_COMMAND => {
-                command(hwnd, &mut window, wparam & 0xffff);
+                let id = wparam & 0xffff;
+                if id == 0 || id == OPERATION_CHOICE && (wparam >> 16) != CBN_SELCHANGE as usize {
+                    return 0;
+                }
+                command(hwnd, &mut window, id);
+                InvalidateRect(hwnd, null(), 1);
+                0
+            }
+            WM_TIMER => {
+                let Some(session) = window.debugger.as_ref() else {
+                    return 0;
+                };
+                let control = session.control();
+                let completed = session.try_result();
+                window.trace = control.trace();
+                if let Some((graph, node)) = control.location() {
+                    window.focus_node(&graph, node);
+                    window.status = format!(
+                        "PAUSA REAL antes de {graph} / nodo {node}. Paso, Continuar o Detener.\r\n{} eventos ejecutados; el nodo resaltado todavía no ejecutó.",
+                        window.trace.len()
+                    );
+                }
+                if let Some(result) = completed {
+                    window.status = match result {
+                        Ok(run) => format!(
+                            "Depuración completada: {:?}\r\n{} pasos",
+                            run.values, run.steps
+                        ),
+                        Err(error) => format!("Depuración detenida: {error:?}"),
+                    };
+                    window.debugger = None;
+                    KillTimer(hwnd, 1);
+                }
+                SetWindowTextW(window.diagnostic, wide(&window.status).as_ptr());
                 InvalidateRect(hwnd, null(), 1);
                 0
             }
             WM_LBUTTONDOWN => {
+                if window.schema_form.is_some() {
+                    return 0;
+                }
                 let point = Point {
                     x: lparam as u16 as i16 as i32,
                     y: (lparam as u32 >> 16) as u16 as i16 as i32,
@@ -474,6 +799,11 @@ unsafe fn dispatch(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                     (hit.point.x - point.x).abs() <= 9 && (hit.point.y - point.y).abs() <= 9
                 });
                 if let Some(hit) = hit {
+                    if window.debugger.is_some() {
+                        window.status = "Detén la depuración antes de cambiar conexiones.".into();
+                        SetWindowTextW(window.diagnostic, wide(&window.status).as_ptr());
+                        return 0;
+                    }
                     match &hit.endpoint {
                         Endpoint::Source(source) => {
                             window.pending = Some(source.clone());
@@ -516,12 +846,19 @@ unsafe fn dispatch(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                                 y: point.y - r.top,
                             },
                         ));
-                        if let Some(Node {
-                            operation: Operation::Const(Literal::Integer(value)),
-                            ..
-                        }) = window.editor.graph().nodes.iter().find(|n| n.id == id)
+                        if let Some(node) = window.editor.graph().nodes.iter().find(|n| n.id == id)
                         {
-                            SetWindowTextW(window.literal, wide(&value.to_string()).as_ptr());
+                            let value = match &node.operation {
+                                Operation::Const(Literal::Integer(v)) => v.to_string(),
+                                Operation::Const(Literal::Bool(v)) => v.to_string(),
+                                Operation::Const(Literal::Text(v)) => v.clone(),
+                                Operation::Const(Literal::Bytes(v)) => {
+                                    v.iter().map(|b| format!("{b:02x}")).collect()
+                                }
+                                _ => String::new(),
+                            };
+                            SetWindowTextW(window.literal, wide(&value).as_ptr());
+                            window.status = window.editor.node_properties(id).unwrap_or_default();
                         }
                     }
                 }
@@ -536,12 +873,12 @@ unsafe fn dispatch(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                     let x = lparam as u16 as i16 as i32;
                     let y = (lparam as u32 >> 16) as u16 as i16 as i32;
                     let scroll = window.scroll;
-                    window.layout.insert(
+                    let name = window.editor.graph().name.clone();
+                    let _ = window.layout.set(
+                        &name,
                         id,
-                        Point {
-                            x: (x - offset.x).clamp(0, 100_000),
-                            y: (y - offset.y + scroll).clamp(60, 100_000),
-                        },
+                        (x - offset.x).clamp(0, 100_000),
+                        (y - offset.y + scroll).clamp(60, 100_000),
                     );
                     InvalidateRect(hwnd, null(), 1);
                 }
@@ -558,6 +895,10 @@ unsafe fn dispatch(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
                 0
             }
             WM_DESTROY => {
+                if let Some(session) = window.debugger.take() {
+                    session.control().stop();
+                }
+                KillTimer(hwnd, 1);
                 PostQuitMessage(0);
                 0
             }
@@ -568,24 +909,135 @@ unsafe fn dispatch(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> 
 
 unsafe fn command(hwnd: HWND, window: &mut Window, id: usize) {
     unsafe {
+        if window.debugger.is_some()
+            && !matches!(
+                id,
+                DEBUG_STEP
+                    | DEBUG_CONTINUE
+                    | DEBUG_PAUSE
+                    | DEBUG_STOP
+                    | DEBUG_BREAK
+                    | PROPERTIES
+                    | TRACE
+                    | TRACE_PREVIOUS
+            )
+        {
+            window.status = "Termina o detén la depuración antes de editar el documento.".into();
+            SetWindowTextW(window.diagnostic, wide(&window.status).as_ptr());
+            return;
+        }
+        if window.schema_form.is_some()
+            && !matches!(
+                id,
+                NODE_FORM
+                    | OPERATION_CHOICE
+                    | SCHEMA_FORM
+                    | EDIT_NODE_FORM
+                    | GRAPH_FORM
+                    | FORM_APPLY
+                    | FORM_CANCEL
+            )
+        {
+            window.status = "Aplica o cierra el formulario antes de cambiar el documento.".into();
+            SetWindowTextW(hwnd, wide(&window.status).as_ptr());
+            return;
+        }
         let result: Result<String, String> = (|| match id {
+            NODE_FORM | OPERATION_CHOICE => {
+                let index = SendMessageW(window.operation_choice, 0x0147, 0, 0).max(0) as usize;
+                let name = OPERATION_NAMES.get(index).ok_or("Operación inválida")?;
+                window.schema_form = Some(FormMode::Node);
+                SendMessageW(window.diagnostic, 0x00cf, 0, 0);
+                let template = if *name == "Add" {
+                    "operation=Add\r\ninputs=a:int(-1000000,1000000);b:int(-1000000,1000000)\r\noutputs=result:int(-2000000,2000000)\r\neffects=\r\ncapabilities=".into()
+                } else {
+                    format!("operation={name}\r\ninputs=\r\noutputs=\r\neffects=\r\ncapabilities=")
+                };
+                SetWindowTextW(window.diagnostic, wide(&template).as_ptr());
+                Ok("Completa parámetros y puertos; Aplicar contrato valida antes de crear.".into())
+            }
+            SCHEMA_FORM => {
+                window.schema_form = Some(FormMode::Schema);
+                SendMessageW(window.diagnostic, 0x00cf, 0, 0);
+                SetWindowTextW(
+                    window.diagnostic,
+                    wide("name=Point\r\nversion=1\r\nfields=1,x,required,int(-100,100)").as_ptr(),
+                );
+                Ok("Schema: fields=tag,name,required|optional,type;...".into())
+            }
+            FORM_APPLY => {
+                let kind = window.schema_form.ok_or("Abre un formulario de contrato")?;
+                let text = read_edit_text(window.diagnostic, 8192)?;
+                match kind {
+                    FormMode::Schema => window
+                        .editor
+                        .apply_schema_form(&text)
+                        .map_err(|e| format!("{e:?}"))?,
+                    FormMode::Node => {
+                        window.selected = Some(
+                            window
+                                .editor
+                                .apply_node_form(&text)
+                                .map_err(|e| format!("{e:?}"))?,
+                        )
+                    }
+                    FormMode::EditNode(id) => window
+                        .editor
+                        .apply_node_form_to(id, &text)
+                        .map_err(|e| format!("{e:?}"))?,
+                    FormMode::Graph => window
+                        .editor
+                        .apply_graph_form(&text)
+                        .map_err(|e| format!("{e:?}"))?,
+                }
+                window.schema_form = None;
+                window.trace.clear();
+                SendMessageW(window.diagnostic, 0x00cf, 1, 0);
+                Ok("Contrato insertado. Conecta y valida el programa antes de guardar.".into())
+            }
+            FORM_CANCEL => {
+                window.schema_form = None;
+                SendMessageW(window.diagnostic, 0x00cf, 1, 0);
+                Ok("Formulario cerrado.".into())
+            }
+            EDIT_NODE_FORM | GRAPH_FORM => {
+                let (kind, text) = if id == GRAPH_FORM {
+                    (FormMode::Graph, window.editor.graph_form_text())
+                } else {
+                    let node = window.selected.ok_or("Selecciona un nodo")?;
+                    (
+                        FormMode::EditNode(node),
+                        window
+                            .editor
+                            .node_form_text(node)
+                            .map_err(|e| format!("{e:?}"))?,
+                    )
+                };
+                window.schema_form = Some(kind);
+                SendMessageW(window.diagnostic, 0x00cf, 0, 0);
+                SetWindowTextW(window.diagnostic, wide(&text).as_ptr());
+                Ok("Edita contrato y elige Aplicar contrato. ID del nodo conservado.".into())
+            }
+            SCHEMA_VIEW => Ok(window.editor.schema_properties()),
             NEW => {
                 window.editor = GraphEditor::new();
                 window.path = None;
-                window.layout.clear();
+                window.layout = EditorLayout::default();
                 window.trace.clear();
                 window.selected = None;
                 window.scroll = 0;
+                window.breakpoints.clear();
                 Ok("Nuevo grafo nativo.".into())
             }
             OPEN => {
                 if let Some(path) = file_dialog(hwnd, false) {
                     window.editor = read_document(&path).map_err(|e| e.to_string())?;
+                    window.layout = load_layout(&path);
                     window.path = Some(path);
-                    window.layout.clear();
                     window.trace.clear();
                     window.selected = None;
                     window.scroll = 0;
+                    window.breakpoints.clear();
                 } else {
                     return Ok("Apertura cancelada.".into());
                 }
@@ -599,6 +1051,7 @@ unsafe fn command(hwnd: HWND, window: &mut Window, id: usize) {
                 };
                 if let Some(path) = path {
                     save_document(&path, &window.editor).map_err(|e| e.to_string())?;
+                    save_layout(&path, &window.layout).map_err(|e| e.to_string())?;
                     window.path = Some(path);
                 } else {
                     return Ok("Guardado cancelado.".into());
@@ -649,22 +1102,15 @@ unsafe fn command(hwnd: HWND, window: &mut Window, id: usize) {
                     .select_graph(index)
                     .map_err(|e| format!("{e:?}"))?;
                 window.selected = None;
-                window.layout.clear();
-                window.trace.clear();
                 Ok(format!("Grafo: {}", window.editor.graph().name))
             }
             APPLY => {
-                let mut text = [0u16; 129];
-                let len = GetWindowTextW(window.literal, text.as_mut_ptr(), 129);
-                let value: i128 = String::from_utf16_lossy(&text[..len.max(0) as usize])
-                    .trim()
-                    .parse()
-                    .map_err(|_| "Entero inválido")?;
+                let value = read_edit_text(window.literal, 131072)?;
                 window
                     .editor
-                    .set_integer(
+                    .set_literal_text(
                         window.selected.ok_or("Selecciona una constante entera")?,
-                        value,
+                        &value,
                     )
                     .map_err(|e| format!("{e:?}"))?;
                 window.trace.clear();
@@ -687,8 +1133,9 @@ unsafe fn command(hwnd: HWND, window: &mut Window, id: usize) {
                 let event = window
                     .trace
                     .get(window.trace_index)
-                    .ok_or("Ejecuta el grafo para obtener una traza; no quedan más eventos")?;
-                window.selected = Some(event.node);
+                    .ok_or("Ejecuta el grafo para obtener una traza; no quedan más eventos")?
+                    .clone();
+                window.focus_node(&event.graph, event.node);
                 window.trace_index += 1;
                 Ok(format!(
                     "Traza {}/{} — {} / nodo {}\r\nSalidas: {:?}",
@@ -699,10 +1146,202 @@ unsafe fn command(hwnd: HWND, window: &mut Window, id: usize) {
                     event.outputs
                 ))
             }
+            TRACE_PREVIOUS => {
+                window.trace_index = window.trace_index.saturating_sub(2);
+                let event = window
+                    .trace
+                    .get(window.trace_index)
+                    .ok_or("No hay traza")?
+                    .clone();
+                window.focus_node(&event.graph, event.node);
+                window.trace_index += 1;
+                Ok(format!(
+                    "Traza {}/{} — {} / nodo {}\r\nSalidas: {:?}",
+                    window.trace_index,
+                    window.trace.len(),
+                    event.graph,
+                    event.node,
+                    event.outputs
+                ))
+            }
+            DEBUG_START => {
+                let session = window
+                    .editor
+                    .start_debugger()
+                    .map_err(|e| format!("{e:?}"))?;
+                for (graph, node) in &window.breakpoints {
+                    session
+                        .control()
+                        .toggle_breakpoint(graph, *node)
+                        .map_err(|e| format!("{e:?}"))?;
+                }
+                window.debugger = Some(session);
+                window.trace.clear();
+                window.trace_index = 0;
+                SetTimer(hwnd, 1, 100, None);
+                Ok("Depurador iniciado en un hilo con snapshot del documento.".into())
+            }
+            DEBUG_STEP | DEBUG_CONTINUE | DEBUG_PAUSE | DEBUG_STOP => {
+                let control = window.debugger.as_ref().ok_or("Inicia Depurar")?.control();
+                match id {
+                    DEBUG_STEP => control.step(),
+                    DEBUG_CONTINUE => control.continue_run(),
+                    DEBUG_PAUSE => control.pause(),
+                    _ => control.stop(),
+                }
+                Ok("Comando enviado al ejecutor.".into())
+            }
+            DEBUG_BREAK => {
+                let key = (
+                    window.editor.graph().name.clone(),
+                    window.selected.ok_or("Selecciona un nodo")?,
+                );
+                let enabled = if window.breakpoints.remove(&key) {
+                    false
+                } else {
+                    if window.breakpoints.len() >= 4096 {
+                        return Err("Límite de breakpoints".into());
+                    }
+                    window.breakpoints.insert(key.clone());
+                    true
+                };
+                if let Some(session) = &window.debugger {
+                    session
+                        .control()
+                        .toggle_breakpoint(&key.0, key.1)
+                        .map_err(|e| format!("{e:?}"))?;
+                }
+                Ok(format!("Breakpoint {} / {}: {}", key.0, key.1, enabled))
+            }
+            PROPERTIES => window
+                .editor
+                .node_properties(window.selected.ok_or("Selecciona un nodo")?)
+                .map_err(|e| format!("{e:?}")),
+            DUPLICATE => {
+                let node = window
+                    .editor
+                    .duplicate_node(window.selected.ok_or("Selecciona un nodo")?)
+                    .map_err(|e| format!("{e:?}"))?;
+                window.selected = Some(node);
+                window.trace.clear();
+                window
+                    .editor
+                    .node_properties(node)
+                    .map_err(|e| format!("{e:?}"))
+            }
+            OUTPUT_TYPE => {
+                let source = window
+                    .pending
+                    .as_ref()
+                    .ok_or("Selecciona una salida del nodo")?;
+                let ty = match source {
+                    SourceEndpoint::NodeOutput { node, port } => window
+                        .editor
+                        .graph()
+                        .nodes
+                        .iter()
+                        .find(|n| n.id == *node)
+                        .and_then(|n| n.outputs.iter().find(|p| p.id == *port))
+                        .map(|p| p.ty.clone()),
+                    SourceEndpoint::GraphInput(port) => window
+                        .editor
+                        .graph()
+                        .inputs
+                        .iter()
+                        .find(|p| p.id == *port)
+                        .map(|p| p.ty.clone()),
+                }
+                .ok_or("Puerto no encontrado")?;
+                window
+                    .editor
+                    .set_output_type(0, ty)
+                    .map_err(|e| format!("{e:?}"))?;
+                Ok("Tipo del resultado actualizado; conecta la salida al resultado.".into())
+            }
+            ADD_GRAPH | APPLY_TYPE | SUBGRAPH => {
+                let text = read_edit_text(window.literal, 128)?;
+                if id == ADD_GRAPH {
+                    window
+                        .editor
+                        .add_graph(text.trim())
+                        .map_err(|e| format!("{e:?}"))?;
+                    return Ok("Grafo creado. Usa Siguiente grafo.".into());
+                }
+                if id == SUBGRAPH {
+                    let node = window
+                        .editor
+                        .add_subgraph(text.trim())
+                        .map_err(|e| format!("{e:?}"))?;
+                    window.selected = Some(node);
+                    window.trace.clear();
+                    return window
+                        .editor
+                        .node_properties(node)
+                        .map_err(|e| format!("{e:?}"));
+                }
+                let mut fields = text.split_whitespace();
+                let output = match fields.next() {
+                    Some("in") => false,
+                    Some("out") => true,
+                    _ => return Err("Formato: in|out ID bool|text|bytes|int MIN MAX".into()),
+                };
+                let port: PortId = fields
+                    .next()
+                    .ok_or("Falta ID")?
+                    .parse()
+                    .map_err(|_| "ID inválido")?;
+                let ty = match fields.next() {
+                    Some("bool") => SemanticType::Bool,
+                    Some("text") => SemanticType::Text,
+                    Some("bytes") => SemanticType::Bytes,
+                    Some("int") => {
+                        let min = fields
+                            .next()
+                            .ok_or("Falta min")?
+                            .parse()
+                            .map_err(|_| "Min inválido")?;
+                        let max = fields
+                            .next()
+                            .ok_or("Falta max")?
+                            .parse()
+                            .map_err(|_| "Max inválido")?;
+                        SemanticType::Integer(
+                            IntegerType::new(min, max).map_err(|e| e.to_string())?,
+                        )
+                    }
+                    _ => return Err("Tipo inválido".into()),
+                };
+                if fields.next().is_some() {
+                    return Err("Campos adicionales".into());
+                }
+                window
+                    .editor
+                    .set_port_type(window.selected, output, port, ty)
+                    .map_err(|e| format!("{e:?}"))?;
+                Ok("Puerto actualizado; valida antes de ejecutar.".into())
+            }
+            id if (TOOLBOX..TOOLBOX + toolbox().len()).contains(&id) => {
+                let operation = toolbox()[id - TOOLBOX].1.clone();
+                let node = match operation {
+                    Operation::Const(literal) => window.editor.add_literal(literal),
+                    operation => window.editor.add_operation(operation),
+                }
+                .map_err(|e| format!("{e:?}"))?;
+                window.selected = Some(node);
+                window.trace.clear();
+                window
+                    .editor
+                    .node_properties(node)
+                    .map_err(|e| format!("{e:?}"))
+            }
             _ => Ok(window.status.clone()),
         })();
         window.status = result.unwrap_or_else(|e| format!("Error: {e}"));
-        SetWindowTextW(window.diagnostic, wide(&window.status).as_ptr());
+        if window.schema_form.is_none() {
+            SetWindowTextW(window.diagnostic, wide(&window.status).as_ptr());
+        } else {
+            SetWindowTextW(hwnd, wide(&format!("G0 — {}", window.status)).as_ptr());
+        }
     }
 }
 
@@ -853,9 +1492,21 @@ unsafe fn draw(window: &mut Window, dc: HDC) {
                     right: rect.right - 10,
                     bottom: rect.top + 28,
                 },
-                &format!("#{} {:?}", node.id, node.operation),
+                &format!(
+                    "{}#{} {:?}",
+                    if window
+                        .breakpoints
+                        .contains(&(window.editor.graph().name.clone(), node.id))
+                    {
+                        "● "
+                    } else {
+                        ""
+                    },
+                    node.id,
+                    node.operation
+                ),
             );
-            for port in node.inputs.iter().take(8) {
+            for port in node.inputs.iter().take(64) {
                 let endpoint = TargetEndpoint::NodeInput {
                     node: node.id,
                     port: port.id,
@@ -878,7 +1529,7 @@ unsafe fn draw(window: &mut Window, dc: HDC) {
                     });
                 }
             }
-            for port in node.outputs.iter().take(8) {
+            for port in node.outputs.iter().take(64) {
                 let endpoint = SourceEndpoint::NodeOutput {
                     node: node.id,
                     port: port.id,

@@ -16,7 +16,9 @@ fn compiler_graph_generates_deterministic_native_wrapper_and_compiles_itself() {
     assert_eq!(assembly.matches(".byte ").count(), source.len());
     assert_eq!(compile_with(&compiler, &source).unwrap(), assembly);
     let stage_one = compile_with(&compiler, &compiler).unwrap();
-    let stage_two = g0::native_runtime::execute_embedded(&compiler, &compiler).unwrap();
+    let stage_two =
+        g0::native_runtime::execute_embedded_with_limits(&compiler, &compiler, compiler_limits())
+            .unwrap();
     assert_eq!(stage_two, vec![Value::Text(stage_one.into())]);
 }
 
@@ -25,11 +27,18 @@ fn native_abi_returns_owned_results_and_rejects_bad_input_ranges() {
     use g0::native_runtime::*;
     // Valid Rust-owned slices and handles satisfy the documented FFI preconditions.
     unsafe {
-        let result = g0_runtime_entry(
+        let limits = compiler_limits();
+        let limits = NativeLimits {
+            max_steps: limits.max_steps,
+            max_value_bytes: limits.max_value_bytes,
+            max_call_depth: limits.max_call_depth as u64,
+        };
+        let result = g0_runtime_entry_with_limits(
             COMPILER_SOURCE.as_ptr(),
             COMPILER_SOURCE.len(),
             COMPILER_SOURCE.as_ptr(),
             COMPILER_SOURCE.len(),
+            &limits,
         );
         assert_eq!(g0_runtime_status(result), 0);
         let mut length = 0;

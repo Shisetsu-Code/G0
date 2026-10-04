@@ -112,9 +112,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             );
             return Ok(());
         }
-        g0::compiler::compile_graph(&graph, g0::machine::MachineProfile::x86_64_v3())
+        if g0::native_program::requires_aggregate_values(&graph) {
+            g0::native_program::compile_program(
+                &program,
+                &g0::program::PlatformContract::bootstrap_x86_64_v3(),
+                g0::machine::MachineProfile::x86_64_v3(),
+            )
             .map_err(|issue| format!("native graph compilation failed: {issue:?}"))?
             .assembly
+        } else {
+            g0::compiler::compile_graph(&graph, g0::machine::MachineProfile::x86_64_v3())
+                .map_err(|issue| format!("native graph compilation failed: {issue:?}"))?
+                .assembly
+        }
     } else {
         if command == "run" {
             return Err("run requires a native .g0p or .g0g document".into());

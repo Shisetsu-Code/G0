@@ -20,18 +20,21 @@ those native facilities.
   compiler on Windows, but the emitted assembly uses ELF/System V conventions.
 - Native Win32/GDI graph editor with canonical save, validation, undo/redo and
   bounded execution traces. The initial toolbox and UI limits are documented in
-  `native-editor.md`.
-- Executable compiler backend written as G0 graphs, generating a native wrapper
-  linked to the Rust runtime. This stage is not full compiler self-hosting; see
+  `editor-native.md`.
+- Compiler graphs parse native program syntax, build offset-based ASTs, schedule
+  dependencies and emit primitive native graphs or a runtime wrapper. Full
+  semantic validation and structured control emission in G0 remain in progress; see
   `compiler-bootstrap.md` for reproducibility checks and remaining work.
 
-## Contracts requiring runtime implementation
+## Native runtime
 
 The native Rust host now implements `g0c run`, immutable structured values and
 schema-directed codecs, bounded/cancellable tasks, region lifetimes, encrypted
 snapshot transactions and mutually authenticated TLS 1.3. Storage GIR nodes use
 one explicit transaction with commit after successful execution. A graph-native
 service maps authenticated certificate fingerprints to scoped principals.
+Explicit hybrid-only key exchange and bounded typed multiplexed streams now
+extend the native transport; see `native-execution.md` for their boundaries.
 Integration tests prove the same record survives storage reopen and a real
 encrypted loopback round trip.
 
@@ -42,7 +45,10 @@ Explicitly hosted children delegate only parent-held requirements through a
 per-child host factory. The storage provider uses independent transactions,
 commits after valid results and drops writes on child execution failure.
 
-Aggregate x86 lowering, online migration/type-change profiles, trusted witness providers and
+Direct aggregate x86 lowering now executes structured values and machine-level
+calls, selection, matching, bounded loops and maps with a linked bounded runtime.
+Native compilation rejects unsupported effect bindings; see `native-aggregate-abi.md`.
+Online migration/type-change profiles, trusted witness providers and
 advanced scheduling/remote-execution profiles still require implementation.
 Current profiles reject unsupported requirements instead of weakening them.
 
@@ -70,6 +76,9 @@ requires no input ports and exactly one output. The CLI
 checks graph references and control contracts with the existing program
 validator; a missing subgraph definition fails before emission. Compilation
 uses the existing scalar pipeline and exports `g0_machine_main`.
+Aggregate programs select the direct value-runtime backend. Its typed entry and
+context ABI is distinct from the scalar compatibility entry; compiled assembly
+must link the native runtime library.
 
 The CLI rejects malformed options. Decode, validation and lowering failures
 leave an existing output file intact, and an output resolving to the input

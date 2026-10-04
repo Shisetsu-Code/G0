@@ -20,10 +20,53 @@ pub fn execute_embedded(
     program_bytes: &[u8],
     input: &[u8],
 ) -> Result<Vec<Value>, NativeRuntimeError> {
+    execute_embedded_with_limits(
+        program_bytes,
+        input,
+        crate::execution::ExecutionLimits::default(),
+    )
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeLimits {
+    pub max_steps: u64,
+    pub max_value_bytes: u64,
+    pub max_call_depth: u64,
+}
+impl NativeLimits {
+    pub fn execution_limits(self) -> Result<crate::execution::ExecutionLimits, NativeRuntimeError> {
+        if self.max_steps == 0
+            || self.max_steps > 16_000_000
+            || self.max_value_bytes == 0
+            || self.max_value_bytes > 8 * 1024 * 1024 * 1024
+            || !(1..=128).contains(&self.max_call_depth)
+        {
+            return Err(NativeRuntimeError::TooLarge);
+        }
+        Ok(crate::execution::ExecutionLimits {
+            max_steps: self.max_steps,
+            max_value_bytes: self.max_value_bytes,
+            max_call_depth: self.max_call_depth as usize,
+        })
+    }
+}
+pub fn execute_embedded_with_limits(
+    program_bytes: &[u8],
+    input: &[u8],
+    limits: crate::execution::ExecutionLimits,
+) -> Result<Vec<Value>, NativeRuntimeError> {
     if program_bytes.len() > crate::bootstrap_compiler::MAX_SOURCE_BYTES
         || input.len() > 8 * 1024 * 1024
     {
         return Err(NativeRuntimeError::TooLarge);
+    }
+    if !input.is_empty()
+        && (input.len() as u64)
+            .checked_add(std::mem::size_of::<Value>() as u64)
+            .is_none_or(|bytes| bytes > limits.max_value_bytes)
+    {
+        return Err(NativeRuntimeError::Runtime(RuntimeError::MemoryLimit));
     }
     let document = decode_program(program_bytes).map_err(NativeRuntimeError::Document)?;
     let program = document
@@ -38,14 +81,22 @@ pub fn execute_embedded(
         [] if input.is_empty() => vec![],
         [p] if p.ty == SemanticType::Bytes => vec![Value::Bytes(input.into())],
         [p] => vec![
-            decode_value(input, &p.ty, &program.schemas, CodecLimits::default())
-                .map_err(|_| NativeRuntimeError::Input)?,
+            decode_value(
+                input,
+                &p.ty,
+                &program.schemas,
+                CodecLimits {
+                    max_bytes: usize::try_from(limits.max_value_bytes).unwrap_or(usize::MAX),
+                    ..Default::default()
+                },
+            )
+            .map_err(|_| NativeRuntimeError::Input)?,
         ],
         _ => return Err(NativeRuntimeError::EntryInterface),
     };
     let mut host = crate::resource_host::ResourceHost::new(
         std::sync::Arc::new(program),
-        crate::bootstrap_compiler::compiler_limits(),
+        limits,
         Default::default(),
     )
     .map_err(NativeRuntimeError::Runtime)?;
@@ -54,7 +105,7 @@ pub fn execute_embedded(
 }
 
 pub struct NativeResult {
-    output: Result<Vec<Value>, NativeRuntimeError>,
+    pub(crate) output: Result<Vec<Value>, NativeRuntimeError>,
 }
 
 /// # Safety
@@ -66,6 +117,44 @@ pub unsafe extern "C" fn g0_runtime_entry(
     program_len: usize,
     input: *const u8,
     input_len: usize,
+) -> *mut NativeResult {
+    unsafe {
+        runtime_entry(
+            program,
+            program_len,
+            input,
+            input_len,
+            crate::execution::ExecutionLimits::default(),
+        )
+    }
+}
+
+/// # Safety
+/// Byte ranges obey g0_runtime_entry's requirements. limits is null or points
+/// to an initialized NativeLimits for this call. Returned result is owned.
+/// A null limits pointer returns an Input error; g0_runtime_entry uses defaults.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn g0_runtime_entry_with_limits(
+    program: *const u8,
+    program_len: usize,
+    input: *const u8,
+    input_len: usize,
+    limits: *const NativeLimits,
+) -> *mut NativeResult {
+    let limits = unsafe { limits.as_ref() }
+        .ok_or(NativeRuntimeError::Input)
+        .and_then(|limits| limits.execution_limits());
+    match limits {
+        Ok(limits) => unsafe { runtime_entry(program, program_len, input, input_len, limits) },
+        Err(error) => Box::into_raw(Box::new(NativeResult { output: Err(error) })),
+    }
+}
+unsafe fn runtime_entry(
+    program: *const u8,
+    program_len: usize,
+    input: *const u8,
+    input_len: usize,
+    limits: crate::execution::ExecutionLimits,
 ) -> *mut NativeResult {
     let output = if program_len > crate::bootstrap_compiler::MAX_SOURCE_BYTES
         || input_len > 8 * 1024 * 1024
@@ -84,7 +173,7 @@ pub unsafe extern "C" fn g0_runtime_entry(
         } else {
             unsafe { std::slice::from_raw_parts(input, input_len) }
         };
-        execute_embedded(program, input)
+        execute_embedded_with_limits(program, input, limits)
     };
     Box::into_raw(Box::new(NativeResult { output }))
 }

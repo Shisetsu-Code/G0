@@ -21,7 +21,9 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
       - name: Test
-        run: cargo test --all-targets
+        run: |
+          cargo build --lib
+          cargo test --all-targets
       - name: Compile legacy bootstrap example
         run: |
           cargo run --release -- compile examples/answer.g0 -o target/answer.s
@@ -37,6 +39,9 @@ jobs:
           cc target/compiler-stage2.s tests/support/bootstrap_driver.c target/release/libg0.a -ldl -lpthread -lm -o target/compiler-stage2
           ./target/compiler-stage2 compiler/native-wrapper.g0p > target/compiler-stage3.s
           cmp target/compiler-stage2.s target/compiler-stage3.s
+          python -c "from pathlib import Path; b=bytearray(Path('compiler/native-wrapper.g0p').read_bytes()); b[6:8]=(2).to_bytes(2,'little'); Path('target/compiler-legacy.g0p').write_bytes(b)"
+          if ./target/compiler-stage2 target/compiler-legacy.g0p > target/compiler-invalid.s; then exit 1; fi
+          test ! -s target/compiler-invalid.s
       - name: Compile and execute GIR pipeline example
         run: |
           cargo run --release --example gir_answer > target/gir_answer.s

@@ -1,18 +1,59 @@
 # Compiler bootstrap
 
-`compiler/native-wrapper.g0p` is an executable G0 compiler backend. Its entry
-accepts `Bytes` containing a validated native G0 program and returns assembly as
-`Text`. All byte formatting, size calculation, ordered mapping, joining and
-assembly composition are G0 graph operations. `examples/bootstrap_compiler.rs`
-regenerates that canonical graph source; a test requires byte-for-byte equality
-with the checked-in document.
+`compiler/native-wrapper.g0p` contains executable G0 compiler definitions.
+`examples/bootstrap_compiler.rs` constructs those definitions and regenerates
+their canonical binary document. The builder does not inspect or transform
+compiler input. Tests require the checked-in source to match the generated
+definition byte for byte.
 
-The current output profile is System V x86-64 assembly containing the complete
-program document and a native entry that invokes the linked G0 runtime. This is
-an interpreter-backed native wrapper. It is not the optimizing GIR-to-MIR x86
-backend rewritten in G0: validation, decoding, scheduling and primitive
-operations still use the Rust bootstrap host. The graph backend can compile
-its own source, but this stage does not establish full compiler self-hosting.
+The default `compile` entry accepts bytes and returns System V x86-64 assembly.
+Its G0 reader checks G0P 0.3 framing, GIR magic and supported versions, UTF-8
+strings, operation payload framing, type prefix trees, schemas, endpoint tags,
+capability/effect tags and complete consumption of graph blobs and the container.
+Separate G0 reader graphs construct node and edge offset tables. A G0 scheduler
+orders dependencies before their users and detects cycles when a complete pass
+makes no progress. Tests execute these GIR algorithms with raw bytes or tables
+provided directly to the executor.
+
+The default output remains an interpreter-backed native wrapper. It embeds
+the document and invokes the linked G0 runtime. The Rust bootstrap host still
+decodes and semantically validates source before invoking this entry. The G0
+reader does not yet replace the complete semantic validator, including type
+assignment, arithmetic proofs, graph linking, operation shapes and linearity.
+Reproducing the wrapper compiler through multiple stages does not establish
+full compiler self-hosting.
+
+## Direct native emitter implemented in G0
+
+`compile_direct_native` and the example's `direct` command execute a separate
+G0 backend. The G0 reader builds offset tables, the G0 scheduler computes node
+order, and G0 graphs resolve IDs to metadata indices and wire edge arguments
+into native call frames. Emitted instructions call individual immutable value
+primitives and the typed graph ABI. They do not invoke `Executor` to execute
+the compiled program. Embedded bytes supply metadata for operations and type
+checks.
+
+This backend currently accepts one graph, contiguous port IDs, one output per
+node and graph, and at most 32 inputs per node. It supports immutable primitives,
+including arithmetic, collections and structured values. Unsupported control
+programs are rejected by a G0 domain check. Multiple graphs, effects and the full
+language require additional G0 lowering and validation. The separate Rust
+`native_aggregate` backend has broader native control coverage; that coverage
+has not yet been implemented in the G0 compiler.
+
+```sh
+cargo run --example bootstrap_compiler -- direct input.g0p > target/program.s
+cargo build --lib
+cc target/program.s driver.c target/debug/libg0.a -ldl -lpthread -lm -o program
+```
+
+On Linux x86-64, `tests/bootstrap_native_emitter.rs` assembles and links output
+from the G0 emitter, executes a reversed-ID arithmetic graph and checks that
+an exhausted host step budget causes failure. Run `cargo build --lib` before
+Linux integration tests. Windows runs the reader, scheduler and emitter tests
+but cannot execute System V assembly directly.
+
+## Wrapper bootstrap stages
 
 ```sh
 cargo run --release -- bootstrap compiler/native-wrapper.g0p -o target/compiler-stage1.s
@@ -27,30 +68,37 @@ cc target/compiler-stage2.s tests/support/bootstrap_driver.c target/release/libg
 cmp target/compiler-stage2.s target/compiler-stage3.s
 ```
 
-CI executes both linked compiler stages and compares their assembly output.
-Local tests execute the same compiler through the runtime and C ABI. These
-checks prove reproducibility for this output profile; they do not prove an
-independent native implementation of the compiler's algorithms.
+CI runs the linked stages and compares assembly. These checks establish wrapper
+reproducibility. Fully native self-compilation requires the G0 backend to cover
+the compiler's own control graphs and to validate source semantics independently
+of the Rust bootstrap host.
 
-Compilation validates the source definition before passing its bytes to the
-compiler graph. It never executes source effects or grants source capabilities.
-The bootstrap profile accepts at most 128 KiB of source, reserves at most 512
-MiB of cumulative runtime allocation and performs at most two million steps.
-Malformed input and budget exhaustion are explicit errors; output is replaced
-atomically only after successful compilation.
+## Host limits and ABI
 
-G0P 0.3 allows typed entry inputs and multiple outputs. Readers preserve the
-zero-input/single-output entry restriction of versions 0.1 and 0.2. The existing
-optimized native entry compiler continues to require zero inputs and one output
-and explicitly rejects an incompatible interface. The wrapper runtime supports
-zero inputs, one raw Bytes input, or one publicly serializable G0V typed input.
+Compiler hosting accepts at most one MiB of source or compiler document. Its
+explicit budget is 16 million steps, eight GiB of cumulative logical allocation
+and call depth 128. Logical accounting includes repeated graph metadata and
+forwarded shared values; it is not an estimate of resident memory. The reader
+slices each graph blob before parsing it to avoid repeatedly charging the entire
+container through nested reader calls.
 
-`g0_compiled_entry(input, length)` returns an opaque owned result. The exported
-runtime ABI provides status, a borrowed Text/Bytes view, a checked i64 result,
-and one explicit free operation. Native callers must meet the documented memory
-and handle lifetime preconditions. The runtime grants no capabilities and has
-no implicit file, network or process access.
+Rust compiler hosting uses a worker with an explicit 16 MiB stack and joins
+that worker before returning. Spawn and panic failures become host errors.
+The current compiler callback DAG has depth 38, below the shared depth limit,
+but its interpreter frames exceed Windows' two MiB main-thread stack in debug
+builds. The worker bounds this host resource without changing ordinary runtime
+execution limits or requiring a process-wide stack setting.
 
-Remaining self-hosting work includes implementing program decoding and semantic
-validation in G0, direct native lowering for structured values, porting the
-optimizing backend, and repeating the bootstrap without the Rust compiler host.
+Ordinary runtime entries retain their default budgets: one million steps and
+64 MiB of logical allocation. They do not inherit the compiler's larger budget.
+The compiler driver explicitly supplies host limits through
+`g0_compiled_entry_with_limits(input, length, limits)`. `NativeLimits` contains
+three `uint64_t` fields in order: steps, value bytes and call depth. These limits
+confer no capabilities.
+
+Both compiled profiles return an opaque owned `NativeResult`. Runtime exports
+provide status, a borrowed Text/Bytes view, a checked i64 result and explicit
+freeing. Callers must provide valid byte ranges and respect handle lifetimes.
+Compilation never executes source effects or turns declarations into grants.
+Invalid input, exhausted budgets and unsupported native domains produce errors;
+CLI output replacement occurs only after successful compilation.

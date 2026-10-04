@@ -2,6 +2,10 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().collect();
     match args.as_slice() {
+        [_, command, source] if command == "direct" => print!(
+            "{}",
+            g0::bootstrap_compiler::compile_direct_native(&std::fs::read(source)?)?
+        ),
         [_, command, path] if command == "source" => std::fs::write(
             path,
             g0::program_binary::encode_program(&g0::bootstrap_compiler::compiler_document())
@@ -16,7 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ),
         _ => {
             return Err(
-                "usage: bootstrap_compiler source output.g0p | compile compiler.g0p input.g0p"
+                "usage: bootstrap_compiler source output.g0p | compile compiler.g0p input.g0p | direct input.g0p"
                     .into(),
             );
         }

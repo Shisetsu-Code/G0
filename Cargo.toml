@@ -9,7 +9,8 @@ default-run = "g0c"
 [dependencies]
 ring = "=0.17.14"
 zeroize = "=1.9.0"
-rustls = { version = "=0.23.43", default-features = false, features = ["std", "ring"] }
+rustls = { version = "=0.23.43", default-features = false, features = ["std", "ring", "aws_lc_rs"] }
+aws-lc-rs = { version = "=1.16.3", default-features = false, features = ["aws-lc-sys", "prebuilt-nasm"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_LibraryLoader", "Win32_UI_WindowsAndMessaging", "Win32_UI_Controls_Dialogs"] }

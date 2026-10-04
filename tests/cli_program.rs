@@ -46,12 +46,10 @@ fn g0_compiler_bootstrap_preserves_input_and_previous_output_on_failure() {
     let work = Workspace::new();
     let source = g0::bootstrap_compiler::COMPILER_SOURCE;
     std::fs::write(work.0.join("compiler.g0p"), source).unwrap();
-    assert!(
-        !work
-            .run(&["bootstrap", "compiler.g0p", "-o", "compiler.g0p"])
-            .status
-            .success()
-    );
+    assert!(!work
+        .run(&["bootstrap", "compiler.g0p", "-o", "compiler.g0p"])
+        .status
+        .success());
     assert_eq!(std::fs::read(work.0.join("compiler.g0p")).unwrap(), source);
     success(work.run(&["bootstrap", "compiler.g0p", "-o", "compiler.s"]));
     assert_eq!(
@@ -60,12 +58,10 @@ fn g0_compiler_bootstrap_preserves_input_and_previous_output_on_failure() {
     );
     let previous = std::fs::read(work.0.join("compiler.s")).unwrap();
     std::fs::write(work.0.join("bad.g0p"), b"bad").unwrap();
-    assert!(
-        !work
-            .run(&["bootstrap", "bad.g0p", "-o", "compiler.s"])
-            .status
-            .success()
-    );
+    assert!(!work
+        .run(&["bootstrap", "bad.g0p", "-o", "compiler.s"])
+        .status
+        .success());
     assert_eq!(std::fs::read(work.0.join("compiler.s")).unwrap(), previous);
 }
 
@@ -84,11 +80,9 @@ fn native_program_cli_compiles_calls_select_and_loop() {
         .unwrap();
         success(work.run(&["check", "program.g0p"]));
         success(work.run(&["compile", "program.g0p", "-o", "program.s"]));
-        assert!(
-            std::fs::read_to_string(work.0.join("program.s"))
-                .unwrap()
-                .contains("g0_machine_main:")
-        );
+        assert!(std::fs::read_to_string(work.0.join("program.s"))
+            .unwrap()
+            .contains("g0_machine_main:"));
     }
 }
 
@@ -102,6 +96,23 @@ fn native_program_magic_does_not_require_a_specific_extension() {
     .unwrap();
     success(work.run(&["compile", "program.data"]));
     assert!(work.0.join("program.s").is_file());
+}
+
+#[test]
+fn bootstrap_rejects_legacy_container_without_replacing_output() {
+    let work = Workspace::new();
+    let mut source = encode_program(&fixture::call_program()).unwrap();
+    source[6..8].copy_from_slice(&2u16.to_le_bytes());
+    g0::program_binary::decode_program(&source).unwrap();
+    std::fs::write(work.0.join("legacy.g0p"), &source).unwrap();
+    std::fs::write(work.0.join("result.s"), "preserve me").unwrap();
+    let output = work.run(&["bootstrap", "legacy.g0p", "-o", "result.s"]);
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read(work.0.join("legacy.g0p")).unwrap(), source);
+    assert_eq!(
+        std::fs::read_to_string(work.0.join("result.s")).unwrap(),
+        "preserve me"
+    );
 }
 
 #[test]

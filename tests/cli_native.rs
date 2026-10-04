@@ -252,6 +252,9 @@ fn compilation_failure_preserves_existing_output() {
     graph.nodes[0].operation = Operation::Const(Literal::Text("hello".into()));
     graph.nodes[0].outputs[0].ty = SemanticType::Text;
     graph.outputs[0].ty = SemanticType::Text;
+    // This remains valid GIR, but the zero-argument CLI entry profile cannot
+    // compile an entry with an input. Text constants themselves now compile.
+    graph.inputs = vec![graph.outputs[0].clone()];
     graph.edges = vec![Edge {
         from: SourceEndpoint::NodeOutput { node: 1, port: 0 },
         to: TargetEndpoint::GraphOutput(0),

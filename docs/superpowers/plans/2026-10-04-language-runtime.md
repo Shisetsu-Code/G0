@@ -28,7 +28,7 @@ Malformed and cyclic inputs; resource exhaustion before allocations; nested call
 - [x] 4. Native storage and transactions: schema/policy enforcement, persistence, atomic commits, version conflicts, tenant isolation and recovery tests.
 - [x] 5. Native secure transport: maintained cryptographic platform profile, authentication, framing, replay rejection and loopback integration tests.
 - [x] 6. End-to-end native application: same typed structure through execution, storage, transport and client; integration test proves real behavior.
-- [ ] 7. Native graphical graph editor/debugger: create/open/edit/save canonical graphs, diagnostics and source attribution. Verify native UI and saved documents.
+- [x] 7. Native graphical graph editor/debugger: create/open/edit/save canonical graphs, diagnostics and source attribution. Verify native UI and saved documents.
 - [ ] 8. Compiler implemented in G0: executable compiler graphs, staged bootstrap and reproducible output comparison. Scope of implemented language must be documented, then expanded to cover the compiler itself.
 - [ ] 9. Whole-branch review, full tests/clippy, Linux native execution CI, update PR and deliver patches and implementation report.
 
@@ -50,11 +50,28 @@ Ruling: Ship explicit initial storage/transport profiles and reject advanced uns
 - [x] GIR child/secret regions with inherited lifetime/quota and protected read/write types.
 - [x] Scoped child task profile for owned memory effects, bounded reservations and handle containment.
 - [x] Explicit child effect-host factory and storage transaction provider, with delegated grants and completion failure propagation.
-- [ ] Remaining runtime integration: aggregate x86 lowering; advanced transport profiles.
+- [x] Required hybrid key exchange and bounded typed multiplexing with independent stream closure.
+- [ ] Remaining runtime integration: aggregate x86 lowering.
 
 Task 7: initial Win32/GDI editor implemented and smoke-tested on Windows: create/connect/save/execute 42 + 7 = 49, native canvas rendered to BMP. Canonical editing model, undo/redo and bounded graph/node trace tested. Full toolbox constructors, persisted screen layout and live breakpoints remain. Collection Map/TextJoin operations added for compiler construction; order, empty input, wrong body types and execution limits tested.
 
 Task 8: executable G0 native-wrapper backend added with canonical compiler source, typed G0P 0.3 entry arguments, opaque native runtime ABI and atomic CLI output. Its graph source compiles itself reproducibly through the runtime; Linux CI additionally links and compares three stages. Direct native optimizing lowering and a G0 implementation of decoding/validation remain; the interpreter-backed wrapper is explicitly not marked full self-hosting.
+
+Editor completion: native forms cover operations, semantic types, node/graph
+interfaces, effects, required capabilities and schema declarations. Persisted
+bounded layout and live worker debugging support pause, step, breakpoints,
+continue and cancellation. Twenty editor tests, native HWND/GDI smoke and
+Clippy passed; review additionally exposed and fixed long-literal Apply
+truncation with an actual native-control regression check. Explicit form port
+IDs now preserve imported nonconsecutive interfaces and node contracts.
+
+Compiler/runtime checkpoint: G0 binary syntax reader, AST offset descriptors and
+topological scheduler execute as G0 graphs. A direct G0 emitter currently covers
+one graph of primitive operations. Full semantic validation and program/control
+emission in G0 remain. Host limits distinguish ordinary execution from explicit
+compiler reservations. The Rust aggregate native backend has machine-level
+control, typed entries, private tagged result packs and cancellation; Linux
+assembly execution is being verified in CI.
 
 Runtime integration: G0G 0.3 resource operations now execute through opaque host-bound linear handles. Tests cover region lifetime, bounds, foreign/stale handles, schema-contained linear fan-out, explicit task permissions, ordered concurrent spawning, one-time join and child error propagation. Native wrappers, CLI, editor and graph services route these operations to the actual resource scope. Linux and Windows CI succeeded for the preceding 336-test editor/compiler checkpoint (run 37193464436).
 

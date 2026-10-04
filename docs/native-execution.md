@@ -2,8 +2,10 @@
 
 `g0c run program.g0p` executes GIR directly in the native Rust host. `compile`
 continues to emit System V x86-64 assembly through the existing compiler.
-The two paths are distinct: aggregate operations currently execute in the host;
-their x86 lowering is not implemented and compilation rejects them explicitly.
+The optimized scalar path emits machine arithmetic directly. Programs using
+aggregate values now use a separate native backend: graph calls, branches,
+loops and maps execute as machine control flow, with bounded value primitives
+supplied by a linked runtime library. See `native-aggregate-abi.md`.
 
 The executor supports scalar arithmetic, checked conversion, explicit truncation,
 calls, selection, variant matching and bounded loops. Runtime failures carry graph
@@ -25,6 +27,16 @@ elements or bytes. Text cannot be byte-indexed through these operations.
 `TextConcat`, `BytesConcat`, `EncodeUtf8`, `DecodeUtf8` and `FormatInteger` make
 text/binary boundaries explicit. `DecodeUtf8` returns `Result<Text, Bytes>` and
 preserves invalid bytes as the error value.
+`UnwrapOr` accepts either Option or Result: it yields a present/success payload,
+or the explicitly supplied fallback. The error payload remains an error value
+until the graph deliberately chooses this operation.
+
+G0G 0.8 adds checked `BytesSlice` (start and length), `ArrayConcat` (two
+collections into a dynamic typed slice), `Range` (0 through count-1) and
+`BytesFromArray` (statically constrained 0..255 elements). Slicing rejects
+negative, overflowing and out-of-bounds offsets while accepting an empty slice
+at the end. Range and byte construction charge allocation before reserving
+storage and consume cumulative steps while constructing their elements.
 
 `MakeRecord { schema, fields }` maps fields to inputs ordered by port ID. Required
 fields must be supplied and every field type is checked against the program's
@@ -75,6 +87,7 @@ G0G 0.5 adds secret-root and child-region constructors (60..61), preserving all
 previous operation encodings and retaining readers for 0.1..0.4.
 G0G 0.6 adds scoped task spawn/join (62..63) and retains readers for 0.1..0.5.
 G0G 0.7 adds explicitly hosted task spawn/join (64..65), retaining 0.1..0.6.
+G0G 0.8 adds collection primitives (66..69), retaining 0.1..0.7.
 
 G0P 0.2 appends a schema registry after the graph list. It consists of a u32 count;
 each schema has a u32-length UTF-8 name, u32 version and u32 field count. Each field
@@ -137,7 +150,29 @@ sequence and a u32 G0V payload length. Per-direction sequences reject replays an
 reordering within a session. Limits apply before allocation; handshake and frame
 I/O have absolute deadlines. A malformed/partially consumed frame closes the
 channel. No automatic reconnect or mutation retry is supplied. These mechanisms
-do not implement migration, multiplexing or post-quantum profiles.
+do not implement connection migration, datagram or multipath profiles.
+
+The host can explicitly select `TlsProfile::HybridRequired`, which permits only
+X25519MLKEM768 through pinned rustls/AWS-LC. A classical-only peer fails the
+handshake; no classical fallback is offered. Peer certificates retain their
+existing classical authentication algorithms. This profile protects the hybrid
+key exchange and does not claim post-quantum certificate signatures. See
+[rustls key-exchange documentation](https://docs.rs/rustls/0.23.43/rustls/crypto/aws_lc_rs/kx_group/index.html).
+
+`native_transport::multiplex::MultiplexedChannel` interleaves up to 128
+host-provisioned typed streams over one authenticated connection. Both hosts
+configure matching stream identifiers/types and per-stream byte/message limits;
+the peer cannot provision a new stream by sending an identifier. Each stream
+has its own monotonically checked sequence and half-close state. Half-closing
+one send direction leaves other streams and the reverse direction available.
+Canonical envelopes remain inside the encrypted G0N framing and deadlines;
+unexpected identifiers, sequence, payload types or post-close frames close the
+connection. Receive returns the next stream event without unbounded per-stream
+queues or hidden retries. This profile does not bypass TCP head-of-line blocking
+or implement dynamic stream negotiation.
+Per-stream message quotas count data values; one final half-close remains
+available after that quota. The connection's global frame quota counts both
+data and control frames and must include any planned close frames.
 
 `StorageHost` binds GIR storage operations to one explicitly committed host
 transaction. Create/update return the prospective commit version. Reads may

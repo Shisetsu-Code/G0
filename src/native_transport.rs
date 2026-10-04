@@ -18,6 +18,25 @@ use std::{
 };
 
 const ALPN: &[u8] = b"g0.native.v1";
+#[path = "native_multiplex.rs"]
+pub mod multiplex;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TlsProfile {
+    Classical,
+    HybridRequired,
+}
+impl TlsProfile {
+    fn provider(self) -> Arc<rustls::crypto::CryptoProvider> {
+        Arc::new(match self {
+            Self::Classical => rustls::crypto::ring::default_provider(),
+            Self::HybridRequired => {
+                let mut provider = rustls::crypto::aws_lc_rs::default_provider();
+                provider.kx_groups = vec![rustls::crypto::aws_lc_rs::kx_group::X25519MLKEM768];
+                provider
+            }
+        })
+    }
+}
 #[derive(Debug)]
 pub enum TransportError {
     Denied,
@@ -180,11 +199,26 @@ impl SecureListener {
         trusted_client_roots: Vec<Vec<u8>>,
         limits: TransportLimits,
     ) -> Result<Self, TransportError> {
+        Self::bind_with_profile(
+            permit,
+            identity,
+            trusted_client_roots,
+            limits,
+            TlsProfile::Classical,
+        )
+    }
+    pub fn bind_with_profile(
+        permit: NetworkPermit,
+        identity: Identity,
+        trusted_client_roots: Vec<Vec<u8>>,
+        limits: TransportLimits,
+        profile: TlsProfile,
+    ) -> Result<Self, TransportError> {
         if permit.action != "listen" {
             return Err(TransportError::Denied);
         }
         let limits = limits.validate()?;
-        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let provider = profile.provider();
         let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(
             Arc::new(roots(trusted_client_roots)?),
             provider.clone(),
@@ -231,9 +265,14 @@ impl SecureListener {
             conn.complete_io(&mut socket)?;
         }
         let peer = peer(conn.peer_certificates(), conn.alpn_protocol())?;
+        let key_exchange = conn
+            .negotiated_key_exchange_group()
+            .ok_or(TransportError::Protocol)?
+            .name();
         Ok(SecureChannel {
             wire: Wire::Server(StreamOwned::new(conn, socket)),
             peer,
+            key_exchange,
             limits: self.limits,
             sent: 0,
             received: 0,
@@ -318,6 +357,7 @@ impl Write for Wire {
 pub struct SecureChannel {
     wire: Wire,
     peer: PeerIdentity,
+    key_exchange: rustls::NamedGroup,
     limits: TransportLimits,
     sent: u64,
     received: u64,
@@ -331,11 +371,28 @@ impl SecureChannel {
         trusted_server_roots: Vec<Vec<u8>>,
         limits: TransportLimits,
     ) -> Result<Self, TransportError> {
+        Self::connect_with_profile(
+            permit,
+            server_name,
+            identity,
+            trusted_server_roots,
+            limits,
+            TlsProfile::Classical,
+        )
+    }
+    pub fn connect_with_profile(
+        permit: NetworkPermit,
+        server_name: String,
+        identity: Identity,
+        trusted_server_roots: Vec<Vec<u8>>,
+        limits: TransportLimits,
+        profile: TlsProfile,
+    ) -> Result<Self, TransportError> {
         if permit.action != "connect" {
             return Err(TransportError::Denied);
         }
         let limits = limits.validate()?;
-        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let provider = profile.provider();
         let mut config = ClientConfig::builder_with_provider(provider)
             .with_protocol_versions(&[&rustls::version::TLS13])?
             .with_root_certificates(roots(trusted_server_roots)?)
@@ -352,9 +409,14 @@ impl SecureChannel {
             conn.complete_io(&mut socket)?;
         }
         let peer = peer(conn.peer_certificates(), conn.alpn_protocol())?;
+        let key_exchange = conn
+            .negotiated_key_exchange_group()
+            .ok_or(TransportError::Protocol)?
+            .name();
         Ok(Self {
             wire: Wire::Client(StreamOwned::new(conn, socket)),
             peer,
+            key_exchange,
             limits,
             sent: 0,
             received: 0,
@@ -363,6 +425,9 @@ impl SecureChannel {
     }
     pub fn peer_identity(&self) -> &PeerIdentity {
         &self.peer
+    }
+    pub fn key_exchange_group(&self) -> rustls::NamedGroup {
+        self.key_exchange
     }
     pub fn send(
         &mut self,

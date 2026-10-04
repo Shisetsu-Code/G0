@@ -33,6 +33,26 @@ pub enum ProgramCompileIssue {
         issues: Vec<X86CodegenIssue>,
     },
     EntryWrapper(X86CodegenIssue),
+    Aggregate(crate::native_aggregate::AggregateCompileIssue),
+}
+
+pub fn requires_aggregate_values(graph: &crate::gir::Graph) -> bool {
+    graph
+        .inputs
+        .iter()
+        .chain(&graph.outputs)
+        .chain(
+            graph
+                .nodes
+                .iter()
+                .flat_map(|node| node.inputs.iter().chain(&node.outputs)),
+        )
+        .any(|port| {
+            !matches!(
+                port.ty,
+                crate::gir::SemanticType::Bool | crate::gir::SemanticType::Integer(_)
+            )
+        })
 }
 
 pub fn compile_program(
@@ -67,6 +87,20 @@ pub fn compile_program(
     let call_graph = build_call_graph(&program.graphs, &program.external_subgraphs)
         .map_err(ProgramCompileIssue::CallGraph)?;
     let reachable = reachable_program_graphs(&call_graph, &program.graphs, &entry);
+
+    if program
+        .graphs
+        .iter()
+        .any(|graph| reachable.contains(&graph.name) && requires_aggregate_values(graph))
+    {
+        let compiled = crate::native_aggregate::compile_program(program)
+            .map_err(ProgramCompileIssue::Aggregate)?;
+        return Ok(CompiledProgram {
+            entry_graph: entry,
+            assembly: compiled.assembly,
+            graphs: BTreeMap::new(),
+        });
+    }
 
     let mut graphs = BTreeMap::new();
     let mut assembly = String::new();

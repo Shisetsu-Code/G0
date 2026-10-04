@@ -19,9 +19,13 @@ pub fn validate_node(node: &Node, schemas: Option<&[DataSchema]>) -> Result<(), 
         | Operation::TextConcat
         | Operation::TextJoin
         | Operation::BytesConcat
+        | Operation::ArrayConcat
         | Operation::UnwrapOr => 2,
+        Operation::BytesSlice => 3,
         Operation::None => 0,
         Operation::Length
+        | Operation::Range
+        | Operation::BytesFromArray
         | Operation::EncodeUtf8
         | Operation::DecodeUtf8
         | Operation::FormatInteger
@@ -38,6 +42,12 @@ pub fn validate_node(node: &Node, schemas: Option<&[DataSchema]>) -> Result<(), 
     }
     let output = &outputs[0].ty;
     let input = |i: usize| &inputs[i].ty;
+    let element = |ty: &SemanticType| match ty {
+        SemanticType::Array(t, _) | SemanticType::Slice(t) | SemanticType::Vector(t, _) => {
+            Some(t.as_ref().clone())
+        }
+        _ => None,
+    };
     let schema = |name: &str| schemas.and_then(|schemas| schemas.iter().find(|s| s.name == name));
     let valid = match op {
         Operation::MakeArray => match output {
@@ -82,6 +92,27 @@ pub fn validate_node(node: &Node, schemas: Option<&[DataSchema]>) -> Result<(), 
         }
         Operation::BytesConcat => {
             input(0) == &SemanticType::Bytes && input(1) == input(0) && output == input(0)
+        }
+        Operation::BytesSlice => {
+            input(0) == &SemanticType::Bytes
+                && matches!(input(1), SemanticType::Integer(_))
+                && matches!(input(2), SemanticType::Integer(_))
+                && output == &SemanticType::Bytes
+        }
+        Operation::ArrayConcat => match (element(input(0)), element(input(1)), output) {
+            (Some(a), Some(b), SemanticType::Slice(out)) => {
+                type_assignable(&a, out) && type_assignable(&b, out)
+            }
+            _ => false,
+        },
+        Operation::Range => {
+            matches!(input(0),SemanticType::Integer(t) if t.min >= 0)
+                && matches!((input(0),output),(SemanticType::Integer(count),SemanticType::Slice(t)) if matches!(t.as_ref(),SemanticType::Integer(out) if out.min == 0 && out.max >= count.max.saturating_sub(1)))
+        }
+        Operation::BytesFromArray => {
+            element(input(0))
+                .is_some_and(|t| matches!(t,SemanticType::Integer(t) if t.min >= 0 && t.max <= 255))
+                && output == &SemanticType::Bytes
         }
         Operation::EncodeUtf8 => input(0) == &SemanticType::Text && output == &SemanticType::Bytes,
         Operation::DecodeUtf8 => {
@@ -159,7 +190,7 @@ pub fn validate_node(node: &Node, schemas: Option<&[DataSchema]>) -> Result<(), 
         Operation::Ok => matches!(output,SemanticType::Result(t,_) if type_assignable(input(0),t)),
         Operation::Err => matches!(output,SemanticType::Result(_,t) if type_assignable(input(0),t)),
         Operation::UnwrapOr => match input(0) {
-            SemanticType::Option(t) => {
+            SemanticType::Option(t) | SemanticType::Result(t, _) => {
                 type_assignable(t, output) && type_assignable(input(1), output)
             }
             _ => false,

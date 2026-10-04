@@ -7,7 +7,7 @@ pub struct GraphFormatVersion {
 }
 
 impl GraphFormatVersion {
-    pub const BOOTSTRAP: Self = Self { major: 0, minor: 7 };
+    pub const BOOTSTRAP: Self = Self { major: 0, minor: 8 };
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

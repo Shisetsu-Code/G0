@@ -51,6 +51,7 @@ pub enum RuntimeError {
     Cancelled,
     TypeMismatch { graph: String, node: Option<NodeId> },
     Arithmetic { graph: String, node: NodeId },
+    Bounds { graph: String, node: NodeId },
     LoopLimit { graph: String, node: NodeId },
     MissingCapability(Capability),
     Unsupported { graph: String, node: NodeId },
@@ -77,6 +78,7 @@ pub struct Executor<'a> {
     cancelled: Cancellation,
     capabilities: BTreeSet<Capability>,
     trace: Option<(usize, Vec<TraceEvent>)>,
+    observer: Option<Arc<dyn ExecutionObserver>>,
 }
 
 #[derive(Debug, Clone)]
@@ -84,6 +86,20 @@ pub struct TraceEvent {
     pub graph: String,
     pub node: NodeId,
     pub outputs: Vec<Value>,
+}
+
+/// Trusted debugger binding. Blocking callbacks preserve the worker's call stack.
+/// A paused observer must wake on cancellation; callbacks cannot grant authority.
+pub trait ExecutionObserver: Send + Sync {
+    fn before_node(
+        &self,
+        graph: &str,
+        node: NodeId,
+        cancellation: &Cancellation,
+    ) -> Result<(), RuntimeError>;
+    fn after_node(&self, _event: &TraceEvent) -> Result<(), RuntimeError> {
+        Ok(())
+    }
 }
 impl<'a> Executor<'a> {
     pub fn new(
@@ -100,6 +116,7 @@ impl<'a> Executor<'a> {
             cancelled: Cancellation::default(),
             capabilities: BTreeSet::new(),
             trace: None,
+            observer: None,
         })
     }
     pub fn cancellation(&self) -> Cancellation {
@@ -107,6 +124,9 @@ impl<'a> Executor<'a> {
     }
     pub fn set_cancellation(&mut self, cancellation: Cancellation) {
         self.cancelled = cancellation;
+    }
+    pub fn set_observer(&mut self, observer: Arc<dyn ExecutionObserver>) {
+        self.observer = Some(observer);
     }
     pub fn enable_trace(&mut self, limit: usize) -> Result<(), RuntimeError> {
         if limit > 1_000_000 {
@@ -266,6 +286,12 @@ impl<'a> Executor<'a> {
         while let Some(id) = ready.pop_first() {
             let node = pending.remove(&id).ok_or(RuntimeError::InvalidProgram)?;
             self.tick()?;
+            if let Some(observer) = &self.observer {
+                observer.before_node(name, node.id, &self.cancelled)?;
+            }
+            if self.cancelled.is_cancelled() {
+                return Err(RuntimeError::Cancelled);
+            }
             for required in &node.required_capabilities {
                 if !self.capabilities.contains(required) {
                     return Err(RuntimeError::MissingCapability(required.clone()));
@@ -299,8 +325,12 @@ impl<'a> Executor<'a> {
                     node: Some(node.id),
                 });
             }
-            if let Some((limit, events)) = &self.trace {
-                if events.len() >= *limit {
+            if self.trace.is_some() || self.observer.is_some() {
+                if self
+                    .trace
+                    .as_ref()
+                    .is_some_and(|(limit, events)| events.len() >= *limit)
+                {
                     return Err(RuntimeError::TraceLimit);
                 }
                 let bytes = outputs
@@ -311,11 +341,17 @@ impl<'a> Executor<'a> {
                     )
                     .ok_or(RuntimeError::MemoryLimit)?;
                 self.charge(bytes)?;
-                self.trace.as_mut().unwrap().1.push(TraceEvent {
+                let event = TraceEvent {
                     graph: graph.name.clone(),
                     node: node.id,
                     outputs: outputs.clone(),
-                });
+                };
+                if let Some(observer) = &self.observer {
+                    observer.after_node(&event)?;
+                }
+                if let Some((_, events)) = &mut self.trace {
+                    events.push(event);
+                }
             }
             for (port, value) in ports.into_iter().zip(outputs) {
                 self.charge(value.resident_bytes().ok_or(RuntimeError::MemoryLimit)?)?;
@@ -539,6 +575,74 @@ impl<'a> Executor<'a> {
                 bytes.extend_from_slice(b);
                 Value::Bytes(bytes.into())
             }
+            Operation::BytesSlice => {
+                let Value::Bytes(bytes) = &args[0] else {
+                    return Err(bad());
+                };
+                let bounds = || RuntimeError::Bounds {
+                    graph: graph.name.clone(),
+                    node: node.id,
+                };
+                let start = usize::try_from(integer(1)?).map_err(|_| bounds())?;
+                let length = usize::try_from(integer(2)?).map_err(|_| bounds())?;
+                let end = start.checked_add(length).ok_or_else(bounds)?;
+                let slice = bytes.get(start..end).ok_or_else(bounds)?;
+                self.charge(length as u64)?;
+                Value::Bytes(slice.into())
+            }
+            Operation::ArrayConcat => {
+                let (Value::Array(a), Value::Array(b)) = (&args[0], &args[1]) else {
+                    return Err(bad());
+                };
+                let length = a
+                    .len()
+                    .checked_add(b.len())
+                    .ok_or(RuntimeError::MemoryLimit)?;
+                self.charge(
+                    (length as u64)
+                        .checked_mul(std::mem::size_of::<Value>() as u64)
+                        .ok_or(RuntimeError::MemoryLimit)?,
+                )?;
+                let mut items = Vec::with_capacity(length);
+                items.extend(a.iter().cloned());
+                items.extend(b.iter().cloned());
+                Value::Array(items.into())
+            }
+            Operation::Range => {
+                let length = usize::try_from(integer(0)?).map_err(|_| RuntimeError::MemoryLimit)?;
+                self.charge(
+                    (length as u64)
+                        .checked_mul(std::mem::size_of::<Value>() as u64)
+                        .ok_or(RuntimeError::MemoryLimit)?,
+                )?;
+                if length as u64 > self.limits.max_steps.saturating_sub(self.steps) {
+                    return Err(RuntimeError::StepLimit);
+                }
+                let mut items = Vec::with_capacity(length);
+                for index in 0..length {
+                    self.tick()?;
+                    items.push(Value::Integer(index as i128));
+                }
+                Value::Array(items.into())
+            }
+            Operation::BytesFromArray => {
+                let Value::Array(items) = &args[0] else {
+                    return Err(bad());
+                };
+                self.charge(items.len() as u64)?;
+                if items.len() as u64 > self.limits.max_steps.saturating_sub(self.steps) {
+                    return Err(RuntimeError::StepLimit);
+                }
+                let mut bytes = Vec::with_capacity(items.len());
+                for value in items.iter() {
+                    self.tick()?;
+                    let Value::Integer(value) = value else {
+                        return Err(bad());
+                    };
+                    bytes.push(u8::try_from(*value).map_err(|_| bad())?);
+                }
+                Value::Bytes(bytes.into())
+            }
             Operation::EncodeUtf8 => {
                 let Value::Text(text) = &args[0] else {
                     return Err(bad());
@@ -619,12 +723,12 @@ impl<'a> Executor<'a> {
             Operation::None => Value::Option(None),
             Operation::Ok => Value::Result(Ok(Arc::new(args[0].clone()))),
             Operation::Err => Value::Result(Err(Arc::new(args[0].clone()))),
-            Operation::UnwrapOr => {
-                let Value::Option(value) = &args[0] else {
-                    return Err(bad());
-                };
-                value.as_deref().unwrap_or(&args[1]).clone()
-            }
+            Operation::UnwrapOr => match &args[0] {
+                Value::Option(value) => value.as_deref().unwrap_or(&args[1]).clone(),
+                Value::Result(Ok(value)) => value.as_ref().clone(),
+                Value::Result(Err(_)) => args[1].clone(),
+                _ => return Err(bad()),
+            },
             Operation::Truncate { bits, signed } => {
                 let shift = 128 - u32::from(*bits);
                 let value = integer(0)?;

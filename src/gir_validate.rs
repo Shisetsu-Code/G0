@@ -370,6 +370,10 @@ fn validate_operation(node: &Node, report: &mut ValidationReport) {
         | Operation::TextConcat
         | Operation::TextJoin
         | Operation::BytesConcat
+        | Operation::BytesSlice
+        | Operation::ArrayConcat
+        | Operation::Range
+        | Operation::BytesFromArray
         | Operation::EncodeUtf8
         | Operation::DecodeUtf8
         | Operation::FormatInteger
