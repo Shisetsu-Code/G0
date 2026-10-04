@@ -51,36 +51,136 @@ x86-64 / future targets
 
 The current bootstrap temporarily lowers the typed graph directly to x86-64 assembly. That shortcut is intentionally isolated in `src/backend.rs`.
 
-## 4. Hardware baseline
+## 4. Product scope: backend + data first
+
+G0 is not intended to become a compatibility language for the existing software stack.
+
+The primary target is a native backend/data platform whose major layers share the same semantic model:
+
+```
+typed data
+   <-> storage
+   <-> services
+   <-> transport
+   <-> client/runtime
+```
+
+A logical structure should not need to be independently redefined as a SQL schema, ORM model, DTO, JSON payload, frontend model, and persistence object.
+
+The compiler/runtime should preserve one typed structural identity across boundaries whenever semantics allow it.
+
+Examples of properties that may attach structurally to data/resources include:
+
+- persistence
+- indexing
+- mutability
+- authorization
+- ownership
+- synchronization
+- replication
+- confidentiality
+- encryption policy
+- consistency requirements
+- observability restrictions
+
+These properties must be visible to validation, dataflow analysis, optimization and tooling.
+
+## 5. Native platform, not legacy compatibility
+
+G0 deliberately does **not** take compatibility with Python, SQL, HTTP, HTML, CSS, JavaScript, browser DOMs or existing browser engines as a platform requirement.
+
+Those systems may be useful as temporary bootstrap references or experimental comparison worlds, but they are not architectural targets.
+
+The intended platform owns its own:
+
+- storage/database model
+- transport
+- service model
+- identity and authorization
+- encryption/security profiles
+- streaming
+- runtime
+- client protocol
+- eventual native client/rendering environment
+
+If a browser-like client is built, it is for the G0 ecosystem rather than a requirement to reproduce the historical web platform.
+
+The design objective is to avoid importing historical syntax, protocol layering and compatibility obligations unless a concrete G0 requirement independently justifies the same semantic feature.
+
+## 6. End-to-end structural dataflow
+
+Backend and data are treated as one graph problem rather than a chain of unrelated technologies.
+
+A field may participate in a graph such as:
+
+```
+client event
+    -> typed mutation
+    -> authorization
+    -> validation
+    -> storage transition
+    -> derived computation
+    -> synchronization
+    -> client update
+```
+
+The compiler/toolchain should be able to attribute dependencies, effects, cost and policy across this path.
+
+This is central to both optimization and Mosca integration: the dataflow must not become opaque merely because the value crossed a storage, process or transport boundary.
+
+## 7. Hardware baseline
 
 Initial CPU target: `x86_64-v3`.
 
 The project intentionally does not promise compatibility with obsolete ISA baselines. Future platform profiles may add newer baselines without weakening the current one.
 
-## 5. Security/runtime direction
+## 8. Security/runtime direction
 
 The future standard platform will expose secure capabilities rather than generic ambient authority.
 
 Examples:
 
 - network capability
-- filesystem capability
+- storage capability
 - clock capability
 - entropy capability
 - accelerator capability
 
-Insecure/legacy protocol variants do not belong in the core platform. Secure transport policy must still be versioned independently from language semantics so cryptographic and protocol recommendations can evolve without redesigning the language.
+Security, encryption, authority and connection semantics should be structural rather than repeatedly rebuilt in application glue code.
 
-## 6. Compatibility policy
+Concrete cryptographic mechanisms may evolve through platform profiles without changing the logical program semantics.
 
-"Zero technical debt" is treated as a design constraint, not a literal guarantee.
+## 9. Optimization model
+
+Optimization is empirical and graph-native.
+
+The toolchain should expose enough structure to answer:
+
+- which AST/GIR/MIR nodes dominate runtime;
+- where memory is retained or copied;
+- which dependencies form the critical path;
+- which effects prevent reordering;
+- which regions can be optimized independently;
+- whether a candidate preserves all semantic and security invariants.
+
+Optimization candidates are compiled, executed, tested and measured. A proposed implementation is not accepted because it is theoretically attractive; it is accepted because it passes hard gates and improves the declared objective under measurement.
+
+This model is designed to support selective search instead of repeatedly searching the entire program.
+
+## 10. Compatibility policy and technical debt
+
+"Zero technical debt" is an operating objective: avoid knowingly preserving obsolete or redundant mechanisms solely for compatibility.
 
 G0 will prefer:
 
+- a small stable semantic core;
+- one canonical mechanism per semantic need where practical;
 - explicit versioned platform profiles;
-- small stable semantic cores;
-- replaceable policy layers;
+- replaceable policy/implementation layers;
 - no permanent compatibility promises before 1.0;
-- deprecation/removal before fossilizing poor abstractions.
+- removal of poor abstractions before they fossilize;
+- structural features over duplicated glue layers.
 
-This is intended to prevent today's "modern" choices from becoming tomorrow's hard-coded legacy.
+Compatibility with external ecosystems is not a goal by itself.
+
+The criterion for adding a feature is whether the G0 ecosystem requires the semantic capability, not whether another ecosystem already has an API for it.
