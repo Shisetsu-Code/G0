@@ -157,7 +157,7 @@ fn argument_graphs() -> Vec<Graph> {
     let port = from_node.field(input(1), 2);
     let slot = call(
         &mut from_node,
-        "control-slot-index",
+        "control-fast-slot-index",
         vec![input(2), node, port],
         int(),
     );
@@ -958,7 +958,12 @@ fn output_types() -> Vec<SemanticType> {
 }
 fn output_store(g: &mut G, port_id: SourceEndpoint) -> SourceEndpoint {
     let id = g.field(input(3), 0);
-    let slot = call(g, "control-slot-index", vec![input(4), id, port_id], int());
+    let slot = call(
+        g,
+        "control-fast-slot-index",
+        vec![input(4), id, port_id],
+        int(),
+    );
     let eight = g.n(8);
     let offset = g.arithmetic(Operation::Mul, slot, eight);
     g.line("    movq %rax, ", offset, "(%r14)\n")
@@ -1234,10 +1239,15 @@ fn graph_node_graphs() -> Vec<Graph> {
     let mut body = G::new("control-graph-nodes-body", state.clone(), state.clone());
     let descriptor = body.index(input(6), input(7));
     let id = body.field(descriptor.clone(), 0);
-    let ordinal = call(&mut body, "emitter-node-index", vec![input(3), id], int());
+    let ordinal = call(
+        &mut body,
+        "validator-node-index-fast",
+        vec![input(3), id],
+        int(),
+    );
     let args = call(
         &mut body,
-        "control-arguments",
+        "control-fast-arguments",
         vec![input(0), descriptor.clone(), input(5), input(4), input(2)],
         SemanticType::Text,
     );
@@ -1387,6 +1397,18 @@ fn graph_emission_graphs() -> Vec<Graph> {
         vec![input(0), nodes.clone()],
         vec![int(), rows()],
     );
+    let cached_slots = call(
+        &mut main,
+        "control-fast-slots-cache",
+        vec![slots[1].clone()],
+        rows(),
+    );
+    let cached_edges = call(
+        &mut main,
+        "control-fast-edges-cache",
+        vec![edges.clone()],
+        rows(),
+    );
     let input_ports = main.field(input(2), 3);
     let output_ports = main.field(input(2), 4);
     let outputs = main.u32(output_ports.clone());
@@ -1471,8 +1493,8 @@ fn graph_emission_graphs() -> Vec<Graph> {
             input(1),
             input_ports.clone(),
             nodes,
-            edges.clone(),
-            slots[1].clone(),
+            cached_edges.clone(),
+            cached_slots.clone(),
             ordered,
         ],
         SemanticType::Text,
@@ -1480,7 +1502,13 @@ fn graph_emission_graphs() -> Vec<Graph> {
     let gather = call(
         &mut main,
         "control-graph-outputs",
-        vec![input(0), slots[1].clone(), edges, input_ports, output_ports],
+        vec![
+            input(0),
+            cached_slots,
+            cached_edges,
+            input_ports,
+            output_ports,
+        ],
         SemanticType::Text,
     );
     let result = call(
@@ -1968,7 +1996,7 @@ fn domain_graphs() -> Vec<Graph> {
     let middle_end = nb.compare(Operation::Le, tag.clone(), forty_eight);
     let middle = nb.and(middle_start, middle_end);
     let sixty_six = nb.n(66);
-    let seventy_three = nb.n(73);
+    let seventy_three = nb.n(74);
     let late_start = nb.compare(Operation::Ge, tag.clone(), sixty_six);
     let late_end = nb.compare(Operation::Le, tag, seventy_three);
     let late = nb.and(late_start, late_end);

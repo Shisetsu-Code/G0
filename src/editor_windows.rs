@@ -89,6 +89,7 @@ fn toolbox() -> Vec<(&'static str, Operation)> {
         ("Concatenar bytes", Operation::BytesConcat),
         ("Codificar UTF8", Operation::EncodeUtf8),
         ("Decodificar UTF8", Operation::DecodeUtf8),
+        ("Decodificar Integer128 LE", Operation::DecodeInteger128Le),
         ("Formatear entero", Operation::FormatInteger),
         ("Conversión checked", Operation::ConvertChecked),
         ("Array entero (2)", Operation::MakeArray),

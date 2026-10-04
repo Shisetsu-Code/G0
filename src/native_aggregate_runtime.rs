@@ -8,6 +8,10 @@ use crate::{
 };
 use std::sync::Arc;
 const PACK_TAG: u64 = 1 << 63;
+const SCALAR_MIN: i128 = -32;
+const SCALAR_MAX: i128 = 1023;
+const INTEGER_SCALAR_SLOTS: usize = (SCALAR_MAX - SCALAR_MIN + 1) as usize;
+const SCALAR_SLOTS: usize = INTEGER_SCALAR_SLOTS + 2;
 fn pack_index(pack: u64) -> Option<usize> {
     if pack & PACK_TAG == 0 {
         return None;
@@ -18,6 +22,10 @@ fn pack_index(pack: u64) -> Option<usize> {
 pub struct NativeContext {
     program: ProgramContract,
     values: Vec<Value>,
+    // Fixed storage avoids retaining a fresh Value for every repeated byte,
+    // small arithmetic constant or Bool in a long-running native compiler.
+    // Handles denote immutable values, so equal scalars can share a slot.
+    scalar_handles: [u64; SCALAR_SLOTS],
     limits: ExecutionLimits,
     steps: u64,
     bytes: u64,
@@ -40,6 +48,7 @@ impl NativeContext {
         Ok(Self {
             program,
             values: Vec::new(),
+            scalar_handles: [0; SCALAR_SLOTS],
             limits,
             steps: 0,
             bytes: 0,
@@ -113,8 +122,27 @@ impl NativeContext {
         let bytes = value.resident_bytes().ok_or(RuntimeError::MemoryLimit)?;
         self.reserve(bytes)?;
         self.bytes += bytes;
+        // Charge each production exactly as before, even if physical storage
+        // can be reused. Interning must not weaken cumulative memory limits.
+        let scalar_slot = match &value {
+            Value::Integer(n) if (SCALAR_MIN..=SCALAR_MAX).contains(n) => {
+                Some((*n - SCALAR_MIN) as usize)
+            }
+            Value::Bool(v) => Some(INTEGER_SCALAR_SLOTS + usize::from(*v)),
+            _ => None,
+        };
+        if let Some(slot) = scalar_slot {
+            let handle = self.scalar_handles[slot];
+            if handle != 0 {
+                return Ok(handle);
+            }
+        }
         self.values.push(value);
-        Ok(self.values.len() as u64)
+        let handle = self.values.len() as u64;
+        if let Some(slot) = scalar_slot {
+            self.scalar_handles[slot] = handle;
+        }
+        Ok(handle)
     }
     pub fn primitive(&mut self, graph: usize, node: usize, handles: &[u64]) -> u64 {
         let result = self.primitive_inner(graph, node, handles);
@@ -377,6 +405,13 @@ impl NativeContext {
                     Ok(v) => Ok(Arc::new(Value::Text(v.into()))),
                     Err(_) => Err(Arc::new(args[0].clone())),
                 })
+            }
+            Operation::DecodeInteger128Le => {
+                let Value::Bytes(bytes) = &args[0] else {
+                    return Err(bad());
+                };
+                let bytes: [u8; 16] = bytes.as_ref().try_into().map_err(|_| bounds())?;
+                Value::Integer(i128::from_le_bytes(bytes))
             }
             Operation::FormatInteger => {
                 self.reserve(40)?;

@@ -32,7 +32,7 @@ fn signed_decoding_uses_bounded_work_for_all_i128_bits() {
         let mut executor = Executor::new(
             &program,
             ExecutionLimits {
-                max_steps: 180,
+                max_steps: 20,
                 max_value_bytes: 2 * 1024 * 1024,
                 max_call_depth: 128,
             },
@@ -48,7 +48,7 @@ fn signed_decoding_uses_bounded_work_for_all_i128_bits() {
             vec![Value::Integer(value)],
             "{value}"
         );
-        assert!(executor.steps_used() <= 180);
+        assert!(executor.steps_used() <= 20);
     }
 }
 

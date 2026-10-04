@@ -115,3 +115,36 @@ Independent i128 decoder review verified 8,360 byte-pattern and boundary cases.
 Each valid word consumed 141 steps; static intervals prove every intermediate
 Mul/Add fits i128. A 16-byte slice rejects truncated and invalid-offset reads
 before decoding. The earlier loop exhausted a 180-step regression reservation.
+
+Further compiler work: canonical graph-name proof and binary lookup pass six
+tests in two suites, including Unicode/NUL prefixes, missing names, 56 table
+sizes and bounded comparison over a four-MiB source. The unsigned-word reader
+now uses exact static byte/accumulator intervals instead of eight redundant
+checked conversions; 1,032 bit-pattern/boundary cases fit forty steps, with the
+low-level helper's existing zero-padding behavior preserved. Twenty tests in
+five suites pass for the combined names, schemas, named-node and call-cycle
+definitions. Actual type-depth validation and emission caches remain in progress.
+
+A release wrapper profile for the 1,939,646-byte expanded definition completed
+in 17,682,256 steps and 20,438,584,134 cumulative logical bytes. The explicit
+compiler host now reserves 32 million steps and 32 GiB; ordinary defaults are
+unchanged. A separate reader profile of a 2,001,821-byte definition exhausted a
+diagnostic 64-GiB allocation ceiling at 48,277,802 steps, so this partial run
+does not establish the full reader cost or native self-compilation success.
+The latest published Windows job masked failing intermediate tests because
+PowerShell continued to later successful commands; local CI changes propagate
+each exit code. Tasks 8 and 9 remain open and the PR remains a draft.
+
+The same frozen 2,039,950-byte definition completed the full reader in
+112,972,522 steps and 158,883,266,981 logical bytes with diagnostic ceilings of
+128 million steps and 512 GiB. Its syntax-only reader required 11,512,498 steps
+and 15,820,412,439 logical bytes. These measurements justify reducing repeated
+semantic work; neither raises production ABI quotas. A general fixed-width
+little-endian i128 decode primitive is being added to reduce integer-range
+validation costs while retaining the compiler algorithm in G0.
+
+Native scalar storage now interns Bool and Integer values from -32 to 1023,
+using a fixed 1058-handle cache. Eighteen tests in four suites and four independent
+review tests pass, covering exact cumulative quota exhaustion, typed pack
+separation, all cache slots, full i128 boundaries, steps and cancellation.
+Allocation accounting still charges every production before physical reuse.

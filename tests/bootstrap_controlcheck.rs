@@ -291,9 +291,127 @@ fn controlcheck_map_requires_exact_element_contract_including_bytes_u8() {
 }
 
 #[test]
-fn controlcheck_primitive_delegates_and_match_fails_closed() {
+fn controlcheck_primitive_delegates() {
     assert!(Fixture::new().check(0, &[], None, &[], &[]));
-    assert!(!Fixture::new().check(5, &[], None, &[], &[]));
+}
+
+#[test]
+fn controlcheck_match_uses_program_schema_proof_before_accepting_branches() {
+    use g0::{
+        data_format::{DataSchema, FieldRequirement, SchemaField},
+        gir::*,
+        program_binary::{ProgramDocument, encode_program},
+    };
+    let mut main = Graph::new("main");
+    main.inputs = vec![
+        Port {
+            id: 0,
+            name: "selector".into(),
+            ty: SemanticType::Variant("Shape".into()),
+        },
+        Port {
+            id: 1,
+            name: "payload".into(),
+            ty: SemanticType::Text,
+        },
+    ];
+    main.outputs = vec![Port {
+        id: 0,
+        name: "value".into(),
+        ty: SemanticType::Text,
+    }];
+    main.nodes = vec![Node {
+        id: 1,
+        operation: Operation::Match {
+            arms: vec![MatchArm {
+                tag: "name".into(),
+                graph: "branch".into(),
+            }],
+            default: "branch".into(),
+        },
+        inputs: main.inputs.clone(),
+        outputs: main.outputs.clone(),
+        effects: Default::default(),
+        required_capabilities: Default::default(),
+    }];
+    main.edges = vec![
+        Edge {
+            from: SourceEndpoint::GraphInput(0),
+            to: TargetEndpoint::NodeInput { node: 1, port: 0 },
+        },
+        Edge {
+            from: SourceEndpoint::GraphInput(1),
+            to: TargetEndpoint::NodeInput { node: 1, port: 1 },
+        },
+        Edge {
+            from: SourceEndpoint::NodeOutput { node: 1, port: 0 },
+            to: TargetEndpoint::GraphOutput(0),
+        },
+    ];
+    let mut branch = Graph::new("branch");
+    branch.inputs = vec![Port {
+        id: 0,
+        name: "payload".into(),
+        ty: SemanticType::Text,
+    }];
+    branch.outputs = main.outputs.clone();
+    branch.edges = vec![Edge {
+        from: SourceEndpoint::GraphInput(0),
+        to: TargetEndpoint::GraphOutput(0),
+    }];
+    let document = ProgramDocument {
+        entry_graph: "main".into(),
+        graphs: vec![main, branch],
+        schemas: vec![DataSchema {
+            name: "Shape".into(),
+            version: 1,
+            fields: vec![SchemaField {
+                tag: 1,
+                name: "name".into(),
+                ty: SemanticType::Text,
+                requirement: FieldRequirement::Required,
+            }],
+        }],
+    };
+    let source = encode_program(&document).unwrap();
+    let program_output = run(
+        "reader-program-ast",
+        vec![Value::Bytes(source.clone().into())],
+    );
+    let [Value::Array(program_rows)] = program_output.as_slice() else {
+        panic!()
+    };
+    let rows = program_rows.clone();
+    let Value::Array(main_row) = &rows[1] else {
+        panic!()
+    };
+    let at = main_row[0].clone();
+    let nodes = run(
+        "reader-graph-ast",
+        vec![Value::Bytes(source.clone().into()), at],
+    );
+    let Value::Array(nodes) = &nodes[0] else {
+        panic!()
+    };
+    let node = nodes[0].clone();
+    let check = |bytes: Vec<u8>| {
+        let args = vec![
+            Value::Bytes(bytes.into()),
+            Value::Array(rows.clone()),
+            node.clone(),
+        ];
+        let result = run("validator-node-control", args.clone());
+        assert_eq!(run("validator-node-control-fast", args), result);
+        result
+    };
+    assert_eq!(check(source.clone()), vec![Value::Bool(true)]);
+    let Value::Array(desc) = &node else { panic!() };
+    let Value::Integer(op) = desc[2] else {
+        panic!()
+    };
+    let mut damaged = source;
+    damaged[op as usize + 17..op as usize + 23].copy_from_slice(b"absent");
+    assert_eq!(check(damaged), vec![Value::Bool(false)]);
 }
 
 #[test]

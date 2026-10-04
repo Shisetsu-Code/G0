@@ -3,6 +3,55 @@ use g0::{bootstrap_compiler::*, execution::Executor, program_binary::*, value::V
 mod fixture;
 
 #[test]
+fn g0_name_comparison_forwards_only_the_name_bytes_to_its_loop() {
+    use g0::gir::Operation;
+    let mut source = vec![0u8; 1024 * 1024];
+    source[0..4].copy_from_slice(&128u32.to_le_bytes());
+    source[4..132].fill(b'a');
+    source[132..136].copy_from_slice(&128u32.to_le_bytes());
+    source[136..264].fill(b'a');
+    let args = vec![
+        Value::Bytes(source.into()),
+        Value::Integer(0),
+        Value::Integer(132),
+    ];
+    let mut limits = compiler_limits();
+    limits.max_value_bytes = 64 * 1024 * 1024;
+    let document = compiler_document();
+    let contract = document.validated_contract().unwrap();
+    let mut compact_executor = Executor::new(&contract, limits).unwrap();
+    assert_eq!(
+        compact_executor
+            .run_graph("validator-name-equal", args.clone())
+            .unwrap(),
+        vec![Value::Bool(true)]
+    );
+    let mut baseline = document;
+    let graph = baseline
+        .graphs
+        .iter_mut()
+        .find(|g| g.name == "validator-name-equal")
+        .unwrap();
+    for node in &mut graph.nodes {
+        if let Operation::Select { when_true, .. } = &mut node.operation
+            && when_true == "validator-name-content-equal"
+        {
+            *when_true = "validator-byte-equal".into();
+        }
+    }
+    let contract = baseline.validated_contract().unwrap();
+    let mut baseline_executor = Executor::new(&contract, limits).unwrap();
+    let baseline_result = baseline_executor.run_graph("validator-name-equal", args);
+    assert_eq!(baseline_result, Ok(vec![Value::Bool(true)]));
+    assert!(
+        compact_executor.value_bytes_used() < baseline_executor.value_bytes_used(),
+        "compact {}, baseline {}",
+        compact_executor.value_bytes_used(),
+        baseline_executor.value_bytes_used()
+    );
+}
+
+#[test]
 fn g0_native_entry_rejects_an_interface_the_byte_bridge_cannot_invoke() {
     use g0::gir::*;
     let integer = SemanticType::Integer(IntegerType { min: 0, max: 42 });

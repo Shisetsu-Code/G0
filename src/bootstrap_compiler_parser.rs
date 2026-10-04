@@ -1,22 +1,30 @@
 //! The binary reader is expressed as executable GIR. Rust here only constructs
 //! the definition; it never reads, decodes, or validates compiler input bytes.
 use super::*;
-#[path = "bootstrap_compiler_control.rs"]
-mod control;
-#[path = "bootstrap_compiler_semantics.rs"]
-mod semantics;
 #[path = "bootstrap_compiler_bytes.rs"]
 mod bytes;
-#[path = "bootstrap_compiler_schedule_fast.rs"]
-mod schedule_fast;
-#[path = "bootstrap_compiler_lookup_fast.rs"]
-mod lookup_fast;
+#[path = "bootstrap_compiler_callcycles.rs"]
+mod callcycles;
+#[path = "bootstrap_compiler_control.rs"]
+mod control;
+#[path = "bootstrap_compiler_control_fast.rs"]
+mod control_fast;
 #[path = "bootstrap_compiler_controlcheck.rs"]
 mod controlcheck;
-#[path = "bootstrap_compiler_operationcheck.rs"]
-mod operationcheck;
 #[path = "bootstrap_compiler_emitter.rs"]
 mod emitter;
+#[path = "bootstrap_compiler_lookup_fast.rs"]
+mod lookup_fast;
+#[path = "bootstrap_compiler_names_fast.rs"]
+mod names_fast;
+#[path = "bootstrap_compiler_nodeschema.rs"]
+mod nodeschema;
+#[path = "bootstrap_compiler_operationcheck.rs"]
+mod operationcheck;
+#[path = "bootstrap_compiler_schedule_fast.rs"]
+mod schedule_fast;
+#[path = "bootstrap_compiler_semantics.rs"]
+mod semantics;
 
 fn int() -> SemanticType {
     SemanticType::Integer(IntegerType {
@@ -142,11 +150,33 @@ impl G {
             let byte = self.op(
                 Operation::UnwrapOr,
                 vec![(byte, optional), (zero, byte_type.clone())],
-                byte_type,
+                byte_type.clone(),
             );
-            let power = self.n(1 << (offset * 8));
-            let part = self.arithmetic(Operation::Mul, byte, power);
-            value = self.arithmetic(Operation::Add, value, part);
+            // Each byte is in 0..=255. After k bytes the accumulator is in
+            // 0..=2^(8*k)-1, so these operations fit both i128 and int().
+            // The exact static intervals remove redundant checked narrowing.
+            let weight = 1_i128 << (offset * 8);
+            let power = self.n(weight);
+            let power_type = self.ty(&power);
+            let part_type = SemanticType::Integer(IntegerType {
+                min: 0,
+                max: 255 * weight,
+            });
+            let part = self.op(
+                Operation::Mul,
+                vec![(byte, byte_type), (power, power_type)],
+                part_type.clone(),
+            );
+            let value_type = self.ty(&value);
+            let sum_type = SemanticType::Integer(IntegerType {
+                min: 0,
+                max: (1_i128 << ((offset + 1) * 8)) - 1,
+            });
+            value = self.op(
+                Operation::Add,
+                vec![(value, value_type), (part, part_type)],
+                sum_type,
+            );
         }
         value
     }
@@ -431,13 +461,39 @@ pub(super) fn graphs() -> Vec<Graph> {
     );
     let eof = main.compare(Operation::Eq, end, length);
     let valid = main.and(header_valid, eof);
-    let container=main.finish(vec![valid]);
-    let mut layout_condition=cond.clone();layout_condition.name="reader-blobs-syntax-condition".into();
-    let mut layout_body=body.clone();layout_body.name="reader-blobs-syntax-body".into();
-    for node in &mut layout_body.nodes {if let Operation::Subgraph(name)=&mut node.operation && name=="reader-graph" {*name="reader-graph-syntax".into();}}
-    let mut layout_container=container.clone();layout_container.name="reader-container-syntax".into();
-    for node in &mut layout_container.nodes {if let Operation::Loop{condition,body,..}=&mut node.operation && condition=="reader-blobs-condition" {*condition="reader-blobs-syntax-condition".into();*body="reader-blobs-syntax-body".into();}}
-    syntax.extend([word,cond,body,container,layout_condition,layout_body,layout_container]);
+    let container = main.finish(vec![valid]);
+    let mut layout_condition = cond.clone();
+    layout_condition.name = "reader-blobs-syntax-condition".into();
+    let mut layout_body = body.clone();
+    layout_body.name = "reader-blobs-syntax-body".into();
+    for node in &mut layout_body.nodes {
+        if let Operation::Subgraph(name) = &mut node.operation
+            && name == "reader-graph"
+        {
+            *name = "reader-graph-syntax".into();
+        }
+    }
+    let mut layout_container = container.clone();
+    layout_container.name = "reader-container-syntax".into();
+    for node in &mut layout_container.nodes {
+        if let Operation::Loop {
+            condition, body, ..
+        } = &mut node.operation
+            && condition == "reader-blobs-condition"
+        {
+            *condition = "reader-blobs-syntax-condition".into();
+            *body = "reader-blobs-syntax-body".into();
+        }
+    }
+    syntax.extend([
+        word,
+        cond,
+        body,
+        container,
+        layout_condition,
+        layout_body,
+        layout_container,
+    ]);
     syntax.extend(ast_graphs());
     syntax.extend(program_ast_graphs());
     syntax.extend(version_validation_graphs());
@@ -445,11 +501,15 @@ pub(super) fn graphs() -> Vec<Graph> {
     syntax.extend(scheduler_graphs());
     syntax.extend(emitter::graphs());
     syntax.extend(control::graphs());
+    syntax.extend(control_fast::graphs());
     syntax.extend(semantics::graphs());
     syntax.extend(bytes::graphs());
     syntax.extend(schedule_fast::graphs());
     syntax.extend(lookup_fast::graphs());
     syntax.extend(controlcheck::graphs());
+    syntax.extend(callcycles::graphs());
+    syntax.extend(nodeschema::graphs());
+    syntax.extend(names_fast::graphs());
     syntax.extend(operationcheck::graphs());
     syntax
 }
@@ -553,15 +613,35 @@ fn unique_identifier_list_graphs(name: &str) -> Vec<Graph> {
     } else {
         word
     };
-    let above_maximum=body.compare(Operation::Gt,id.clone(),input(5));
-    let maximum=body.pick("reader-pick-offset",above_maximum.clone(),input(5),id.clone());
+    let above_maximum = body.compare(Operation::Gt, id.clone(), input(5));
+    let maximum = body.pick(
+        "reader-pick-offset",
+        above_maximum.clone(),
+        input(5),
+        id.clone(),
+    );
     let duplicate = body.op(
-        Operation::Select{when_true:format!("{prefix}-above-maximum"),when_false:"scheduler-contains".into()},
-        vec![(above_maximum,SemanticType::Bool),(input(3), ids.clone()), (id.clone(), int())],
+        Operation::Select {
+            when_true: format!("{prefix}-above-maximum"),
+            when_false: "scheduler-contains".into(),
+        },
+        vec![
+            (above_maximum, SemanticType::Bool),
+            (input(3), ids.clone()),
+            (id.clone(), int()),
+        ],
         SemanticType::Bool,
     );
-    let node=body.b.graph.nodes.last_mut().unwrap();node.inputs[0].name="selector".into();node.inputs[1].name="p0".into();node.inputs[2].name="p1".into();
-    let mut fresh=G::new(&format!("{prefix}-above-maximum"),vec![ids.clone(),int()],vec![SemanticType::Bool]);let not_duplicate=fresh.bool(false);
+    let node = body.b.graph.nodes.last_mut().unwrap();
+    node.inputs[0].name = "selector".into();
+    node.inputs[1].name = "p0".into();
+    node.inputs[2].name = "p1".into();
+    let mut fresh = G::new(
+        &format!("{prefix}-above-maximum"),
+        vec![ids.clone(), int()],
+        vec![SemanticType::Bool],
+    );
+    let not_duplicate = fresh.bool(false);
     let unique = body.not(duplicate);
     let valid = body.and(input(4), unique);
     let singleton = body.op(Operation::MakeArray, vec![(id, int())], ids.clone());
@@ -578,16 +658,23 @@ fn unique_identifier_list_graphs(name: &str) -> Vec<Graph> {
     let start = main.advance(input(1), 4);
     let empty = main.op(Operation::MakeArray, vec![], ids);
     let initially_valid = main.bool(true);
-    let initial_maximum=main.n(0);
+    let initial_maximum = main.n(0);
     let output = main.loop_node(
         &prefix,
         state,
-        vec![input(0), start, count, empty, initially_valid,initial_maximum],
+        vec![
+            input(0),
+            start,
+            count,
+            empty,
+            initially_valid,
+            initial_maximum,
+        ],
     );
     let end = main.guard(output[4].clone(), output[1].clone());
     vec![
         condition.finish(vec![test]),
-        body.finish(vec![input(0), next, remaining, seen, valid,maximum]),
+        body.finish(vec![input(0), next, remaining, seen, valid, maximum]),
         fresh.finish(vec![not_duplicate]),
         main.finish(vec![end]),
     ]
@@ -697,7 +784,7 @@ fn syntax_graphs() -> Vec<Graph> {
             (3, "reader-blob"),
         ],
     ));
-    let operations: Vec<_> = (0..=73)
+    let operations: Vec<_> = (0..=74)
         .map(|tag| {
             let parser = match tag {
                 0 => "reader-literal",
@@ -732,7 +819,10 @@ fn syntax_graphs() -> Vec<Graph> {
         "reader-port",
         &[Fixed(2), Blob, Call("reader-type")],
     ));
-    graphs.push(sequence("reader-port-layout",&[Fixed(2),Blob,Call("reader-type-layout")]));
+    graphs.push(sequence(
+        "reader-port-layout",
+        &[Fixed(2), Blob, Call("reader-type-layout")],
+    ));
     graphs.push(sequence(
         "reader-capability",
         &[Call("reader-capability-class"), Blob, Blob, Blob],
@@ -763,8 +853,28 @@ fn syntax_graphs() -> Vec<Graph> {
         "reader-source",
         &[(0, "reader-two"), (1, "reader-six")],
     ));
-    graphs.push(sequence("reader-node-layout",&[Fixed(4),Call("reader-operation"),Repeat("reader-port-layout"),Repeat("reader-port-layout"),Repeat("reader-effect"),Repeat("reader-capability")]));
-    graphs.push(sequence("reader-node-syntax",&[Fixed(4),Call("reader-operation-checked"),Repeat("reader-port-layout"),Repeat("reader-port-layout"),Repeat("reader-effect"),Repeat("reader-capability")]));
+    graphs.push(sequence(
+        "reader-node-layout",
+        &[
+            Fixed(4),
+            Call("reader-operation"),
+            Repeat("reader-port-layout"),
+            Repeat("reader-port-layout"),
+            Repeat("reader-effect"),
+            Repeat("reader-capability"),
+        ],
+    ));
+    graphs.push(sequence(
+        "reader-node-syntax",
+        &[
+            Fixed(4),
+            Call("reader-operation-checked"),
+            Repeat("reader-port-layout"),
+            Repeat("reader-port-layout"),
+            Repeat("reader-effect"),
+            Repeat("reader-capability"),
+        ],
+    ));
     graphs.extend(dispatch(
         "reader-target",
         &[(0, "reader-six"), (1, "reader-two")],
@@ -789,7 +899,17 @@ fn syntax_graphs() -> Vec<Graph> {
         "reader-schema",
         &[Blob, Fixed(4), Repeat("reader-schema-field")],
     ));
-    graphs.push(sequence("reader-graph-content-syntax",&[Blob,Call("reader-authority"),Repeat("reader-port-layout"),Repeat("reader-port-layout"),Repeat("reader-node-syntax"),Repeat("reader-edge")]));
+    graphs.push(sequence(
+        "reader-graph-content-syntax",
+        &[
+            Blob,
+            Call("reader-authority"),
+            Repeat("reader-port-layout"),
+            Repeat("reader-port-layout"),
+            Repeat("reader-node-syntax"),
+            Repeat("reader-edge"),
+        ],
+    ));
     graphs.push(sequence(
         "reader-schema-field",
         &[
@@ -824,7 +944,7 @@ fn syntax_graphs() -> Vec<Graph> {
     let magic_ok = graph.compare(Operation::Eq, magic, expected);
     let version_at = graph.advance(input(1), 4);
     let version = graph.u32(version_at);
-    let expected = graph.n(0x00090000);
+    let expected = graph.n(0x000a0000);
     let version_ok = graph.compare(Operation::Le, version.clone(), expected);
     let lowest = graph.n(0x00010000);
     let version_low = graph.compare(Operation::Ge, version.clone(), lowest);
@@ -856,25 +976,54 @@ fn syntax_graphs() -> Vec<Graph> {
     node.inputs[0].name = "selector".into();
     node.inputs[1].name = "p0".into();
     node.inputs[2].name = "p1".into();
-    let checked_header=graph.finish(vec![out]);
-    let mut layout_header=checked_header.clone();layout_header.name="reader-graph-syntax".into();
-    for node in &mut layout_header.nodes {if let Operation::Select{when_true,..}=&mut node.operation && when_true=="reader-graph-content" {*when_true="reader-graph-content-syntax".into();}}
-    let mut semantic=cursor_graph("reader-graph");let end=semantic.call("reader-graph-header",input(1));
-    let structure=semantic.op(Operation::Subgraph("validator-graph-edges".into()),vec![(input(0),SemanticType::Bytes),(input(1),int())],SemanticType::Bool);
-    let end=semantic.guard(structure,end);
-    graphs.extend([checked_header,layout_header,semantic.finish(vec![end])]);
+    let checked_header = graph.finish(vec![out]);
+    let mut layout_header = checked_header.clone();
+    layout_header.name = "reader-graph-syntax".into();
+    for node in &mut layout_header.nodes {
+        if let Operation::Select { when_true, .. } = &mut node.operation
+            && when_true == "reader-graph-content"
+        {
+            *when_true = "reader-graph-content-syntax".into();
+        }
+    }
+    let mut semantic = cursor_graph("reader-graph");
+    let end = semantic.call("reader-graph-header", input(1));
+    let structure = semantic.op(
+        Operation::Subgraph("validator-graph-edges".into()),
+        vec![(input(0), SemanticType::Bytes), (input(1), int())],
+        SemanticType::Bool,
+    );
+    let end = semantic.guard(structure, end);
+    graphs.extend([checked_header, layout_header, semantic.finish(vec![end])]);
     graphs
 }
 
-fn type_graphs(layout:bool) -> Vec<Graph> {
-    let prefix=if layout {"reader-type-layout"} else {"reader-type"};
+fn type_graphs(layout: bool) -> Vec<Graph> {
+    let prefix = if layout {
+        "reader-type-layout"
+    } else {
+        "reader-type"
+    };
     let state = vec![SemanticType::Bytes, int(), int()];
-    let mut graphs = if layout {Vec::new()} else {signed_integer_graphs()};
-    if !layout {graphs.push(integer_bounds_graph());}
+    let mut graphs = if layout {
+        Vec::new()
+    } else {
+        signed_integer_graphs()
+    };
+    if !layout {
+        graphs.push(integer_bounds_graph());
+    }
     let payloads = [
         0, 32, 0, 0, 8, 0, 4, 0, 0, 8, 0, 8, -1, -1, 0, 0, -1, 0, 0, 0, 0, 0, 0, 0, 0,
     ];
-    for (tag, payload) in payloads.into_iter().enumerate() {
+    // Keep Bool and Integer first, then the text/byte/collection types used
+    // throughout compiler definitions. Wire tags and payload handlers stay
+    // unchanged; only the pure G0 dispatch chain is reordered.
+    let dispatch_order = [
+        0, 1, 7, 8, 10, 14, 15, 9, 11, 12, 13, 2, 3, 4, 5, 6, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+    ];
+    for (position, tag) in dispatch_order.into_iter().enumerate() {
+        let payload = payloads[tag];
         let name = format!("{prefix}-tag-{tag}");
         let mut g = G::new(&name, state.clone(), state.clone());
         let at = g.advance(input(1), 1);
@@ -920,10 +1069,10 @@ fn type_graphs(layout:bool) -> Vec<Graph> {
         let byte = dispatch.byte(input(1));
         let expected = dispatch.n(tag as i128);
         let test = dispatch.compare(Operation::Eq, byte, expected);
-        let fallback = if tag == 24 {
+        let fallback = if position + 1 == dispatch_order.len() {
             format!("{prefix}-invalid")
         } else {
-            format!("{prefix}-step-{}", tag + 1)
+            format!("{prefix}-step-{}", dispatch_order[position + 1])
         };
         let id = dispatch.b.graph.nodes.len() as u32 + 1;
         dispatch.op(
@@ -1043,7 +1192,10 @@ fn integer_bounds_graph() -> Graph {
 fn version_validation_graphs() -> Vec<Graph> {
     let mut graphs = Vec::new();
     let parameters = vec![SemanticType::Bytes, int()];
-    for (index, maximum) in [29, 48, 57, 59, 61, 63, 65, 69, 73].into_iter().enumerate() {
+    for (index, maximum) in [29, 48, 57, 59, 61, 63, 65, 69, 73, 74]
+        .into_iter()
+        .enumerate()
+    {
         let minor = index + 1;
         let mut constant = G::new(
             &format!("validator-version-maximum-{minor}"),
@@ -1088,7 +1240,7 @@ fn version_validation_graphs() -> Vec<Graph> {
     let mut checked = cursor_graph("reader-operation-checked");
     let header = checked.n(4);
     let version = checked.u32(header);
-    let maximum = checked.call("validator-version-limit-9", version);
+    let maximum = checked.call("validator-version-limit-10", version);
     let tag = checked.byte(input(1));
     let valid = checked.compare(Operation::Le, tag, maximum);
     let end = checked.call("reader-operation", input(1));
@@ -1136,62 +1288,47 @@ fn signed_integer_graphs() -> Vec<Graph> {
         vec![(added, result), (zero, full.clone())],
         full.clone(),
     );
-    let mut main = G::new("reader-i128-word", vec![SemanticType::Bytes, int()], vec![full.clone()]);
-    let high_at = main.advance(input(1), 15);
-    let high = main.byte(high_at);
-    let flip = main.n(128);
-    let high = main.arithmetic(Operation::Add, high, flip);
-    let modulus = main.n(256);
-    let byte_type = SemanticType::Integer(IntegerType { min: 0, max: 255 });
-    let high = main.op(Operation::Rem, vec![(high, int()), (modulus, int())], int());
-    let high = main.op(
-        Operation::ConvertChecked,
-        vec![(high, int())],
-        byte_type.clone(),
+    let mut main = G::new(
+        "reader-i128-word",
+        vec![SemanticType::Bytes, int()],
+        vec![full.clone()],
     );
-    let bias = main.n(128);
-    let signed = main.op(
-        Operation::Sub,
+    let length = main.n(16);
+    let word = main.op(
+        Operation::BytesSlice,
         vec![
-            (high, byte_type),
-            (
-                bias,
-                SemanticType::Integer(IntegerType { min: 128, max: 128 }),
-            ),
+            (input(0), SemanticType::Bytes),
+            (input(1), int()),
+            (length, int()),
         ],
-        SemanticType::Integer(IntegerType {
-            min: -128,
-            max: 127,
-        }),
+        SemanticType::Bytes,
     );
-    // Every intermediate prefix fits i128. Carry its exact static interval:
-    // [-128,127] * 256 + [0,255], repeated fifteen times, reaches precisely
-    // [i128::MIN,i128::MAX]. No checked-result loop or narrowing is needed.
-    let mut decoded = signed;
-    let mut range = IntegerType { min: -128, max: 127 };
-    let factor = main.n(256);
-    let factor_type = SemanticType::Integer(IntegerType { min: 256, max: 256 });
-    for offset in (0..15).rev() {
-        let at = main.advance(input(1), offset);
-        let byte = main.byte(at);
-        let multiplied_range = IntegerType { min: range.min * 256, max: range.max * 256 };
-        let multiplied = main.op(
-            Operation::Mul,
-            vec![(decoded, SemanticType::Integer(range)), (factor.clone(), factor_type.clone())],
-            SemanticType::Integer(multiplied_range.clone()),
-        );
-        range = IntegerType { min: multiplied_range.min, max: multiplied_range.max + 255 };
-        decoded = main.op(
-            Operation::Add,
-            vec![(multiplied, SemanticType::Integer(multiplied_range)), (byte, SemanticType::Integer(IntegerType { min: 0, max: 255 }))],
-            SemanticType::Integer(range.clone()),
-        );
-    }
-    let mut bounded = G::new("reader-i128", vec![SemanticType::Bytes, int()], vec![full.clone()]);
+    let decoded = main.op(
+        Operation::DecodeInteger128Le,
+        vec![(word, SemanticType::Bytes)],
+        full.clone(),
+    );
+    let mut bounded = G::new(
+        "reader-i128",
+        vec![SemanticType::Bytes, int()],
+        vec![full.clone()],
+    );
     let length = bounded.n(16);
-    let word = bounded.op(Operation::BytesSlice, vec![(input(0),SemanticType::Bytes),(input(1),int()),(length,int())], SemanticType::Bytes);
+    let word = bounded.op(
+        Operation::BytesSlice,
+        vec![
+            (input(0), SemanticType::Bytes),
+            (input(1), int()),
+            (length, int()),
+        ],
+        SemanticType::Bytes,
+    );
     let zero = bounded.n(0);
-    let decoded_word = bounded.op(Operation::Subgraph("reader-i128-word".into()), vec![(word,SemanticType::Bytes),(zero,int())], full);
+    let decoded_word = bounded.op(
+        Operation::Subgraph("reader-i128-word".into()),
+        vec![(word, SemanticType::Bytes), (zero, int())],
+        full,
+    );
     vec![
         condition.finish(vec![test]),
         body.finish(vec![input(0), input(1), remaining, value]),

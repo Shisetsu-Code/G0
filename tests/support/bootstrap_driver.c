@@ -22,7 +22,7 @@ int main(int argc, char **argv) {
     int failed = ferror(file);
     fclose(file);
     if (failed || length > 4194304) { free(input); return 5; }
-    const NativeLimits limits = { 64000000, UINT64_C(16) * 1024 * 1024 * 1024, 128 };
+    const NativeLimits limits = { 64000000, UINT64_C(32) * 1024 * 1024 * 1024, 128 };
     NativeResult *result = g0_compiled_entry_with_limits(input, length, &limits);
     free(input);
     if (g0_runtime_status(result)) {

@@ -461,13 +461,35 @@ fn operation_validator_accepts_every_remaining_pure_primitive_tag() {
         &[],
         &[SemanticType::Record("Payload".into())]
     ));
-    for tag in [4, 5, 6, 7, 47, 49, 65, 74] {
+    for tag in [4, 5, 6, 7, 47, 49, 65, 75] {
         assert!(
             !check(&[tag], &[], &[]),
             "unsupported tag {tag} must fail closed"
         );
     }
-    assert!(!check(&[74],&[SemanticType::Result(Box::new(SemanticType::Text),Box::new(SemanticType::Bytes))],&[SemanticType::Bool]));
+    assert!(!check(
+        &[75],
+        &[SemanticType::Result(
+            Box::new(SemanticType::Text),
+            Box::new(SemanticType::Bytes)
+        )],
+        &[SemanticType::Bool]
+    ));
+}
+
+#[test]
+fn integer_binary_decode_requires_bytes_and_full_range() {
+    assert!(check(
+        &[74],
+        &[SemanticType::Bytes],
+        &[integer(i128::MIN, i128::MAX)]
+    ));
+    assert!(!check(
+        &[74],
+        &[SemanticType::Text],
+        &[integer(i128::MIN, i128::MAX)]
+    ));
+    assert!(!check(&[74], &[SemanticType::Bytes], &[integer(0, 255)]));
 }
 
 #[test]

@@ -540,7 +540,7 @@ extern void g0_runtime_free(NativeResult*);
 int main(int argc,char**argv){
  if(argc!=2)return 1;FILE*f=fopen(argv[1],"rb");if(!f)return 2;
  unsigned char*b=malloc(4194305);if(!b){fclose(f);return 3;}size_t n=fread(b,1,4194305,f);int bad=ferror(f);fclose(f);if(bad||n>4194304){free(b);return 4;}
- const NativeLimits limits={64000000,UINT64_C(16)*1024*1024*1024,128};
+ const NativeLimits limits={64000000,UINT64_C(32)*1024*1024*1024,128};
  NativeResult*r=g0_native_invoke(b,n,b,n,g0_compiled_entry_with_inputs,&limits);free(b);
  if(g0_runtime_status(r)){fprintf(stderr,"native compiler failure kind %d\n",g0_runtime_failure_kind(r));g0_runtime_free(r);return 5;}size_t size=0;const unsigned char*out=g0_runtime_bytes(r,&size);if(!out||size<6||memcmp(out,".text\n",6)){g0_runtime_free(r);return 6;}bad=fwrite(out,1,size,stdout)!=size;g0_runtime_free(r);return bad?7:0;
 }

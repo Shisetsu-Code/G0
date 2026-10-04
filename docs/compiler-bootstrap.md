@@ -18,8 +18,8 @@ The separate semantic reader rejects duplicate node and port identifiers,
 inverted signed i128 bounds, zero decimal precision, and big-float precision
 below two bits. It validates endpoint existence, nested type assignment, exact
 input wiring, and local pure operation contracts, including literal bounds and
-checked arithmetic interval proofs. Signed i128 decoding and bytewise bounds
-comparison run in G0. Wiring uses target slot prefixes and a byte bitmap;
+checked arithmetic interval proofs. G0 slices signed words and uses the generic
+`DecodeInteger128Le` binary codec; G0 compares decoded bounds. Wiring uses target slot prefixes and a byte bitmap;
 already ordered node tables bypass the general dependency scheduler.
 Separate G0 reader graphs construct program, node and edge offset tables. A G0 scheduler
 orders dependencies before their users and detects cycles when a complete pass
@@ -29,8 +29,7 @@ provided directly to the executor.
 The default output remains an interpreter-backed native wrapper. It embeds
 the document and invokes the linked G0 runtime. The Rust bootstrap host still
 decodes and semantically validates source before invoking this entry. The G0
-reader does not yet replace the complete semantic validator, including control
-call cycles, schema references and complete linearity proofs.
+wrapper reader does not replace the complete semantic validator.
 Reproducing the wrapper compiler through multiple stages does not establish
 full compiler self-hosting.
 
@@ -48,11 +47,17 @@ This backend accepts closed pure programs with canonically ordered node and
 port identifiers. It lowers multiple graphs, Subgraph, Select, Loop, Map and
 Match, and supports multiple outputs through private result packs. Dynamic
 native frames hold flattened node outputs and argument slots. Effects and
-unsupported operations are rejected by a G0 domain check. G0 also checks graph
-name uniqueness, entry resolution, and references in calls and controls.
-Complete independent
-semantic validation remains unfinished; the Rust bootstrap host still validates
-the source before executing the G0 backend.
+unsupported operations are rejected by a G0 domain check. The native profile
+requires graph names in canonical UTF-8 order and an entry with at most one input
+and exactly one output. G0 checks name uniqueness, entry resolution, exact control
+interfaces, graph references and call cycles. Schema checks cover registry names,
+versions, tags, required fields, named type references, Record/Variant operations
+and Match interfaces. A subtree stack enforces type depth 128 independently of
+tree width. Nested reference, ownership, permission and secret types remain
+outside this pure profile and are rejected before emission.
+The Rust bootstrap host still validates source as an additional guard. Independent
+validation and full native self-compilation remain under verification; the latest
+linked self-compilation probes exhausted their step budgets.
 
 ```sh
 cargo run --example bootstrap_compiler -- direct input.g0p > target/program.s
@@ -91,11 +96,21 @@ of the Rust bootstrap host.
 ## Host limits and ABI
 
 Compiler hosting accepts at most four MiB of source or compiler document. Rust
-bootstrap hosting uses 16 million steps; linked compiler drivers explicitly
-reserve up to 64 million steps. Both reserve sixteen GiB of cumulative logical allocation
+bootstrap hosting uses 32 million steps; linked compiler drivers explicitly
+reserve up to 64 million steps. Both reserve thirty-two GiB of cumulative logical allocation
 and call depth 128. Logical accounting includes repeated graph metadata and
-forwarded shared values; it is not an estimate of resident memory. The reader
-slices each graph blob before parsing it to avoid repeatedly charging the entire
+forwarded shared values; it is not an estimate of resident memory.
+
+The 1,726,134-byte compiler checkpoint required 15,722,820 steps and
+18,143,125,958 logical bytes for wrapper generation in a diagnostic run.
+The explicit allocation reservation was raised from sixteen to thirty-two GiB
+after this measurement; ordinary runtime defaults remain unchanged.
+The expanded 1,939,646-byte definition required 17,682,256 steps and
+20,438,584,134 logical bytes in a subsequent wrapper-generation run. This
+measurement exceeded the previous sixteen-million-step compiler reservation;
+the compiler host now reserves thirty-two million steps.
+
+The reader slices each graph blob before parsing it to avoid repeatedly charging the entire
 container through nested reader calls. Byte emission uses 64 KiB chunks so a
 large source does not create an array exceeding the runtime's one-million-value
 traversal bound. The emitted assembly byte protocol remains unchanged.
@@ -104,6 +119,11 @@ original container. The example's `profile` command runs the current definition
 with a diagnostic 64 GiB allocation ceiling and 64 million steps, and prints
 steps and logical bytes;
 this diagnostic ceiling does not alter the compiler or ordinary runtime budgets.
+`profile-phase graph [compiler.g0p|-] [logicalGiB] [steps]` can select a larger
+diagnostic ceiling (up to 1024 GiB and 512 million steps) to measure a phase whose
+earlier run ended at a quota. These profiling arguments do not change runtime
+ABI limits or normal compiler reservations. The `-` source selects the current
+definition.
 
 Rust compiler hosting uses a worker with an explicit 16 MiB stack and joins
 that worker before returning. Spawn and panic failures become host errors.

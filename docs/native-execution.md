@@ -103,6 +103,14 @@ G0G 0.7 adds explicitly hosted task spawn/join (64..65), retaining 0.1..0.6.
 G0G 0.8 adds collection primitives (66..69), retaining 0.1..0.7.
 G0G 0.9 adds checked arithmetic and ResultIsOk (70..73), retaining 0.1..0.8.
 
+G0G 0.10 adds `DecodeInteger128Le` (opcode 74, no operation payload).
+It consumes exactly 16 Bytes in little-endian two's-complement order and
+produces an Integer whose declared range is exactly i128.MIN through i128.MAX.
+Other input lengths fail with `Bounds`; narrow output ranges fail validation.
+The pure operation uses the existing execution budgets and cancellation checks,
+including the native backend's generic primitive dispatch. Versions 0.1..0.9
+reject opcode 74; their existing operations remain accepted by the 0.10 decoder.
+
 G0P 0.2 appends a schema registry after the graph list. It consists of a u32 count;
 each schema has a u32-length UTF-8 name, u32 version and u32 field count. Each field
 has u32 tag, u32-length UTF-8 name, u32-length semantic type encoding and a one-byte

@@ -32,7 +32,7 @@ fn names_graphs() -> Vec<Graph> {
     let right = equal.advance(input(2), 4);
     let contents = select(
         &mut equal,
-        "validator-byte-equal",
+        "validator-name-content-equal",
         "validator-name-different-size",
         sizes.clone(),
         vec![input(0), left, right, count],
@@ -44,6 +44,41 @@ fn names_graphs() -> Vec<Graph> {
     );
     let different = different_size.bool(false);
     let names_equal = equal.and(sizes, contents);
+    let mut content = G::new(
+        "validator-name-content-equal",
+        vec![SemanticType::Bytes, int(), int(), int()],
+        vec![SemanticType::Bool],
+    );
+    let left = content.op(
+        Operation::BytesSlice,
+        vec![
+            (input(0), SemanticType::Bytes),
+            (input(1), int()),
+            (input(3), int()),
+        ],
+        SemanticType::Bytes,
+    );
+    let right = content.op(
+        Operation::BytesSlice,
+        vec![
+            (input(0), SemanticType::Bytes),
+            (input(2), int()),
+            (input(3), int()),
+        ],
+        SemanticType::Bytes,
+    );
+    let compact = content.op(
+        Operation::BytesConcat,
+        vec![(left, SemanticType::Bytes), (right, SemanticType::Bytes)],
+        SemanticType::Bytes,
+    );
+    let zero = content.n(0);
+    let content_equal = call(
+        &mut content,
+        "validator-byte-equal",
+        vec![compact, zero, input(3), input(3)],
+        SemanticType::Bool,
+    );
 
     let state = vec![SemanticType::Bytes, rows(), int(), int(), int()];
     let mut cond = G::new(
@@ -106,14 +141,8 @@ fn names_graphs() -> Vec<Graph> {
     );
     let row = unique_body.index(input(1), input(2));
     let at = unique_body.field(row.clone(), 2);
-    let count = call(
-        &mut unique_body,
-        "validator-name-count",
-        vec![input(0), input(1), at.clone()],
-        int(),
-    );
-    let one = unique_body.n(1);
-    let unique = unique_body.compare(Operation::Eq, count, one.clone());
+    // Strict ordering is proved once by the program entry below.
+    let unique = unique_body.bool(true);
     let entry_at = unique_body.n(8);
     let is_entry = call(
         &mut unique_body,
@@ -149,26 +178,32 @@ fn names_graphs() -> Vec<Graph> {
         vec![SemanticType::Bool],
     );
     let descriptors = call(&mut unique, "reader-program-ast", vec![input(0)], rows());
+    let canonical = call(
+        &mut unique,
+        "validator-canonical-names",
+        vec![input(0), descriptors.clone()],
+        SemanticType::Bool,
+    );
     let zero = unique.n(0);
-    let yes = unique.bool(true);
     let result_unique = unique.loop_node(
         "validator-unique-names",
         unique_state,
-        vec![input(0), descriptors.clone(), zero, yes],
+        vec![input(0), descriptors.clone(), zero, canonical],
     );
     let entry = unique.n(8);
-    let entry_count = call(
+    let entry_index = call(
         &mut unique,
-        "validator-name-count",
-        vec![input(0), descriptors, entry],
+        "validator-name-index-fast",
+        vec![input(0), descriptors.clone(), entry],
         int(),
     );
-    let one = unique.n(1);
-    let entry_valid = unique.compare(Operation::Eq, entry_count, one);
+    let count = unique.length(descriptors);
+    let entry_valid = unique.compare(Operation::Lt, entry_index, count);
     let valid = unique.and(result_unique[3].clone(), entry_valid);
     vec![
         equal.finish(vec![names_equal]),
         different_size.finish(vec![different]),
+        content.finish(vec![content_equal]),
         min_left.finish(vec![input(0)]),
         min_right.finish(vec![input(1)]),
         cond.finish(vec![count_more]),
@@ -188,14 +223,14 @@ fn reference_graphs() -> Vec<Graph> {
         args.clone(),
         vec![SemanticType::Bool],
     );
-    let count = call(
+    let index = call(
         &mut target,
-        "validator-name-count",
+        "validator-name-index-fast",
         vec![input(0), input(1), input(2)],
         int(),
     );
-    let one = target.n(1);
-    let target_ok = target.compare(Operation::Eq, count, one);
+    let count = target.length(input(1));
+    let target_ok = target.compare(Operation::Lt, index, count);
     let mut single = G::new(
         "validator-reference-single",
         args.clone(),
@@ -364,8 +399,13 @@ fn reference_graphs() -> Vec<Graph> {
         vec![input(0), input(1), operation],
         SemanticType::Bool,
     );
-    let control=call(&mut nb,"validator-node-control",vec![input(0),input(1),row],SemanticType::Bool);
-    let valid=nb.and(valid,control);
+    let control = call(
+        &mut nb,
+        "validator-node-control-fast",
+        vec![input(0), input(1), row],
+        SemanticType::Bool,
+    );
+    let valid = nb.and(valid, control);
     let node_valid = nb.and(input(4), valid);
     let one = nb.n(1);
     let node_next = nb.arithmetic(Operation::Add, input(3), one);

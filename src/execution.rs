@@ -680,6 +680,16 @@ impl<'a> Executor<'a> {
                     Err(_) => Err(Arc::new(args[0].clone())),
                 })
             }
+            Operation::DecodeInteger128Le => {
+                let Value::Bytes(bytes) = &args[0] else {
+                    return Err(bad());
+                };
+                let bytes: [u8; 16] = bytes.as_ref().try_into().map_err(|_| RuntimeError::Bounds {
+                    graph: graph.name.clone(),
+                    node: node.id,
+                })?;
+                Value::Integer(i128::from_le_bytes(bytes))
+            }
             Operation::FormatInteger => {
                 self.charge(40)?;
                 Value::Text(integer(0)?.to_string().into())

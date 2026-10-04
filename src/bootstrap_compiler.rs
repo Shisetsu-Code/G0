@@ -16,6 +16,7 @@ pub const MAX_SOURCE_BYTES: usize = 4 * 1024 * 1024;
 pub const HOST_STACK_BYTES: usize = 16 * 1024 * 1024;
 pub const COMPILER_SOURCE: &[u8] = include_bytes!("../compiler/native-wrapper.g0p");
 
+
 pub fn compile_native(source: &[u8]) -> Result<String, BootstrapError> {
     compile_with(COMPILER_SOURCE, source)
 }
@@ -107,10 +108,10 @@ fn compile_inner(compiler: &[u8], source: &[u8]) -> Result<String, BootstrapErro
 
 pub fn compiler_limits() -> ExecutionLimits {
     ExecutionLimits {
-        max_steps: 16_000_000,
+        max_steps: 32_000_000,
         // This is cumulative logical allocation, including graph metadata on
         // every call and shared byte values forwarded through reader loops.
-        max_value_bytes: 16 * 1024 * 1024 * 1024,
+        max_value_bytes: 32 * 1024 * 1024 * 1024,
         max_call_depth: 128,
     }
 }
@@ -263,8 +264,14 @@ pub fn compiler_document() -> ProgramDocument {
     let domain=checked.op(Operation::And,vec![(domain,SemanticType::Bool),(names,SemanticType::Bool)],SemanticType::Bool);
     let references=checked.op(Operation::Subgraph("validator-program-references".into()),vec![(SourceEndpoint::GraphInput(0),SemanticType::Bytes)],SemanticType::Bool);
     let domain=checked.op(Operation::And,vec![(domain,SemanticType::Bool),(references,SemanticType::Bool)],SemanticType::Bool);
-    let schemas=checked.op(Operation::Subgraph("validator-empty-schemas".into()),vec![(SourceEndpoint::GraphInput(0),SemanticType::Bytes)],SemanticType::Bool);
+    let acyclic=checked.op(Operation::Subgraph("validator-program-callcycles-fast".into()),vec![(SourceEndpoint::GraphInput(0),SemanticType::Bytes)],SemanticType::Bool);
+    let domain=checked.op(Operation::And,vec![(domain,SemanticType::Bool),(acyclic,SemanticType::Bool)],SemanticType::Bool);
+    let schemas=checked.op(Operation::Subgraph("validator-program-schemas".into()),vec![(SourceEndpoint::GraphInput(0),SemanticType::Bytes)],SemanticType::Bool);
     let domain=checked.op(Operation::And,vec![(domain,SemanticType::Bool),(schemas,SemanticType::Bool)],SemanticType::Bool);
+    let schema_types=checked.op(Operation::Subgraph("validator-program-schema-types".into()),vec![(SourceEndpoint::GraphInput(0),SemanticType::Bytes)],SemanticType::Bool);
+    let domain=checked.op(Operation::And,vec![(domain,SemanticType::Bool),(schema_types,SemanticType::Bool)],SemanticType::Bool);
+    let port_types=checked.op(Operation::Subgraph("validator-program-port-types".into()),vec![(SourceEndpoint::GraphInput(0),SemanticType::Bytes)],SemanticType::Bool);
+    let domain=checked.op(Operation::And,vec![(domain,SemanticType::Bool),(port_types,SemanticType::Bool)],SemanticType::Bool);
     let emitted=checked.op(Operation::Select{when_true:"control-compile".into(),when_false:"invalid-native-domain".into()},vec![(domain,SemanticType::Bool),(SourceEndpoint::GraphInput(0),SemanticType::Bytes)],SemanticType::Text);
     let node=checked.graph.nodes.last_mut().unwrap();node.inputs[0].name="selector".into();node.inputs[1].name="p0".into();
     let mut unsupported=Builder::new("invalid-native-domain",SemanticType::Bytes);let error=unsupported.text("G0 compiler: unsupported native profile");

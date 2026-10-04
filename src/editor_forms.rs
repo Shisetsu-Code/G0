@@ -41,6 +41,7 @@ pub const OPERATION_NAMES: &[&str] = &[
     "ResultIsOk",
     "EncodeUtf8",
     "DecodeUtf8",
+    "DecodeInteger128Le",
     "FormatInteger",
     "MakeRecord",
     "Field",
@@ -628,6 +629,7 @@ fn parse_operation(text: &str) -> Result<Operation, EditorError> {
         "ResultIsOk" => Operation::ResultIsOk,
         "EncodeUtf8" => Operation::EncodeUtf8,
         "DecodeUtf8" => Operation::DecodeUtf8,
+        "DecodeInteger128Le" => Operation::DecodeInteger128Le,
         "FormatInteger" => Operation::FormatInteger,
         "MakeRecord" => Operation::MakeRecord {
             schema: p[0].into(),

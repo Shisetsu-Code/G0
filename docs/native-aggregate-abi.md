@@ -1,5 +1,11 @@
 # Native aggregate ABI
 
+The immutable value arena reuses handles for repeated Bool values and Integer
+values from -32 through 1023. Its fixed cache contains 1058 handles (8464 bytes)
+and never merges distinct scalar types. Every value production still consumes
+the same cumulative logical allocation budget before reuse is considered;
+interning reduces duplicate physical storage without relaxing execution quotas.
+
 `native_aggregate::compile_program` produces Linux/System V x86-64 assembly.
 Each graph has its own machine function. Machine instructions schedule nodes,
 call graphs, select branches, match tags, iterate bounded loops, and map values.

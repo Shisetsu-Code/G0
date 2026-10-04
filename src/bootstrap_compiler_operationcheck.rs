@@ -1267,7 +1267,7 @@ fn named_graphs() -> Vec<Graph> {
 }
 fn dispatch(graphs: &mut Vec<Graph>, low: u8, high: u8) -> String {
     if low == high {
-        return if matches!(low, 0..=3 | 17..=46 | 48 | 66..=73) {
+        return if matches!(low, 0..=3 | 17..=46 | 48 | 66..=74) {
             format!("operation-check-{low}")
         } else {
             "operation-invalid".into()
@@ -1303,6 +1303,18 @@ pub(super) fn graphs() -> Vec<Graph> {
     graphs.extend(extended_arithmetic_graphs());
     graphs.extend(truncate_graphs());
     graphs.extend(named_graphs());
+    let mut decode = G::new("operation-types-74", signature(), vec![SemanticType::Bool]);
+    let incoming = type_at(&mut decode, 3, 0);
+    let outgoing = type_at(&mut decode, 4, 0);
+    let bytes = kind(&mut decode, incoming, 8);
+    let integer = kind(&mut decode, outgoing.clone(), 1);
+    let (minimum, maximum) = bounds(&mut decode, outgoing);
+    let full_minimum = constant(&mut decode, i128::MIN);
+    let full_maximum = constant(&mut decode, i128::MAX);
+    let minimum_ok = decode.compare(Operation::Eq, minimum, full_minimum);
+    let maximum_ok = decode.compare(Operation::Eq, maximum, full_maximum);
+    let valid = all(&mut decode, vec![bytes, integer, minimum_ok, maximum_ok]);
+    graphs.push(decode.finish(vec![valid]));
     for tag in 22..=25 {
         graphs.push(boolean_graph(tag, if tag == 25 { 1 } else { 2 }));
     }
@@ -1328,6 +1340,7 @@ pub(super) fn graphs() -> Vec<Graph> {
         (71, 2),
         (72, 2),
         (73, 1),
+        (74, 1),
         (30, usize::MAX),
         (31, 2),
         (32, 1),
@@ -1374,7 +1387,7 @@ pub(super) fn graphs() -> Vec<Graph> {
         );
         graphs.push(g.finish(vec![result]));
     }
-    let entry = dispatch(&mut graphs, 0, 73);
+    let entry = dispatch(&mut graphs, 0, 74);
     let mut main = G::new(
         "validator-node-operation",
         signature(),
@@ -1389,7 +1402,7 @@ pub(super) fn graphs() -> Vec<Graph> {
     let pure = main.and(pure, caps);
     let operation = operation_at(&mut main);
     let tag = main.byte(operation);
-    let last = main.n(73);
+    let last = main.n(74);
     let known = main.compare(Operation::Le, tag, last);
     let pure = main.and(pure, known);
     let valid = choose(

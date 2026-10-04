@@ -778,6 +778,20 @@ pub(super) fn graphs() -> Vec<Graph> {
     graphs.extend(basic_graphs());
     graphs.extend(loop_graphs());
     graphs.extend(map_graphs());
+    let mut matched = G::new("controlcheck-match", node_args(), vec![SemanticType::Bool]);
+    let schemas = call(
+        &mut matched,
+        "reader-program-schemas",
+        vec![input(0)],
+        rows(),
+    );
+    let match_valid = call(
+        &mut matched,
+        "validator-node-schema",
+        vec![input(0), schemas, input(1), input(2)],
+        SemanticType::Bool,
+    );
+    graphs.push(matched.finish(vec![match_valid]));
     let mut invalid = G::new(
         "controlcheck-invalid",
         node_args(),
@@ -825,7 +839,7 @@ pub(super) fn graphs() -> Vec<Graph> {
         (
             "controlcheck-dispatch-match",
             5,
-            "controlcheck-invalid",
+            "controlcheck-match",
             "controlcheck-primitive",
         ),
     ] {
@@ -860,5 +874,13 @@ pub(super) fn graphs() -> Vec<Graph> {
         SemanticType::Bool,
     );
     graphs.push(main.finish(vec![valid]));
+    let fast = super::control_fast::variants(
+        &graphs,
+        &[
+            ("validator-graph-name-index", "validator-name-index-fast"),
+            ("validator-node-schema", "validator-node-schema-fast"),
+        ],
+    );
+    graphs.extend(fast);
     graphs
 }

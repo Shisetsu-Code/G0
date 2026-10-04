@@ -32,6 +32,7 @@ pub fn validate_node(node: &Node, schemas: Option<&[DataSchema]>) -> Result<(), 
         | Operation::ResultIsOk
         | Operation::EncodeUtf8
         | Operation::DecodeUtf8
+        | Operation::DecodeInteger128Le
         | Operation::FormatInteger
         | Operation::Field { .. }
         | Operation::MakeVariant { .. }
@@ -130,6 +131,10 @@ pub fn validate_node(node: &Node, schemas: Option<&[DataSchema]>) -> Result<(), 
                 && output == &SemanticType::Bytes
         }
         Operation::EncodeUtf8 => input(0) == &SemanticType::Text && output == &SemanticType::Bytes,
+        Operation::DecodeInteger128Le => {
+            input(0) == &SemanticType::Bytes
+                && matches!(output, SemanticType::Integer(t) if t.min == i128::MIN && t.max == i128::MAX)
+        }
         Operation::DecodeUtf8 => {
             input(0) == &SemanticType::Bytes
                 && output

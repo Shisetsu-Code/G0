@@ -398,6 +398,7 @@ fn emit_graph(
             | Operation::ResultIsOk
             | Operation::EncodeUtf8
             | Operation::DecodeUtf8
+            | Operation::DecodeInteger128Le
             | Operation::FormatInteger
             | Operation::TextJoin
             | Operation::MakeRecord { .. }

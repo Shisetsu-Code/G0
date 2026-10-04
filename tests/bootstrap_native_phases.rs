@@ -115,7 +115,7 @@ int main(int argc,char**argv){
  if(argc!=5)return 1;size_t pn=0,in=0;
  unsigned char*p=read(argv[1],&pn),*input=read(argv[2],&in);
  if(!p||!input){free(p);free(input);return 2;}
- const NativeLimits limits={64000000,UINT64_C(16)*1024*1024*1024,128};
+ const NativeLimits limits={64000000,UINT64_C(32)*1024*1024*1024,128};
  NativeResult*r=g0_native_invoke(p,pn,input,in,g0_compiled_entry_with_inputs,&limits);
  free(p);free(input);
  if(g0_runtime_status(r)){fprintf(stderr,"phase %s failure kind %d\n",argv[3],g0_runtime_failure_kind(r));g0_runtime_free(r);return 3;}

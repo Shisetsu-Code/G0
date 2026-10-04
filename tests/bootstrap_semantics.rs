@@ -1,39 +1,135 @@
 use g0::{bootstrap_compiler::*, execution::Executor, value::Value};
 
 #[test]
+fn g0_graph_reader_rejects_a_node_cycle_before_native_emission() {
+    use g0::gir::*;
+    let ty = SemanticType::Integer(IntegerType { min: 42, max: 42 });
+    let p = || Port {
+        id: 0,
+        name: "value".into(),
+        ty: ty.clone(),
+    };
+    let node = |id, operation, inputs| Node {
+        id,
+        operation,
+        inputs,
+        outputs: vec![p()],
+        effects: Default::default(),
+        required_capabilities: Default::default(),
+    };
+    let mut graph = Graph::new("main");
+    graph.outputs = vec![p()];
+    graph.nodes = vec![
+        node(1, Operation::Const(Literal::Integer(42)), vec![]),
+        node(2, Operation::ConvertChecked, vec![p()]),
+    ];
+    graph.edges = vec![
+        Edge {
+            from: SourceEndpoint::NodeOutput { node: 1, port: 0 },
+            to: TargetEndpoint::NodeInput { node: 2, port: 0 },
+        },
+        Edge {
+            from: SourceEndpoint::NodeOutput { node: 2, port: 0 },
+            to: TargetEndpoint::GraphOutput(0),
+        },
+    ];
+    let mut bytes = g0::graph_binary::encode_graph(&graph).unwrap();
+    let at = bytes.len() - 24 + 1;
+    assert_eq!(&bytes[at..at + 4], &1u32.to_le_bytes());
+    bytes[at..at + 4].copy_from_slice(&2u32.to_le_bytes());
+    let len = bytes.len() as i128;
+    let contract = compiler_document().validated_contract().unwrap();
+    let output = Executor::new(&contract, compiler_limits())
+        .unwrap()
+        .run_graph(
+            "reader-graph",
+            vec![Value::Bytes(bytes.into()), Value::Integer(0)],
+        );
+    assert!(!matches!(output,Ok(values) if values==vec![Value::Integer(len)]));
+}
+
+#[test]
 fn g0_identifier_reader_skips_membership_scans_above_the_seen_maximum() {
-    let mut bytes=100u32.to_le_bytes().to_vec();
-    for id in 0u16..100 {bytes.extend(id.to_le_bytes());bytes.extend(1u32.to_le_bytes());bytes.push(b'x');bytes.push(0);}
-    let contract=compiler_document().validated_contract().unwrap();let mut limits=compiler_limits();limits.max_steps=25_000;
-    let len=bytes.len() as i128;
-    let output=Executor::new(&contract,limits).unwrap().run_graph("reader-list-reader-port",vec![Value::Bytes(bytes.into()),Value::Integer(0)]).unwrap();
-    assert_eq!(output,vec![Value::Integer(len)]);
+    let mut bytes = 100u32.to_le_bytes().to_vec();
+    for id in 0u16..100 {
+        bytes.extend(id.to_le_bytes());
+        bytes.extend(1u32.to_le_bytes());
+        bytes.push(b'x');
+        bytes.push(0);
+    }
+    let contract = compiler_document().validated_contract().unwrap();
+    let mut limits = compiler_limits();
+    limits.max_steps = 25_000;
+    let len = bytes.len() as i128;
+    let output = Executor::new(&contract, limits)
+        .unwrap()
+        .run_graph(
+            "reader-list-reader-port",
+            vec![Value::Bytes(bytes.into()), Value::Integer(0)],
+        )
+        .unwrap();
+    assert_eq!(output, vec![Value::Integer(len)]);
 }
 
 #[test]
 fn g0_integer_assignment_uses_signed_byte_comparison_under_small_step_budget() {
     use g0::gir::*;
-    let narrow=SemanticType::Integer(IntegerType{min:-7,max:42});
-    let wide=SemanticType::Integer(IntegerType{min:i128::MIN,max:i128::MAX});
-    let mut bytes=g0::graph_binary::encode_semantic_type(&narrow).unwrap();let target=bytes.len() as i128;bytes.extend(g0::graph_binary::encode_semantic_type(&wide).unwrap());
-    let contract=compiler_document().validated_contract().unwrap();let mut limits=compiler_limits();limits.max_steps=1000;
-    let output=Executor::new(&contract,limits).unwrap().run_graph("validator-type-assignable",vec![Value::Bytes(bytes.into()),Value::Integer(0),Value::Integer(target)]).unwrap();
-    assert_eq!(output,vec![Value::Bool(true)]);
+    let narrow = SemanticType::Integer(IntegerType { min: -7, max: 42 });
+    let wide = SemanticType::Integer(IntegerType {
+        min: i128::MIN,
+        max: i128::MAX,
+    });
+    let mut bytes = g0::graph_binary::encode_semantic_type(&narrow).unwrap();
+    let target = bytes.len() as i128;
+    bytes.extend(g0::graph_binary::encode_semantic_type(&wide).unwrap());
+    let contract = compiler_document().validated_contract().unwrap();
+    let mut limits = compiler_limits();
+    limits.max_steps = 1000;
+    let output = Executor::new(&contract, limits)
+        .unwrap()
+        .run_graph(
+            "validator-type-assignable",
+            vec![
+                Value::Bytes(bytes.into()),
+                Value::Integer(0),
+                Value::Integer(target),
+            ],
+        )
+        .unwrap();
+    assert_eq!(output, vec![Value::Bool(true)]);
 }
 
 #[test]
 fn g0_graph_reader_rejects_literal_outside_declared_output_interval() {
-    let graph=g0::editor::GraphEditor::new().graph().clone();
-    let mut source=g0::graph_binary::encode_graph(&graph).unwrap();
-    let contract=compiler_document().validated_contract().unwrap();
-    let nodes=Executor::new(&contract,compiler_limits()).unwrap().run_graph("reader-graph-ast",vec![Value::Bytes(source.clone().into()),Value::Integer(0)]).unwrap();
-    let [Value::Array(rows)]=nodes.as_slice() else {panic!("AST")};
-    let Value::Array(row)=&rows[0] else {panic!("node")};
-    let Value::Integer(at)=row[2] else {panic!("opcode")};
-    assert_eq!(source[at as usize],0);assert_eq!(source[at as usize+1],1);
-    source[at as usize+2..at as usize+18].copy_from_slice(&43i128.to_le_bytes());
-    let len=source.len() as i128;
-    let output=Executor::new(&contract,compiler_limits()).unwrap().run_graph("reader-graph",vec![Value::Bytes(source.into()),Value::Integer(0)]);
+    let graph = g0::editor::GraphEditor::new().graph().clone();
+    let mut source = g0::graph_binary::encode_graph(&graph).unwrap();
+    let contract = compiler_document().validated_contract().unwrap();
+    let nodes = Executor::new(&contract, compiler_limits())
+        .unwrap()
+        .run_graph(
+            "reader-graph-ast",
+            vec![Value::Bytes(source.clone().into()), Value::Integer(0)],
+        )
+        .unwrap();
+    let [Value::Array(rows)] = nodes.as_slice() else {
+        panic!("AST")
+    };
+    let Value::Array(row) = &rows[0] else {
+        panic!("node")
+    };
+    let Value::Integer(at) = row[2] else {
+        panic!("opcode")
+    };
+    assert_eq!(source[at as usize], 0);
+    assert_eq!(source[at as usize + 1], 1);
+    source[at as usize + 2..at as usize + 18].copy_from_slice(&43i128.to_le_bytes());
+    let len = source.len() as i128;
+    let output = Executor::new(&contract, compiler_limits())
+        .unwrap()
+        .run_graph(
+            "reader-graph",
+            vec![Value::Bytes(source.into()), Value::Integer(0)],
+        );
     assert!(!matches!(output,Ok(ref values) if values==&vec![Value::Integer(len)]));
 }
 
@@ -142,6 +238,31 @@ fn g0_graph_reader_rejects_operation_newer_than_graph_version() {
         );
     if let Ok(output) = output {
         assert_ne!(output, vec![Value::Integer(source.len() as i128)]);
+    }
+}
+
+#[test]
+fn g0_raw_parser_checks_integer_codec_minor_version() {
+    let graph = compiler_document()
+        .graphs
+        .into_iter()
+        .find(|graph| graph.name == "reader-i128-word")
+        .unwrap();
+    let source = g0::graph_binary::encode_graph(&graph).unwrap();
+    let contract = compiler_document().validated_contract().unwrap();
+    for minor in [9u16, 10] {
+        let mut bytes = source.clone();
+        bytes[6..8].copy_from_slice(&minor.to_le_bytes());
+        let result = Executor::new(&contract, compiler_limits())
+            .unwrap()
+            .run_graph(
+                "reader-graph",
+                vec![Value::Bytes(bytes.into()), Value::Integer(0)],
+            );
+        assert_eq!(
+            matches!(result, Ok(ref values) if values == &vec![Value::Integer(source.len() as i128)]),
+            minor == 10
+        );
     }
 }
 
@@ -313,14 +434,19 @@ fn g0_type_assignment_checks_ranges_and_nested_shapes() {
 
 #[test]
 fn g0_graph_reader_rejects_incompatible_edge_types() {
-    let graph=g0::editor::GraphEditor::new().graph().clone();
-    let mut source=g0::graph_binary::encode_graph(&graph).unwrap();
-    let outputs=8+4+graph.name.len()+1+4;
-    let output_type=outputs+4+2+4+graph.outputs[0].name.len();
-    assert_eq!(source[output_type],1);
-    source.splice(output_type..output_type+33,[0]);
-    let length=source.len() as i128;
-    let contract=compiler_document().validated_contract().unwrap();
-    let output=Executor::new(&contract,compiler_limits()).unwrap().run_graph("reader-graph",vec![Value::Bytes(source.into()),Value::Integer(0)]);
+    let graph = g0::editor::GraphEditor::new().graph().clone();
+    let mut source = g0::graph_binary::encode_graph(&graph).unwrap();
+    let outputs = 8 + 4 + graph.name.len() + 1 + 4;
+    let output_type = outputs + 4 + 2 + 4 + graph.outputs[0].name.len();
+    assert_eq!(source[output_type], 1);
+    source.splice(output_type..output_type + 33, [0]);
+    let length = source.len() as i128;
+    let contract = compiler_document().validated_contract().unwrap();
+    let output = Executor::new(&contract, compiler_limits())
+        .unwrap()
+        .run_graph(
+            "reader-graph",
+            vec![Value::Bytes(source.into()), Value::Integer(0)],
+        );
     assert!(!matches!(output,Ok(ref values) if values==&vec![Value::Integer(length)]));
 }

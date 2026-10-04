@@ -105,7 +105,7 @@ fn failure_diagnostics_distinguish_memory_and_invalid_handles() {
 fn explicit_compiler_reservation_remains_bounded_and_does_not_change_defaults() {
     let limits = NativeLimits {
         max_steps: 64_000_000,
-        max_value_bytes: 16 * 1024 * 1024 * 1024,
+        max_value_bytes: 32 * 1024 * 1024 * 1024,
         max_call_depth: 128,
     };
     assert_eq!(

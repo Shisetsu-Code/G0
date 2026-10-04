@@ -96,6 +96,7 @@ jobs:
         run: |
           cargo build --lib
           cargo test --test native_aggregate_cli
+          cargo test --test integer128_codec
           cargo test --test bootstrap_native_phases -- --nocapture
           cargo test --test bootstrap_control
 
@@ -109,5 +110,8 @@ jobs:
       - name: Verify native Windows editor
         run: |
           cargo test --test editor --test execution --test bootstrap_compiler
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo run --bin g0-editor -- --smoke-test target/editor-native.bmp target/editor-native.g0g
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo run -- check target/editor-native.g0g
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
