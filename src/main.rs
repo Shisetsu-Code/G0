@@ -1,4 +1,9 @@
-use std::{env, fs, path::PathBuf, process::ExitCode};
+use std::{
+    env, fs,
+    io::Write,
+    path::{Path, PathBuf},
+    process::ExitCode,
+};
 
 fn usage() {
     eprintln!(
@@ -80,7 +85,30 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(&output, assembly)?;
+    write_assembly(&output, &assembly)?;
     println!("{}", output.display());
     Ok(())
+}
+
+fn write_assembly(output: &Path, assembly: &str) -> std::io::Result<()> {
+    // Replacing the directory entry instead of truncating the destination
+    // preserves an input file that happens to share its inode with the output.
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let temporary = output.with_file_name(format!(".g0c-{}-{nonce}.tmp", std::process::id()));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?;
+    let result = (|| {
+        file.write_all(assembly.as_bytes())?;
+        drop(file);
+        fs::rename(&temporary, output)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
 }

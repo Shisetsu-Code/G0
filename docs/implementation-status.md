@@ -33,7 +33,10 @@ uses the existing scalar pipeline and exports `g0_machine_main`.
 
 The CLI rejects malformed options. Decode, validation and lowering failures
 leave an existing output file intact, and an output resolving to the input
-path is rejected. Import/check does not execute graph operations.
+path is rejected. Successful assembly output replaces its directory entry
+atomically, preserving the input even if output is a hardlink alias. Failed
+replacement cleans up the temporary file. Import/check does not execute graph
+operations.
 
 The checked-in `examples/truncate.g0g` returns 31. The CLI integration test
 actually assembles and executes it on Linux, rather than only inspecting the

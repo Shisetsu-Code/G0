@@ -194,6 +194,36 @@ fn compile_cannot_overwrite_its_input() {
 }
 
 #[test]
+fn hardlinked_output_does_not_modify_the_input_graph() {
+    let work = Workspace::new();
+    let input = work.write_graph("answer.g0g");
+    let before = std::fs::read(&input).unwrap();
+    std::fs::hard_link(&input, work.0.join("alias.s")).unwrap();
+    success(work.run(&["compile", "answer.g0g", "-o", "alias.s"]));
+    assert_eq!(std::fs::read(&input).unwrap(), before);
+    assert!(
+        std::fs::read_to_string(work.0.join("alias.s"))
+            .unwrap()
+            .contains("g0_machine_main:")
+    );
+}
+
+#[test]
+fn output_replacement_failure_leaves_no_temporary_files() {
+    let work = Workspace::new();
+    work.write_graph("answer.g0g");
+    std::fs::create_dir(work.0.join("occupied")).unwrap();
+    assert!(
+        !work
+            .run(&["compile", "answer.g0g", "-o", "occupied"])
+            .status
+            .success()
+    );
+    assert!(work.0.join("occupied").is_dir());
+    assert_eq!(std::fs::read_dir(&work.0).unwrap().count(), 2);
+}
+
+#[test]
 fn compilation_failure_preserves_existing_output() {
     let work = Workspace::new();
     let mut graph = fixture();
